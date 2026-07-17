@@ -66,7 +66,18 @@ void patch::remember_window_location_and_size::patchWinLoc(int &xPos, int &yPos)
     yPos = window_pos.y;
 }
 void patch::remember_window_location_and_size::resizeWindow(HWND hWnd, uint32_t w, uint32_t h) {
-    if (o_no_initial_size.get()) return;
+    if (o_no_initial_size.get()) {
+        RECT winRect;
+        if(GetWindowRect(hWnd, &winRect)) {
+            SetWindowPos(
+                hWnd, NULL, 0, 0,
+                winRect.right - winRect.left,
+                winRect.bottom - winRect.top,
+                SWP_NOMOVE | SWP_NOZORDER
+            );
+        }
+        return;
+    }
     initWindowSize(w, h);
     if(window_size.x != 0 && window_size.y != 0) {
         SetWindowPos(hWnd, NULL, 0, 0, window_size.x, window_size.y, SWP_NOMOVE | SWP_NOZORDER);
