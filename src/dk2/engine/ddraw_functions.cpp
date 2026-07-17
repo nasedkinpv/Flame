@@ -186,14 +186,20 @@ namespace dk2 {
     }
 
     void ge_collectDisplayModes() {
-        if (g_ge_dd_index != 0) return;
+        if (g_ge_dd_index != 0 || g_ge_ddraw_device_count == 0) return;
         LPDDENUMCALLBACKA lpCallback = [](LPGUID lpGuid, LPSTR lpDeviceDesc, LPSTR lpDeviceName, LPVOID lpContext) -> BOOL {
+            if (g_ge_dd_index >= g_ge_ddraw_device_count) return FALSE;
             HWND hWindow = (HWND) lpContext;
-            LPDIRECTDRAW lpDD;
+            LPDIRECTDRAW lpDD = nullptr;
+            HRESULT createResult;
             if(*o_gog_enabled) {
-                fake_DirectDrawCreate(lpGuid, &lpDD, NULL);
+                createResult = fake_DirectDrawCreate(lpGuid, &lpDD, NULL);
             } else {
-                DirectDrawCreate(lpGuid, &lpDD, NULL);
+                createResult = DirectDrawCreate(lpGuid, &lpDD, NULL);
+            }
+            if (FAILED(createResult) || !lpDD) {
+                patch::log::err("DirectDrawCreate failed while collecting display modes: %08X", createResult);
+                return TRUE;
             }
             lpDD->SetCooperativeLevel(hWindow, 21);
             DxDeviceInfo& dev = g_ge_ddraw_devices[g_ge_dd_index];
@@ -236,7 +242,13 @@ namespace dk2 {
     void inline_selectDrawEngine(dk2::MyWindow *window) {
         ge_fillDDrawList(window);
         ge_resolveDevices();
-        ge_collectDisplayModes();
+        // Windowed rendering does not switch the physical display mode, and
+        // prepareScreenEx intentionally skips mode-list validation for it.
+        // Some translation layers (dgVoodoo on DXMT) never finish the legacy
+        // EnumDisplayModes call, so do not collect data that cannot be used.
+        if (!patch::control_windowed_mode::enabled) {
+            ge_collectDisplayModes();
+        }
         int selectedDdIdx = -1;
         if (!MyResources_instance.video_settings.cmd_flag_SOFTWARE) {
             if (cmd_flag_DDD) {
