@@ -12,6 +12,7 @@
 #include "gog_exports.h"
 #include "gog_patch.h"
 #include "patches/logging.h"
+#include "patches/micro_patches.h"
 
 
 namespace dk2 {
