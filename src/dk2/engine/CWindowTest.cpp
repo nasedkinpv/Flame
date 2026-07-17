@@ -82,8 +82,13 @@ namespace dk2 {
         if (!patch::fix_close_window::window_proc(hWnd, Msg, wParam, lParam)) return 0;
         switch(Msg) {
         case WM_ACTIVATE:
-            g_isNeedBlt_fullscr = wParam != 0;
-            break;
+        case WM_ACTIVATEAPP:
+        case WM_NCACTIVATE:
+            // A windowed DirectDraw surface does not need to be released when
+            // another macOS window gets focus. Keep presenting it so AppKit
+            // resize and native fullscreen transitions cannot leave it black.
+            g_isNeedBlt_fullscr = true;
+            return DefWindowProcA(hWnd, Msg, wParam, lParam);
         case WM_SYSCOMMAND: {
             switch ( wParam ) {
             case 0xF090u:
@@ -403,4 +408,3 @@ void dk2::CWindowTest::recreate() {
     GUID* SelectedGuid = MyWindow_instance.getSelectedGuid();
     BullfrogWindow_create(&status, SelectedGuid, 1, NULL, NULL);
 }
-
