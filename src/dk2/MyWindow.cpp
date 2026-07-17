@@ -120,7 +120,12 @@ int dk2::MyWindow::prepareScreenEx(
             return 0;
         }
     }
-    if(this->last_selected_dd_idx < g_ge_ddraw_device_count) {
+    // A windowed surface does not change the physical display mode. Requiring
+    // its size to appear in EnumDisplayModes rejects valid window sizes on
+    // drivers that expose only the display's native modes (for example Wine's
+    // macOS driver).
+    if (!patch::control_windowed_mode::enabled
+        && this->last_selected_dd_idx < g_ge_ddraw_device_count) {
         DxDeviceInfo * dev = &g_ge_ddraw_devices[this->last_selected_dd_idx];
         bool found = false;
         for (int ddraw_idx = 0; ddraw_idx < dev->modeListCount; ++ddraw_idx) {
@@ -648,4 +653,3 @@ void dk2::MyWindow::displayError(char *a2_file, int a3_line, const char *a4_text
     }
     this->prepareScreen();
 }
-
