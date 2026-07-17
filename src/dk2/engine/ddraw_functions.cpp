@@ -11,6 +11,7 @@
 #include "game_engine.h"
 #include "gog_exports.h"
 #include "gog_patch.h"
+#include "patches/logging.h"
 
 
 namespace dk2 {
@@ -41,16 +42,21 @@ namespace dk2 {
             g_ge_ddraw_devices[device_offs].infoListCount = 0;
             g_ge_ddraw_devices[device_offs].infoList = NULL;
 
-            LPDIRECTDRAW lpDD;
+            LPDIRECTDRAW lpDD = nullptr;
+            HRESULT createResult;
             if(*o_gog_enabled) {
-                fake_DirectDrawCreate(lpGUID, &lpDD, NULL);
+                createResult = fake_DirectDrawCreate(lpGUID, &lpDD, NULL);
             } else {
-                DirectDrawCreate(lpGUID, &lpDD, NULL);
+                createResult = DirectDrawCreate(lpGUID, &lpDD, NULL);
+            }
+            if (FAILED(createResult) || !lpDD) {
+                patch::log::err("DirectDrawCreate failed for enumerated device: %08X", createResult);
+                return TRUE;
             }
 
             static_assert(sizeof(DDCAPS_DX7) == 380);
-            g_ge_ddraw_devices->ddcaps.dwSize = sizeof(DDCAPS_DX7);
-            lpDD->GetCaps(&g_ge_ddraw_devices->ddcaps, NULL);
+            g_ge_ddraw_devices[device_offs].ddcaps.dwSize = sizeof(DDCAPS_DX7);
+            lpDD->GetCaps(&g_ge_ddraw_devices[device_offs].ddcaps, NULL);
 
             DxDeviceInfo *ddraw_device = &g_ge_ddraw_devices[device_offs];
             ddraw_device->dwVendorId = 0;
@@ -71,9 +77,10 @@ namespace dk2 {
                     g_ge_ddraw_devices[device_offs].isVendor121A = 1;
                 }
             }
-            IDirect3D *d3d;
-            lpDD->QueryInterface(CLSID_IDirect3D, (LPVOID *)&d3d);
-            d3d->EnumDevices([](GUID FAR *lpGuid, LPSTR lpDeviceDescription, LPSTR lpDeviceName,
+            IDirect3D *d3d = nullptr;
+            HRESULT d3dResult = lpDD->QueryInterface(CLSID_IDirect3D, (LPVOID *)&d3d);
+            if (SUCCEEDED(d3dResult) && d3d) {
+                d3d->EnumDevices([](GUID FAR *lpGuid, LPSTR lpDeviceDescription, LPSTR lpDeviceName,
                                 LPD3DDEVICEDESC lpDesc1, LPD3DDEVICEDESC lpDesc2, LPVOID p) -> HRESULT {
                 int devIdx = (int) p;
                 DxDeviceInfo& deviceInfo = g_ge_ddraw_devices[devIdx];
@@ -110,8 +117,11 @@ namespace dk2 {
                 }
                 ++deviceInfo.infoListCount;
                 return DDENUMRET_OK;
-            }, (LPVOID) device_idx);
-            d3d->Release();
+                }, (LPVOID) device_idx);
+                d3d->Release();
+            } else {
+                patch::log::err("IDirect3D query failed for enumerated device: %08X", d3dResult);
+            }
             lpDD->Release();
             ++g_ge_ddraw_device_count;
             return TRUE;
@@ -591,4 +601,3 @@ void dk2::MyDdSurfaceEx::fillDesc(LPDDSURFACEDESC desc) {
         this->surf.desc.dwRGBAlphaBitMask = desc->ddpfPixelFormat.dwRGBAlphaBitMask;
     }
 }
-
