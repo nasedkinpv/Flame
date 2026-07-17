@@ -8,7 +8,13 @@
 
 flame_config::define_flame_option<bool> o_no_initial_size(
     "flame:no-initial-size", flame_config::OG_Config,
-    "Disable automatic and remembered window resizing\n"
+    "Disable initial automatic window resizing\n"
+    "Used only in windowed mode\n",
+    false
+);
+flame_config::define_flame_option<bool> o_lock_window_size(
+    "flame:lock-window-size", flame_config::OG_Config,
+    "Keep the first native window size across screen mode changes\n"
     "Used only in windowed mode\n",
     false
 );
@@ -51,7 +57,8 @@ bool patch::remember_window_location_and_size::window_proc(HWND hWnd, UINT Msg, 
         break;
     }
     case WM_SIZE: {
-        if(!ignore_size) {
+        bool has_size = window_size.x != 0 && window_size.y != 0;
+        if(!ignore_size && (!o_lock_window_size.get() || !has_size)) {
             RECT winRect;
             GetWindowRect(hWnd, &winRect);
             window_size = {winRect.right - winRect.left, winRect.bottom - winRect.top};
@@ -66,18 +73,6 @@ void patch::remember_window_location_and_size::patchWinLoc(int &xPos, int &yPos)
     yPos = window_pos.y;
 }
 void patch::remember_window_location_and_size::resizeWindow(HWND hWnd, uint32_t w, uint32_t h) {
-    if (o_no_initial_size.get()) {
-        RECT winRect;
-        if(GetWindowRect(hWnd, &winRect)) {
-            SetWindowPos(
-                hWnd, NULL, 0, 0,
-                winRect.right - winRect.left,
-                winRect.bottom - winRect.top,
-                SWP_NOMOVE | SWP_NOZORDER
-            );
-        }
-        return;
-    }
     initWindowSize(w, h);
     if(window_size.x != 0 && window_size.y != 0) {
         SetWindowPos(hWnd, NULL, 0, 0, window_size.x, window_size.y, SWP_NOMOVE | SWP_NOZORDER);
