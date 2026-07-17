@@ -46,6 +46,10 @@ venv.bak/
 /libs/dkii_exe/api/
 /install/
 /dev/
+/.cache/
+/dist/
+/.DS_Store
+/flame/
 **/genlib/*.exp
 **/genlib/*.lib
 **/genlib/*.def
@@ -55,4 +59,3 @@ venv.bak/
 **/delinked/*.obj
 **/delinked/*.obj.map
 /tools/PEview.exe
-
