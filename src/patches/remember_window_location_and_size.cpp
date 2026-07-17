@@ -8,7 +8,7 @@
 
 flame_config::define_flame_option<bool> o_no_initial_size(
     "flame:no-initial-size", flame_config::OG_Config,
-    "Disable autoresize window\n"
+    "Disable automatic and remembered window resizing\n"
     "Used only in windowed mode\n",
     false
 );
@@ -66,10 +66,10 @@ void patch::remember_window_location_and_size::patchWinLoc(int &xPos, int &yPos)
     yPos = window_pos.y;
 }
 void patch::remember_window_location_and_size::resizeWindow(HWND hWnd, uint32_t w, uint32_t h) {
+    if (o_no_initial_size.get()) return;
     initWindowSize(w, h);
     if(window_size.x != 0 && window_size.y != 0) {
         SetWindowPos(hWnd, NULL, 0, 0, window_size.x, window_size.y, SWP_NOMOVE | SWP_NOZORDER);
     }
     ignore_size = false;
 }
-
