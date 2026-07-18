@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 2u
+#define DK2M_VERSION 3u
 #define DK2M_SLOT_COUNT 3u
 #define DK2M_SLOT_CAPACITY (4u * 1024u * 1024u)
 #define DK2M_NO_SLOT 0xFFFFFFFFu
@@ -16,6 +16,7 @@ enum DK2MCommandType {
     DK2M_COMMAND_DRAW_INDEXED = 2,
     DK2M_COMMAND_TEXTURE_UPDATE = 3,
     DK2M_COMMAND_SET_TEXTURE = 4,
+    DK2M_COMMAND_RENDER_STATE = 5,
 };
 
 #pragma pack(push, 4)
@@ -92,6 +93,12 @@ typedef struct DK2MSetTextureCommand {
     uint32_t stage;
     uint32_t texture_id;
 } DK2MSetTextureCommand;
+
+typedef struct DK2MRenderStateCommand {
+    DK2MCommandHeader header;
+    uint32_t state;
+    uint32_t value;
+} DK2MRenderStateCommand;
 #pragma pack(pop)
 
 #define DK2M_FILE_SIZE ((uint32_t)(sizeof(DK2MFileHeader) + DK2M_SLOT_COUNT * DK2M_SLOT_CAPACITY))
@@ -106,6 +113,7 @@ static_assert(sizeof(DK2MVertex1C) == 28, "DK2 Vertex1C layout changed");
 static_assert(sizeof(DK2MDrawIndexedCommand) == 24, "bridge draw layout changed");
 static_assert(sizeof(DK2MTextureUpdateCommand) == 28, "bridge texture update layout changed");
 static_assert(sizeof(DK2MSetTextureCommand) == 16, "bridge texture binding layout changed");
+static_assert(sizeof(DK2MRenderStateCommand) == 16, "bridge render state layout changed");
 #endif
 
 #endif

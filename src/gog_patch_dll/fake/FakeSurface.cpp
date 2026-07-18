@@ -45,7 +45,7 @@ FakeSurface::FakeSurface(DDSURFACEDESC2 *desc) {
     if (
             (descCpy.dwFlags & 1) != 0 &&
             (descCpy.ddsCaps.dwCaps & 0x200) != 0 &&
-            (descCpy.dwFlags & 4) == 0
+            ((descCpy.dwFlags & 4) == 0 || metal_bridge::isEnabled())
             ) {
         if (FakeSurface::instance_mod) {
             gog_assert_failed("FakeSurface::FakeSurface:377");
@@ -306,6 +306,10 @@ HRESULT FakeSurface::Flip(LPDIRECTDRAWSURFACE2 a2, DWORD flags) {
     if (!orig::pIDirectDrawSurface4_coop) gog_assert_failed("FakeSurface::Flip:607");
     if (a2 && a2 != FakeSurface::instance_cpy) gog_assert_failed("FakeSurface::Flip:608");
     if (gog::g_isSceneDrawing) gog_assert_failed("FakeSurface::Flip:609");
+    if (metal_bridge::isEnabled()) {
+        gog::g_isFlip = true;
+        return DD_OK;
+    }
     if (cfg::iCpuIdle)
         Sleep(cfg::iCpuIdle);
     this->f88_orig_surf->Blt(NULL, FakeSurface::instance_cpy->f88_orig_surf, NULL, 0x1000000, NULL);
@@ -447,6 +451,7 @@ HRESULT FakeSurface::SetPalette(LPDIRECTDRAWPALETTE) {
 HRESULT FakeSurface::Unlock(LPVOID) {
     HRESULT hr = this->f88_orig_surf->Unlock(this->f9C_pLockedRect);
     if (FAILED(hr)) return hr;
+    metal_bridge::textureDirty(this->f88_orig_surf);
     if (this->f84_isModSurf) Fake_Redraw();
     return hr;
 }

@@ -7,6 +7,7 @@
 #include <fake/FakeTexture.h>
 #include <gog_fake.h>
 #include <gog_debug.h>
+#include <metal_bridge/MetalBridgeProducer.h>
 
 using namespace gog;
 
@@ -111,6 +112,7 @@ HRESULT FakeSurface4::BltFast(DWORD x, DWORD y, LPDIRECTDRAWSURFACE4 srcSurf_, L
         gog_assert_failed_hr("FakeSurface4::BltFast:282", hr);
         return hr;
     }
+    metal_bridge::textureDirty(this->f8_orig_surf);
     if (!this->fC_isModSurf) return hr;
     if (!orig::pIDirectDrawSurface4_coop) {
         gog_assert_failed("FakeSurface4::BltFast:285");
@@ -249,6 +251,7 @@ HRESULT FakeSurface4::Unlock(LPRECT pRect) {
         return hr;
     }
     --this->f10_lockCounter;
+    metal_bridge::textureDirty(this->f8_orig_surf);
     if (this->fC_isModSurf) {
         if (!this->f10_lockCounter) Fake_Redraw();
     }

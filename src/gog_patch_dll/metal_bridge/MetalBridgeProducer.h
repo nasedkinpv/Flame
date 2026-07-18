@@ -11,6 +11,9 @@ void beginFrame(DWORD width, DWORD height);
 void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
                  const WORD *indices, DWORD indexCount, DWORD flags);
 void setTexture(DWORD stage, DWORD textureId, IDirectDrawSurface4 *surface);
+void textureDirty(IDirectDrawSurface4 *surface);
+void setRenderState(DWORD state, DWORD value);
+bool getRenderState(DWORD state, DWORD *value);
 void endFrame();
 
 }

@@ -217,6 +217,11 @@ HRESULT FakeDevice3::EnumTextureFormats(LPD3DENUMPIXELFORMATSCALLBACK cb, LPVOID
 
 HRESULT FakeDevice3::BeginScene(void) {
     metal_bridge::beginFrame(g_dwWidth, g_dwHeight);
+    if (metal_bridge::isEnabled()) {
+        g_isFlip = false;
+        g_isSceneDrawing = true;
+        return DD_OK;
+    }
     HRESULT hr;
     if (gog::g_isFlip) {
         D3DRECT rect;
@@ -254,6 +259,10 @@ HRESULT FakeDevice3::BeginScene(void) {
 HRESULT FakeDevice3::EndScene(void) {
     HRESULT hr;
     g_isSceneDrawing = false;
+    if (metal_bridge::isEnabled()) {
+        metal_bridge::endFrame();
+        return DD_OK;
+    }
     hr = orig::pIDirect3DDevice3->EndScene();
     if (FAILED(hr)) {
         gog_assert_failed_hr("FakeDevice3::EndScene:855", hr);
@@ -319,12 +328,14 @@ HRESULT FakeDevice3::End(DWORD) {
     return DDERR_GENERIC;
 }
 
-HRESULT FakeDevice3::GetRenderState(D3DRENDERSTATETYPE, LPDWORD) {
-    gog_unused_function_called("FakeDevice3::GetRenderState");
-    return DDERR_GENERIC;
+HRESULT FakeDevice3::GetRenderState(D3DRENDERSTATETYPE stateType, LPDWORD value) {
+    if (metal_bridge::isEnabled() && metal_bridge::getRenderState(stateType, value)) return DD_OK;
+    return orig::pIDirect3DDevice3->GetRenderState(stateType, value);
 }
 
 HRESULT FakeDevice3::SetRenderState(D3DRENDERSTATETYPE stateType, DWORD a3) {
+    metal_bridge::setRenderState(stateType, a3);
+    if (metal_bridge::isEnabled()) return DD_OK;
     if (
             stateType == D3DRENDERSTATE_DITHERENABLE ||
             stateType == D3DRENDERSTATE_SUBPIXEL ||
@@ -403,6 +414,7 @@ FakeDevice3::DrawIndexedPrimitive(D3DPRIMITIVETYPE primitive_type, DWORD fvf, LP
     if (flags != 0x1C) gog_assert_failed("FakeDevice3::DrawIndexedPrimitive:925");
 
     metal_bridge::drawIndexed(fvf, vertices, vertex_count, indices, index_count, flags);
+    if (metal_bridge::isEnabled()) return DD_OK;
 
     if (fvf == Vertex1C_TypeDesc) {
         if (vertex_count) {
@@ -537,6 +549,7 @@ HRESULT FakeDevice3::SetTexture(DWORD a3, LPDIRECT3DTEXTURE2 tex_) {
     if (tex) orig_tex = tex->orig();
     metal_bridge::setTexture(a3, tex ? tex->bridgeId() : 0,
                              tex ? tex->bridgeSurface() : nullptr);
+    if (metal_bridge::isEnabled()) return DD_OK;
     HRESULT hr = orig::pIDirect3DDevice3->SetTexture(a3, orig_tex);
     if (FAILED(hr)) {
         gog_assert_failed_hr("FakeDevice3::SetTexture:964", hr);
@@ -568,6 +581,7 @@ HRESULT FakeDevice3::SetTextureStageState(DWORD Stage, D3DTEXTURESTAGESTATETYPE 
         default:
             break;
     }
+    if (metal_bridge::isEnabled()) return DD_OK;
     HRESULT hr = orig::pIDirect3DDevice3->SetTextureStageState(Stage, Type, Value);
     if (FAILED(hr)) {
         gog_assert_failed_hr("FakeDevice3::SetTextureStageState:984", hr);

@@ -144,7 +144,26 @@ struct MetalVertex {
 constexpr NSUInteger kVertexBufferSize = 2 * 1024 * 1024;
 constexpr NSUInteger kIndexBufferSize = 512 * 1024;
 constexpr NSUInteger kTextureBindingsPerFrame = 128;
+constexpr uint32_t kD3DRenderStateZEnable = 7;
+constexpr uint32_t kD3DRenderStateZWriteEnable = 14;
+constexpr uint32_t kD3DRenderStateCullMode = 22;
+constexpr uint32_t kD3DRenderStateZFunc = 23;
+constexpr uint32_t kD3DRenderStateAlphaBlendEnable = 27;
 static_assert(sizeof(MetalVertex) == 48);
+
+MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
+    switch (d3dFunction) {
+        case 1: return MTLCompareFunctionNever;
+        case 2: return MTLCompareFunctionLess;
+        case 3: return MTLCompareFunctionEqual;
+        case 4: return MTLCompareFunctionLessEqual;
+        case 5: return MTLCompareFunctionGreater;
+        case 6: return MTLCompareFunctionNotEqual;
+        case 7: return MTLCompareFunctionGreaterEqual;
+        case 8: return MTLCompareFunctionAlways;
+        default: return MTLCompareFunctionLessEqual;
+    }
+}
 
 } // namespace
 
@@ -194,8 +213,9 @@ static_assert(sizeof(MetalVertex) == 48);
     id<MTLDevice> _device;
     id<MTL4CommandQueue> _queue;
     id<MTLSharedEvent> _completed;
-    id<MTLRenderPipelineState> _pipeline;
-    id<MTLDepthStencilState> _depthState;
+    id<MTLRenderPipelineState> _opaquePipeline;
+    id<MTLRenderPipelineState> _alphaPipeline;
+    id<MTLDepthStencilState> _depthStates[9][2];
     id<MTLSamplerState> _sampler;
     id<MTLTexture> _whiteTexture;
     id<MTLTexture> _depthTexture;
@@ -250,24 +270,32 @@ static_assert(sizeof(MetalVertex) == 48);
     pipelineDescriptor.fragmentFunction = fragmentFunction;
     pipelineDescriptor.colorAttachments[0].pixelFormat = _layer.pixelFormat;
     pipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+    pipelineDescriptor.colorAttachments[0].blendingEnabled = NO;
+    _opaquePipeline = vertexFunction && fragmentFunction
+                          ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error]
+                          : nil;
     pipelineDescriptor.colorAttachments[0].blendingEnabled = YES;
     pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
     pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
     pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
     pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-    _pipeline = vertexFunction && fragmentFunction
-                    ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error]
-                    : nil;
-    if (!_pipeline) {
+    _alphaPipeline = vertexFunction && fragmentFunction
+                         ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error]
+                         : nil;
+    if (!_opaquePipeline || !_alphaPipeline) {
         fail([NSString stringWithFormat:@"Metal shader pipeline failed: %@", error.localizedDescription ?: @"library missing"]);
         return nil;
     }
 
-    MTLDepthStencilDescriptor *depthDescriptor = [[MTLDepthStencilDescriptor alloc] init];
-    depthDescriptor.label = @"DK2 default depth";
-    depthDescriptor.depthCompareFunction = MTLCompareFunctionLessEqual;
-    depthDescriptor.depthWriteEnabled = YES;
-    _depthState = [_device newDepthStencilStateWithDescriptor:depthDescriptor];
+    for (uint32_t function = 1; function <= 8; ++function) {
+        for (uint32_t write = 0; write <= 1; ++write) {
+            MTLDepthStencilDescriptor *depthDescriptor = [[MTLDepthStencilDescriptor alloc] init];
+            depthDescriptor.label = [NSString stringWithFormat:@"DK2 depth %u/%u", function, write];
+            depthDescriptor.depthCompareFunction = metalCompareFunction(function);
+            depthDescriptor.depthWriteEnabled = write != 0;
+            _depthStates[function][write] = [_device newDepthStencilStateWithDescriptor:depthDescriptor];
+        }
+    }
 
     MTLSamplerDescriptor *samplerDescriptor = [[MTLSamplerDescriptor alloc] init];
     samplerDescriptor.label = @"DK2 fixed-function sampler";
@@ -288,7 +316,7 @@ static_assert(sizeof(MetalVertex) == 48);
     [_whiteTexture replaceRegion:MTLRegionMake2D(0, 0, 1, 1)
                      mipmapLevel:0 withBytes:&whitePixel bytesPerRow:4];
     _textures = [NSMutableDictionary dictionary];
-    if (!_depthState || !_sampler || !_whiteTexture) {
+    if (!_depthStates[8][0] || !_depthStates[4][1] || !_sampler || !_whiteTexture) {
         fail(@"Metal fixed-function resource creation failed.");
         return nil;
     }
@@ -449,26 +477,32 @@ static void *renderWorker(void *context) {
                     std::memcpy(&textureUpdate, snapshot->bytes.data() + offset, sizeof(textureUpdate));
                     const size_t expected = sizeof(textureUpdate) + textureUpdate.data_size;
                     NSNumber *key = @(textureUpdate.texture_id);
-                    if (textureUpdate.texture_id && !_textures[key] && expected <= header.size &&
+                    if (textureUpdate.texture_id && expected <= header.size &&
                         textureUpdate.width && textureUpdate.height &&
                         textureUpdate.row_pitch >= textureUpdate.width * 4 &&
                         textureUpdate.data_size >= textureUpdate.row_pitch * textureUpdate.height) {
-                        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
-                            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                        width:textureUpdate.width
-                                                       height:textureUpdate.height
-                                                    mipmapped:NO];
-                        descriptor.storageMode = MTLStorageModeShared;
-                        descriptor.usage = MTLTextureUsageShaderRead;
-                        id<MTLTexture> texture = [_device newTextureWithDescriptor:descriptor];
+                        id<MTLTexture> texture = _textures[key];
+                        if (!texture || texture.width != textureUpdate.width ||
+                            texture.height != textureUpdate.height) {
+                            MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+                                texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                            width:textureUpdate.width
+                                                           height:textureUpdate.height
+                                                        mipmapped:NO];
+                            descriptor.storageMode = MTLStorageModeShared;
+                            descriptor.usage = MTLTextureUsageShaderRead;
+                            texture = [_device newTextureWithDescriptor:descriptor];
+                            if (texture) {
+                                texture.label = [NSString stringWithFormat:@"DK2 texture %u", textureUpdate.texture_id];
+                                _textures[key] = texture;
+                                [_resources addAllocation:texture];
+                                residencyChanged = YES;
+                            }
+                        }
                         if (texture) {
                             const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
                             [texture replaceRegion:MTLRegionMake2D(0, 0, textureUpdate.width, textureUpdate.height)
                                        mipmapLevel:0 withBytes:pixels bytesPerRow:textureUpdate.row_pitch];
-                            texture.label = [NSString stringWithFormat:@"DK2 texture %u", textureUpdate.texture_id];
-                            _textures[key] = texture;
-                            [_resources addAllocation:texture];
-                            residencyChanged = YES;
                         }
                     }
                 }
@@ -490,12 +524,17 @@ static void *renderWorker(void *context) {
 
         id<MTL4RenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
         encoder.label = @"DK2 native Metal frame";
-        [encoder setDepthStencilState:_depthState];
+        [encoder setDepthStencilState:_depthStates[4][1]];
         if (snapshot) {
             NSUInteger vertexOffset = 0;
             NSUInteger indexOffset = 0;
             uint32_t currentTextureBinding = 0;
             uint32_t nextTextureBinding = 1;
+            uint32_t zFunction = 4;
+            BOOL zEnabled = YES;
+            BOOL zWriteEnabled = YES;
+            BOOL alphaBlendEnabled = NO;
+            uint32_t cullMode = 1;
             std::unordered_map<uint32_t, uint32_t> textureBindings;
             [_argumentTables[slot] setAddress:_vertexBuffers[slot].gpuAddress atIndex:0];
             [_argumentTables[slot] setTexture:_whiteTexture.gpuResourceID atIndex:0];
@@ -528,6 +567,20 @@ static void *renderWorker(void *context) {
                     } else if (binding.stage == 0) {
                         currentTextureBinding = 0;
                     }
+                } else if (header.type == DK2M_COMMAND_RENDER_STATE &&
+                           header.size == sizeof(DK2MRenderStateCommand)) {
+                    DK2MRenderStateCommand state;
+                    std::memcpy(&state, snapshot->bytes.data() + commandOffset, sizeof(state));
+                    switch (state.state) {
+                        case kD3DRenderStateZEnable: zEnabled = state.value != 0; break;
+                        case kD3DRenderStateZWriteEnable: zWriteEnabled = state.value != 0; break;
+                        case kD3DRenderStateCullMode: cullMode = state.value; break;
+                        case kD3DRenderStateZFunc:
+                            if (state.value >= 1 && state.value <= 8) zFunction = state.value;
+                            break;
+                        case kD3DRenderStateAlphaBlendEnable: alphaBlendEnabled = state.value != 0; break;
+                        default: break;
+                    }
                 } else if (header.type == DK2M_COMMAND_DRAW_INDEXED && header.size >= sizeof(DK2MDrawIndexedCommand)) {
                     DK2MDrawIndexedCommand draw;
                     std::memcpy(&draw, snapshot->bytes.data() + commandOffset, sizeof(draw));
@@ -546,10 +599,14 @@ static void *renderWorker(void *context) {
                         for (uint32_t index = 0; index < draw.vertex_count; ++index) {
                             DK2MVertex1C vertex;
                             std::memcpy(&vertex, rawVertices + index * sizeof(vertex), sizeof(vertex));
-                            metalVertices[index].position[0] = vertex.x * 2.0f / snapshot->width - 1.0f;
-                            metalVertices[index].position[1] = 1.0f - vertex.y * 2.0f / snapshot->height;
-                            metalVertices[index].position[2] = vertex.z;
-                            metalVertices[index].position[3] = 1.0f;
+                            const float reciprocalW = std::abs(vertex.rhw) > 0.000001f ? vertex.rhw : 1.0f;
+                            const float clipW = 1.0f / reciprocalW;
+                            metalVertices[index].position[0] =
+                                (vertex.x * 2.0f / snapshot->width - 1.0f) * clipW;
+                            metalVertices[index].position[1] =
+                                (1.0f - vertex.y * 2.0f / snapshot->height) * clipW;
+                            metalVertices[index].position[2] = vertex.z * clipW;
+                            metalVertices[index].position[3] = clipW;
                             metalVertices[index].color[0] = ((vertex.diffuse >> 16) & 0xFF) / 255.0f;
                             metalVertices[index].color[1] = ((vertex.diffuse >> 8) & 0xFF) / 255.0f;
                             metalVertices[index].color[2] = (vertex.diffuse & 0xFF) / 255.0f;
@@ -570,7 +627,13 @@ static void *renderWorker(void *context) {
                             metalIndices[index] = static_cast<uint16_t>(adjusted);
                         }
                         if (!validIndices) { commandOffset += header.size; continue; }
-                        [encoder setRenderPipelineState:_pipeline];
+                        [encoder setRenderPipelineState:alphaBlendEnabled ? _alphaPipeline : _opaquePipeline];
+                        const uint32_t effectiveZFunction = zEnabled ? zFunction : 8;
+                        const uint32_t effectiveZWrite = zEnabled && zWriteEnabled ? 1 : 0;
+                        [encoder setDepthStencilState:_depthStates[effectiveZFunction][effectiveZWrite]];
+                        [encoder setCullMode:cullMode == 1 ? MTLCullModeNone : MTLCullModeBack];
+                        [encoder setFrontFacingWinding:cullMode == 3 ? MTLWindingClockwise
+                                                                    : MTLWindingCounterClockwise];
                         [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                             indexCount:draw.index_count
                                              indexType:MTLIndexTypeUInt16

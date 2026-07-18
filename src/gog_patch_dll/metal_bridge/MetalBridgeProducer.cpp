@@ -16,6 +16,7 @@ struct TextureCache {
     uint32_t rowPitch = 0;
     uint32_t lastSentFrame = 0;
     bool pending = true;
+    bool dirty = false;
     bool sentInCurrentFrame = false;
     std::vector<uint8_t> pixels;
 };
@@ -65,6 +66,7 @@ public:
         for (DWORD stage = 0; stage < 3; ++stage) {
             if (boundTextures_[stage]) emitTexture(stage, boundTextures_[stage]);
         }
+        for (const auto &entry : renderStates_) emitRenderState(entry.first, entry.second);
     }
 
     void draw(DWORD fvf, const void *vertices, DWORD vertexCount,
@@ -91,12 +93,40 @@ public:
     void texture(DWORD stage, DWORD textureId, IDirectDrawSurface4 *surface) {
         if (stage >= 3 || !ensureMapped()) return;
         boundTextures_[stage] = textureId;
-        if (textureId && textures_.find(textureId) == textures_.end()) {
-            TextureCache cache;
-            if (!captureTexture(surface, cache)) return;
-            textures_.emplace(textureId, std::move(cache));
+        if (textureId) {
+            auto found = textures_.find(textureId);
+            if (found == textures_.end()) {
+                TextureCache cache;
+                if (!captureTexture(surface, cache)) return;
+                textures_.emplace(textureId, std::move(cache));
+            } else if (found->second.dirty) {
+                TextureCache updated;
+                if (captureTexture(surface, updated)) found->second = std::move(updated);
+            }
+            if (surface) surfaceTextures_[reinterpret_cast<uintptr_t>(surface)] = textureId;
         }
         if (active_) emitTexture(stage, textureId);
+    }
+
+    void textureDirty(IDirectDrawSurface4 *surface) {
+        if (!surface) return;
+        const auto surfaceEntry = surfaceTextures_.find(reinterpret_cast<uintptr_t>(surface));
+        if (surfaceEntry == surfaceTextures_.end()) return;
+        const auto texture = textures_.find(surfaceEntry->second);
+        if (texture != textures_.end()) texture->second.dirty = true;
+    }
+
+    void renderState(DWORD state, DWORD value) {
+        renderStates_[state] = value;
+        if (active_) emitRenderState(state, value);
+    }
+
+    bool renderState(DWORD state, DWORD *value) const {
+        if (!value) return false;
+        const auto found = renderStates_.find(state);
+        if (found == renderStates_.end()) return false;
+        *value = found->second;
+        return true;
     }
 
     void finish() {
@@ -234,6 +264,17 @@ private:
         ++commandCount_;
     }
 
+    void emitRenderState(DWORD state, DWORD value) {
+        if (used_ + sizeof(DK2MRenderStateCommand) > DK2M_SLOT_CAPACITY) return;
+        DK2MRenderStateCommand command = {};
+        command.header.type = DK2M_COMMAND_RENDER_STATE;
+        command.header.size = sizeof(command);
+        command.state = state;
+        command.value = value;
+        append(&command, sizeof(command));
+        ++commandCount_;
+    }
+
     void append(const void *data, uint32_t size) {
         std::memcpy(static_cast<uint8_t *>(view_) + DK2M_SLOT_OFFSET(slotIndex_) + used_, data, size);
         used_ += size;
@@ -255,6 +296,8 @@ private:
     uint32_t boundTextures_[3] = {};
     uint32_t lastConsumerFrame_ = 0;
     std::unordered_map<uint32_t, TextureCache> textures_;
+    std::unordered_map<uintptr_t, uint32_t> surfaceTextures_;
+    std::unordered_map<uint32_t, uint32_t> renderStates_;
     bool active_ = false;
 };
 
@@ -278,6 +321,18 @@ void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
 
 void setTexture(DWORD stage, DWORD textureId, IDirectDrawSurface4 *surface) {
     producer.texture(stage, textureId, surface);
+}
+
+void textureDirty(IDirectDrawSurface4 *surface) {
+    producer.textureDirty(surface);
+}
+
+void setRenderState(DWORD state, DWORD value) {
+    producer.renderState(state, value);
+}
+
+bool getRenderState(DWORD state, DWORD *value) {
+    return producer.renderState(state, value);
 }
 
 void endFrame() {
