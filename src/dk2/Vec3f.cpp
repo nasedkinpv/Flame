@@ -42,5 +42,7 @@ dk2::Vec3f *dk2::Vec3f::sumVec3f(Vec3f *output, Vec3f *right) {
 float *dk2::Vec3f::sub_59E6E0(float *right) {
     const auto *rightValue = reinterpret_cast<const Vec3f *>(right);
     storeVec3(this, _mm_add_ps(loadVec3(this), loadVec3(rightValue)));
-    return &x;
+    // original returns its argument (eax is never reloaded), not `this`;
+    // no caller reads it, but keep the ABI byte-exact
+    return right;
 }

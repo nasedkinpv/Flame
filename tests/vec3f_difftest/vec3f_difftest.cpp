@@ -56,7 +56,8 @@ int main() {
         { Vec3f tt = t, e; refAdd(&t, &e, &t); tt.sumVec3f(&tt, &tt);
           assert(bitEq(tt.x,e.x) && bitEq(tt.y,e.y) && bitEq(tt.z,e.z)); }
         { Vec3f tt = t, rr = r, e; refAdd(&t, &e, &r); float *ret = tt.sub_59E6E0(&rr.x);
-          assert(ret == &tt.x && bitEq(tt.x,e.x) && bitEq(tt.y,e.y) && bitEq(tt.z,e.z)); }
+          // original returns eax = its argument, not `this` (see 0059E6E0 disasm)
+          assert(ret == &rr.x && bitEq(tt.x,e.x) && bitEq(tt.y,e.y) && bitEq(tt.z,e.z)); }
         { Vec3f tt = t, e; refAdd(&t, &e, &t); tt.sub_59E6E0(&tt.x);
           assert(bitEq(tt.x,e.x) && bitEq(tt.y,e.y) && bitEq(tt.z,e.z)); }
         n++;
