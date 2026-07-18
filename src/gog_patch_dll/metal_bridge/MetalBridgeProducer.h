@@ -16,8 +16,8 @@ void setTexture(DWORD stage, DWORD textureId, IDirectDrawSurface4 *surface);
 void textureDirty(IDirectDrawSurface4 *surface, const DDSURFACEDESC2 *lockedDesc = nullptr);
 void setRenderState(DWORD state, DWORD value);
 bool getRenderState(DWORD state, DWORD *value);
-void setGameTimings(uint32_t tickMicroseconds, uint32_t guiMicroseconds,
-                    uint32_t presentMicroseconds);
+void setGameTickTiming(uint32_t tickMicroseconds);
+void setGameSubTimings(uint32_t playerMicroseconds, uint32_t bridgeMicroseconds);
 void endFrame();
 
 }

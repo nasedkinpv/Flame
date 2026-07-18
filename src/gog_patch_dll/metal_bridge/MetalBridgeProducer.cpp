@@ -143,11 +143,13 @@ public:
         return true;
     }
 
-    void gameTimings(uint32_t tickMicroseconds, uint32_t guiMicroseconds,
-                     uint32_t presentMicroseconds) {
+    void gameTickTiming(uint32_t tickMicroseconds) {
         gameTickMicroseconds_ = tickMicroseconds;
-        guiMicroseconds_ = guiMicroseconds;
-        presentMicroseconds_ = presentMicroseconds;
+    }
+
+    void gameSubTimings(uint32_t playerMicroseconds, uint32_t bridgeMicroseconds) {
+        playerMicroseconds_ = playerMicroseconds;
+        bridgeMicroseconds_ = bridgeMicroseconds;
     }
 
     void finish() {
@@ -162,8 +164,8 @@ public:
         const uint32_t sceneMicroseconds = elapsedMicroseconds(sceneStarted_, timerTicks());
         slot_->reserved[0] = clampMicroseconds(sceneMicroseconds) |
                              (clampMicroseconds(gameTickMicroseconds_) << 16);
-        slot_->reserved[1] = clampMicroseconds(guiMicroseconds_) |
-                             (clampMicroseconds(presentMicroseconds_) << 16);
+        slot_->reserved[1] = clampMicroseconds(playerMicroseconds_) |
+                             (clampMicroseconds(bridgeMicroseconds_) << 16);
         header_->width = width_;
         header_->height = height_;
         header_->producer_pid = GetCurrentProcessId();
@@ -470,8 +472,8 @@ private:
     LARGE_INTEGER timerFrequency_ = {};
     uint64_t sceneStarted_ = 0;
     uint32_t gameTickMicroseconds_ = 0;
-    uint32_t guiMicroseconds_ = 0;
-    uint32_t presentMicroseconds_ = 0;
+    uint32_t playerMicroseconds_ = 0;
+    uint32_t bridgeMicroseconds_ = 0;
     uint32_t boundTextures_[3] = {};
     uint32_t lastConsumerSession_ = 0;
     uint32_t lastConsumerFrame_ = 0;
@@ -529,9 +531,12 @@ bool getRenderState(DWORD state, DWORD *value) {
     return producer.renderState(state, value);
 }
 
-void setGameTimings(uint32_t tickMicroseconds, uint32_t guiMicroseconds,
-                    uint32_t presentMicroseconds) {
-    producer.gameTimings(tickMicroseconds, guiMicroseconds, presentMicroseconds);
+void setGameTickTiming(uint32_t tickMicroseconds) {
+    producer.gameTickTiming(tickMicroseconds);
+}
+
+void setGameSubTimings(uint32_t playerMicroseconds, uint32_t bridgeMicroseconds) {
+    producer.gameSubTimings(playerMicroseconds, bridgeMicroseconds);
 }
 
 void endFrame() {

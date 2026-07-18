@@ -8,6 +8,18 @@
 #include "dk2/sound/TbSysCommand_Process.h"
 #include "dk2/entities/CPlayer.h"
 #include "math/int_float.h"
+#include <metal_bridge/MetalBridgeProducer.h>
+#include <chrono>
+
+namespace {
+
+uint32_t elapsedMicroseconds(std::chrono::steady_clock::time_point started,
+                             std::chrono::steady_clock::time_point finished) {
+    return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        finished - started).count());
+}
+
+}
 
 int dk2::MyGameSession::tick(int a2_isNeedBlt) {
     int try_level;
@@ -30,11 +42,13 @@ int dk2::MyGameSession::tick(int a2_isNeedBlt) {
     if (MyResources_instance.gameCfg.useFe2d_unk1)
         return 1;
     CDefaultPlayerInterface *fC_player_i = this->pPlayer;
+    const auto playerStarted = std::chrono::steady_clock::now();
     if (fC_player_i) {
         int result = fC_player_i->v_fun_4039A0(a2_isNeedBlt);
         if (!result)
             return result;
     }
+    const auto playerFinished = std::chrono::steady_clock::now();
     if (!a2_isNeedBlt) {
         if (CCommunicationInterface *communication = this->pCommunication) {
             if (!communication->v_f38())
@@ -298,6 +312,7 @@ int dk2::MyGameSession::tick(int a2_isNeedBlt) {
         try_level = -1;
         for_each_destruct<GameAction, true>(actions.actionArr, 16);
     }
+    const auto bridgeStarted = std::chrono::steady_clock::now();
     if (this->pBridge) {
         DWORD TimeMs = getTimeMs();
         CBridge *v39 = this->pBridge;
@@ -340,5 +355,9 @@ int dk2::MyGameSession::tick(int a2_isNeedBlt) {
             GameSession_dword_70D42C = 0;
         }
     }
+    const auto bridgeFinished = std::chrono::steady_clock::now();
+    gog::metal_bridge::setGameSubTimings(
+        elapsedMicroseconds(playerStarted, playerFinished),
+        elapsedMicroseconds(bridgeStarted, bridgeFinished));
     return 1;
 }
