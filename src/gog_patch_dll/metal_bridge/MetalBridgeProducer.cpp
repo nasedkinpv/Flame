@@ -34,6 +34,7 @@ public:
     void begin(DWORD width, DWORD height) {
         if (!ensureMapped()) return;
         if (active_) finish();
+        sceneStarted_ = timerTicks();
 
         const uint32_t consumer = InterlockedCompareExchange(asLong(&header_->consumer_frame), 0, 0);
         const uint32_t consumerSession =
@@ -114,12 +115,21 @@ public:
         if (active_) emitTexture(stage, textureId);
     }
 
-    void textureDirty(IDirectDrawSurface4 *surface) {
+    void textureDirty(IDirectDrawSurface4 *surface, const DDSURFACEDESC2 *lockedDesc) {
         if (!surface) return;
         const auto surfaceEntry = surfaceTextures_.find(reinterpret_cast<uintptr_t>(surface));
         if (surfaceEntry == surfaceTextures_.end()) return;
         const auto texture = textures_.find(surfaceEntry->second);
-        if (texture != textures_.end()) texture->second.dirty = true;
+        if (texture == textures_.end()) return;
+
+        const uint64_t started = timerTicks();
+        TextureCache updated;
+        if (lockedDesc && copyTexture(*lockedDesc, updated)) {
+            texture->second = std::move(updated);
+        } else {
+            texture->second.dirty = true;
+        }
+        textureCaptureTicks_ += timerTicks() - started;
     }
 
     void renderState(DWORD state, DWORD value) {
@@ -144,6 +154,8 @@ public:
         slot_->command_count = commandCount_;
         slot_->width = width_;
         slot_->height = height_;
+        slot_->reserved[0] = elapsedMicroseconds(sceneStarted_, timerTicks());
+        slot_->reserved[1] = elapsedMicroseconds(0, textureCaptureTicks_);
         header_->width = width_;
         header_->height = height_;
         header_->producer_pid = GetCurrentProcessId();
@@ -158,6 +170,7 @@ public:
                 texture.sentInCurrentFrame = false;
             }
         }
+        textureCaptureTicks_ = 0;
         active_ = false;
     }
 
@@ -311,6 +324,7 @@ private:
         if (!view_) return false;
 
         header_ = static_cast<DK2MFileHeader *>(view_);
+        QueryPerformanceFrequency(&timerFrequency_);
         if (header_->magic != DK2M_MAGIC || header_->version != DK2M_VERSION ||
             header_->header_size != sizeof(DK2MFileHeader) || header_->file_size != DK2M_FILE_SIZE) {
             std::memset(view_, 0, DK2M_FILE_SIZE);
@@ -325,35 +339,54 @@ private:
         return true;
     }
 
-    bool captureTexture(IDirectDrawSurface4 *surface, TextureCache &texture) {
-        if (!surface) return false;
-        DDSURFACEDESC2 desc = {};
-        desc.dwSize = sizeof(desc);
-        const HRESULT hr = surface->Lock(nullptr, &desc, DDLOCK_WAIT | DDLOCK_READONLY, nullptr);
-        if (FAILED(hr)) return false;
-
+    static bool copyTexture(const DDSURFACEDESC2 &desc, TextureCache &texture) {
         bool valid = desc.lpSurface && desc.dwWidth && desc.dwHeight &&
                      desc.dwWidth <= 8192 && desc.dwHeight <= 8192 &&
                      desc.ddpfPixelFormat.dwRGBBitCount == 32 && desc.lPitch >= 0;
         const uint64_t rowPitch = static_cast<uint64_t>(desc.dwWidth) * 4;
         const uint64_t dataSize = rowPitch * desc.dwHeight;
         if (dataSize > DK2M_SLOT_CAPACITY - sizeof(DK2MTextureUpdateCommand)) valid = false;
-        if (valid) {
-            texture.width = desc.dwWidth;
-            texture.height = desc.dwHeight;
-            texture.rowPitch = static_cast<uint32_t>(rowPitch);
-            texture.pixels.resize(static_cast<size_t>(dataSize));
-            const auto *source = static_cast<const uint8_t *>(desc.lpSurface);
-            for (uint32_t y = 0; y < texture.height; ++y) {
-                uint8_t *destination = texture.pixels.data() + static_cast<size_t>(y) * texture.rowPitch;
-                std::memcpy(destination, source + static_cast<size_t>(y) * desc.lPitch, texture.rowPitch);
-                if (desc.ddpfPixelFormat.dwRGBAlphaBitMask == 0) {
-                    for (uint32_t x = 0; x < texture.width; ++x) destination[x * 4 + 3] = 0xFF;
-                }
+        if (!valid) return false;
+
+        texture.width = desc.dwWidth;
+        texture.height = desc.dwHeight;
+        texture.rowPitch = static_cast<uint32_t>(rowPitch);
+        texture.pixels.resize(static_cast<size_t>(dataSize));
+        const auto *source = static_cast<const uint8_t *>(desc.lpSurface);
+        for (uint32_t y = 0; y < texture.height; ++y) {
+            uint8_t *destination = texture.pixels.data() + static_cast<size_t>(y) * texture.rowPitch;
+            std::memcpy(destination, source + static_cast<size_t>(y) * desc.lPitch, texture.rowPitch);
+            if (desc.ddpfPixelFormat.dwRGBAlphaBitMask == 0) {
+                for (uint32_t x = 0; x < texture.width; ++x) destination[x * 4 + 3] = 0xFF;
             }
         }
+        return true;
+    }
+
+    bool captureTexture(IDirectDrawSurface4 *surface, TextureCache &texture) {
+        if (!surface) return false;
+        const uint64_t started = timerTicks();
+        DDSURFACEDESC2 desc = {};
+        desc.dwSize = sizeof(desc);
+        const HRESULT hr = surface->Lock(nullptr, &desc, DDLOCK_WAIT | DDLOCK_READONLY, nullptr);
+        if (FAILED(hr)) return false;
+        const bool valid = copyTexture(desc, texture);
         surface->Unlock(nullptr);
+        textureCaptureTicks_ += timerTicks() - started;
         return valid;
+    }
+
+    uint64_t timerTicks() const {
+        LARGE_INTEGER value = {};
+        QueryPerformanceCounter(&value);
+        return static_cast<uint64_t>(value.QuadPart);
+    }
+
+    uint32_t elapsedMicroseconds(uint64_t started, uint64_t ended) const {
+        if (timerFrequency_.QuadPart <= 0 || ended < started) return 0;
+        const uint64_t value = (ended - started) * 1000000u /
+                               static_cast<uint64_t>(timerFrequency_.QuadPart);
+        return value > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(value);
     }
 
     void emitTexture(DWORD stage, DWORD textureId) {
@@ -425,6 +458,9 @@ private:
     uint32_t height_ = 0;
     uint32_t used_ = 0;
     uint32_t commandCount_ = 0;
+    LARGE_INTEGER timerFrequency_ = {};
+    uint64_t sceneStarted_ = 0;
+    uint64_t textureCaptureTicks_ = 0;
     uint32_t boundTextures_[3] = {};
     uint32_t lastConsumerSession_ = 0;
     uint32_t lastConsumerFrame_ = 0;
@@ -470,8 +506,8 @@ void setTexture(DWORD stage, DWORD textureId, IDirectDrawSurface4 *surface) {
     producer.texture(stage, textureId, surface);
 }
 
-void textureDirty(IDirectDrawSurface4 *surface) {
-    producer.textureDirty(surface);
+void textureDirty(IDirectDrawSurface4 *surface, const DDSURFACEDESC2 *lockedDesc) {
+    producer.textureDirty(surface, lockedDesc);
 }
 
 void setRenderState(DWORD state, DWORD value) {

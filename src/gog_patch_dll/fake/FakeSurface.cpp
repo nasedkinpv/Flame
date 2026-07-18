@@ -414,6 +414,7 @@ HRESULT FakeSurface::Lock(LPRECT pRect, LPDDSURFACEDESC pDesc, DWORD a4, HANDLE 
     DWORD dwSize = pDesc->dwSize;
     memcpy(pDesc, &desc, pDesc->dwSize);
     pDesc->dwSize = dwSize;
+    this->f8_surfDesc = desc;
 
     if (!pRect) return hr;
     this->f8C_lockedRect = *pRect;
@@ -449,9 +450,11 @@ HRESULT FakeSurface::SetPalette(LPDIRECTDRAWPALETTE) {
 }
 
 HRESULT FakeSurface::Unlock(LPVOID) {
+    metal_bridge::textureDirty(this->f88_orig_surf,
+                               this->f9C_pLockedRect ? nullptr : &this->f8_surfDesc);
     HRESULT hr = this->f88_orig_surf->Unlock(this->f9C_pLockedRect);
     if (FAILED(hr)) return hr;
-    metal_bridge::textureDirty(this->f88_orig_surf);
+    this->f9C_pLockedRect = nullptr;
     if (this->f84_isModSurf) Fake_Redraw();
     return hr;
 }

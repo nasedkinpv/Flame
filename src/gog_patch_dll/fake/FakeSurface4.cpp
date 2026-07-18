@@ -211,6 +211,7 @@ HRESULT FakeSurface4::Lock(LPRECT pRect, LPDDSURFACEDESC2 surf, DWORD a4, HANDLE
         gog_assert_failed_hr("FakeSurface4::Lock:309", hr);
         return hr;
     }
+    this->f14_desc = *surf;
     ++this->f10_lockCounter;
     return hr;
 }
@@ -245,13 +246,13 @@ HRESULT FakeSurface4::SetPalette(LPDIRECTDRAWPALETTE) {
 }
 
 HRESULT FakeSurface4::Unlock(LPRECT pRect) {
+    metal_bridge::textureDirty(this->f8_orig_surf, pRect ? nullptr : &this->f14_desc);
     HRESULT hr = this->f8_orig_surf->Unlock(pRect);
     if (FAILED(hr)) {
         gog_assert_failed_hr("FakeSurface4::Unlock:322", hr);
         return hr;
     }
     --this->f10_lockCounter;
-    metal_bridge::textureDirty(this->f8_orig_surf);
     if (this->fC_isModSurf) {
         if (!this->f10_lockCounter) Fake_Redraw();
     }
