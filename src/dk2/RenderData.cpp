@@ -139,7 +139,8 @@ int __cdecl dk2::sub_58B190(int idx, Vec3f *v) {
 
 
 // 0058B2A0: per-vertex attribute copy (positions + uv sets) for the cached
-// path (flags bit 2), otherwise defers to the original renderFun_sub_58B440.
+// path (flags bit 2).  The original still defers to renderFun_sub_58B440
+// when bit 3 is set, after refreshing these cached arrays.
 uint8_t __cdecl dk2::renderFun_sub_58B2A0(int idx, Vec3f *vecs, Uv2f *uvs) {
     if (!(g_idxFlags[idx] & 4)) return (uint8_t) renderFun_sub_58B440(idx, vecs, uvs);
     SceneObject2E *obj = g_pSceneObject2E;
@@ -148,10 +149,9 @@ uint8_t __cdecl dk2::renderFun_sub_58B2A0(int idx, Vec3f *vecs, Uv2f *uvs) {
     const int nUv = obj->surfhCount;
     for (int i = 0; i < nUv; ++i) Uv2f_arr_instance[i].arr[idx] = uvs[i];
     uint8_t flags = g_idxFlags[idx];
-    if (!(flags & 8)) {
-        flags &= 0xFD;
-        g_idxFlags[idx] = flags;
-    }
+    if (flags & 8) return (uint8_t) renderFun_sub_58B440(idx, vecs, uvs);
+    flags &= 0xFD;
+    g_idxFlags[idx] = flags;
     return flags;
 }
 
