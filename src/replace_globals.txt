@@ -38,8 +38,8 @@
 0058AF70 int __cdecl sub_58AF70(int, float *)
 0058B190 int __cdecl sub_58B190(int, Vec3f *)
 #0058B2A0 uint8_t __cdecl renderFun_sub_58B2A0(int, Vec3f *, Uv2f *)
-#0058B940 void __cdecl addTriangleToRender2(int, int, int)
-#0058B9D0 void __cdecl addTriangleToRender1(int, int, int)
+0058B940 void __cdecl addTriangleToRender2(int, int, int)
+0058B9D0 void __cdecl addTriangleToRender1(int, int, int)
 
 # CBridge
 0043E0F0 MySurface *CBridge::loadPng(const char *)
