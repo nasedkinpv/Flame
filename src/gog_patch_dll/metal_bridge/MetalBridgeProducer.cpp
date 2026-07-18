@@ -34,9 +34,12 @@ public:
         if (active_) finish();
 
         const uint32_t consumer = InterlockedCompareExchange(asLong(&header_->consumer_frame), 0, 0);
-        if (consumer < lastConsumerFrame_) {
+        const uint32_t consumerSession =
+            InterlockedCompareExchange(asLong(&header_->consumer_session), 0, 0);
+        if (consumerSession != lastConsumerSession_ || consumer < lastConsumerFrame_) {
             for (auto &entry : textures_) entry.second.pending = true;
         }
+        lastConsumerSession_ = consumerSession;
         lastConsumerFrame_ = consumer;
 
         slotIndex_ = previousSlot_ == DK2M_NO_SLOT ? 0 : (previousSlot_ + 1) % DK2M_SLOT_COUNT;
@@ -294,6 +297,7 @@ private:
     uint32_t used_ = 0;
     uint32_t commandCount_ = 0;
     uint32_t boundTextures_[3] = {};
+    uint32_t lastConsumerSession_ = 0;
     uint32_t lastConsumerFrame_ = 0;
     std::unordered_map<uint32_t, TextureCache> textures_;
     std::unordered_map<uintptr_t, uint32_t> surfaceTextures_;

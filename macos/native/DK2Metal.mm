@@ -22,6 +22,8 @@
 namespace {
 
 constexpr NSUInteger kFramesInFlight = 3;
+constexpr CGFloat kDrawableWidth = 2560.0;
+constexpr CGFloat kDrawableHeight = 1920.0;
 std::atomic<uint64_t> gRequestedDrawableSize{0};
 std::atomic<uint64_t> gRenderedFrames{0};
 std::atomic<uint64_t> gBridgeFramesRendered{0};
@@ -82,6 +84,8 @@ public:
             header_->file_size = DK2M_FILE_SIZE;
             header_->latest_slot = DK2M_NO_SLOT;
         }
+        uint32_t session = __atomic_add_fetch(&header_->consumer_session, 1, __ATOMIC_ACQ_REL);
+        if (session == 0) __atomic_add_fetch(&header_->consumer_session, 1, __ATOMIC_ACQ_REL);
         __atomic_store_n(&header_->consumer_frame, 0, __ATOMIC_RELEASE);
     }
 
@@ -175,7 +179,10 @@ MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
 @implementation DK2MetalView
 
 - (CALayer *)makeBackingLayer {
-    return [CAMetalLayer layer];
+    CAMetalLayer *layer = [CAMetalLayer layer];
+    layer.contentsGravity = kCAGravityResizeAspect;
+    layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+    return layer;
 }
 
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -193,8 +200,9 @@ MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
 
 - (void)layout {
     [super layout];
-    NSRect backing = [self convertRectToBacking:self.bounds];
-    gRequestedDrawableSize.store(packSize(backing.size), std::memory_order_release);
+    gRequestedDrawableSize.store(
+        packSize(CGSizeMake(kDrawableWidth, kDrawableHeight)),
+        std::memory_order_release);
 }
 
 - (void)viewDidChangeBackingProperties {
@@ -248,7 +256,7 @@ MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
 
     _layer.device = _device;
     _layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    _layer.maximumDrawableCount = kFramesInFlight;
+    _layer.maximumDrawableCount = 2;
     _layer.framebufferOnly = YES;
     _layer.opaque = YES;
     _layer.displaySyncEnabled = YES;
@@ -733,9 +741,9 @@ static void *renderWorker(void *context) {
 
     [_view layoutSubtreeIfNeeded];
     CAMetalLayer *layer = (CAMetalLayer *)_view.layer;
-    NSRect backing = [_view convertRectToBacking:_view.bounds];
-    layer.drawableSize = backing.size;
-    gRequestedDrawableSize.store(packSize(backing.size), std::memory_order_release);
+    const CGSize drawableSize = CGSizeMake(kDrawableWidth, kDrawableHeight);
+    layer.drawableSize = drawableSize;
+    gRequestedDrawableSize.store(packSize(drawableSize), std::memory_order_release);
 
     _renderer = [[DK2MetalRenderer alloc] initWithLayer:layer];
     [_renderer start];

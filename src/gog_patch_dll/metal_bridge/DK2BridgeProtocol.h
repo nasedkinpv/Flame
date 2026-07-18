@@ -42,7 +42,7 @@ typedef struct DK2MFileHeader {
     uint32_t width;
     uint32_t height;
     uint32_t producer_pid;
-    uint32_t reserved0;
+    volatile uint32_t consumer_session;
     DK2MFrameSlot slots[DK2M_SLOT_COUNT];
     uint32_t reserved[28];
 } DK2MFileHeader;
