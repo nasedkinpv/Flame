@@ -35,7 +35,7 @@
 0058AD70 int __cdecl sub_58AD70(int, float *)
 
 # RenderData vertex pipeline (dispatch targets of g_fun_779398/g_fun_779394/__renderFun/__addTriangleFun)
-#0058AF70 int __cdecl sub_58AF70(int, float *)
+0058AF70 int __cdecl sub_58AF70(int, float *)
 #0058B190 int __cdecl sub_58B190(int, Vec3f *)
 #0058B2A0 uint8_t __cdecl renderFun_sub_58B2A0(int, Vec3f *, Uv2f *)
 #0058B940 void __cdecl addTriangleToRender2(int, int, int)
