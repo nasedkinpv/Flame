@@ -535,6 +535,8 @@ HRESULT FakeDevice3::SetTexture(DWORD a3, LPDIRECT3DTEXTURE2 tex_) {
     auto *tex = (FakeTexture *) tex_;
     IDirect3DTexture2 *orig_tex = nullptr;
     if (tex) orig_tex = tex->orig();
+    metal_bridge::setTexture(a3, tex ? tex->bridgeId() : 0,
+                             tex ? tex->bridgeSurface() : nullptr);
     HRESULT hr = orig::pIDirect3DDevice3->SetTexture(a3, orig_tex);
     if (FAILED(hr)) {
         gog_assert_failed_hr("FakeDevice3::SetTexture:964", hr);

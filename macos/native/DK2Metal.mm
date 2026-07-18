@@ -16,6 +16,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -81,6 +82,7 @@ public:
             header_->file_size = DK2M_FILE_SIZE;
             header_->latest_slot = DK2M_NO_SLOT;
         }
+        __atomic_store_n(&header_->consumer_frame, 0, __ATOMIC_RELEASE);
     }
 
     ~BridgeReader() {
@@ -131,10 +133,15 @@ private:
 struct MetalVertex {
     float position[4];
     float color[4];
+    float texCoord[2];
+    uint32_t textureIndex;
+    uint32_t padding;
 };
 
 constexpr NSUInteger kVertexBufferSize = 2 * 1024 * 1024;
 constexpr NSUInteger kIndexBufferSize = 512 * 1024;
+constexpr NSUInteger kTextureBindingsPerFrame = 128;
+static_assert(sizeof(MetalVertex) == 48);
 
 } // namespace
 
@@ -185,6 +192,11 @@ constexpr NSUInteger kIndexBufferSize = 512 * 1024;
     id<MTL4CommandQueue> _queue;
     id<MTLSharedEvent> _completed;
     id<MTLRenderPipelineState> _pipeline;
+    id<MTLDepthStencilState> _depthState;
+    id<MTLSamplerState> _sampler;
+    id<MTLTexture> _whiteTexture;
+    id<MTLTexture> _depthTexture;
+    NSMutableDictionary<NSNumber *, id<MTLTexture>> *_textures;
     id<MTLResidencySet> _resources;
     id<MTL4CommandAllocator> _allocators[kFramesInFlight];
     id<MTL4CommandBuffer> _commandBuffers[kFramesInFlight];
@@ -233,6 +245,7 @@ constexpr NSUInteger kIndexBufferSize = 512 * 1024;
     pipelineDescriptor.vertexFunction = vertexFunction;
     pipelineDescriptor.fragmentFunction = fragmentFunction;
     pipelineDescriptor.colorAttachments[0].pixelFormat = _layer.pixelFormat;
+    pipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
     pipelineDescriptor.colorAttachments[0].blendingEnabled = YES;
     pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
     pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
@@ -246,8 +259,38 @@ constexpr NSUInteger kIndexBufferSize = 512 * 1024;
         return nil;
     }
 
+    MTLDepthStencilDescriptor *depthDescriptor = [[MTLDepthStencilDescriptor alloc] init];
+    depthDescriptor.label = @"DK2 default depth";
+    depthDescriptor.depthCompareFunction = MTLCompareFunctionLessEqual;
+    depthDescriptor.depthWriteEnabled = YES;
+    _depthState = [_device newDepthStencilStateWithDescriptor:depthDescriptor];
+
+    MTLSamplerDescriptor *samplerDescriptor = [[MTLSamplerDescriptor alloc] init];
+    samplerDescriptor.label = @"DK2 fixed-function sampler";
+    samplerDescriptor.minFilter = MTLSamplerMinMagFilterLinear;
+    samplerDescriptor.magFilter = MTLSamplerMinMagFilterLinear;
+    samplerDescriptor.sAddressMode = MTLSamplerAddressModeRepeat;
+    samplerDescriptor.tAddressMode = MTLSamplerAddressModeRepeat;
+    samplerDescriptor.supportArgumentBuffers = YES;
+    _sampler = [_device newSamplerStateWithDescriptor:samplerDescriptor];
+
+    MTLTextureDescriptor *whiteDescriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                    width:1 height:1 mipmapped:NO];
+    whiteDescriptor.storageMode = MTLStorageModeShared;
+    whiteDescriptor.usage = MTLTextureUsageShaderRead;
+    _whiteTexture = [_device newTextureWithDescriptor:whiteDescriptor];
+    const uint32_t whitePixel = 0xFFFFFFFFu;
+    [_whiteTexture replaceRegion:MTLRegionMake2D(0, 0, 1, 1)
+                     mipmapLevel:0 withBytes:&whitePixel bytesPerRow:4];
+    _textures = [NSMutableDictionary dictionary];
+    if (!_depthState || !_sampler || !_whiteTexture) {
+        fail(@"Metal fixed-function resource creation failed.");
+        return nil;
+    }
+
     MTLResidencySetDescriptor *residencyDescriptor = [[MTLResidencySetDescriptor alloc] init];
-    residencyDescriptor.initialCapacity = kFramesInFlight * 2;
+    residencyDescriptor.initialCapacity = 2048;
     residencyDescriptor.label = @"DK2 dynamic frame resources";
     _resources = [_device newResidencySetWithDescriptor:residencyDescriptor error:&error];
     if (!_resources) {
@@ -271,6 +314,8 @@ constexpr NSUInteger kIndexBufferSize = 512 * 1024;
 
         MTL4ArgumentTableDescriptor *tableDescriptor = [[MTL4ArgumentTableDescriptor alloc] init];
         tableDescriptor.maxBufferBindCount = 1;
+        tableDescriptor.maxTextureBindCount = kTextureBindingsPerFrame;
+        tableDescriptor.maxSamplerStateBindCount = 1;
         tableDescriptor.initializeBindings = YES;
         tableDescriptor.label = [NSString stringWithFormat:@"DK2 arguments %lu", index];
         _argumentTables[index] = [_device newArgumentTableWithDescriptor:tableDescriptor error:&error];
@@ -278,14 +323,17 @@ constexpr NSUInteger kIndexBufferSize = 512 * 1024;
             fail(@"Metal dynamic frame buffer creation failed.");
             return nil;
         }
+        [_argumentTables[index] setTexture:_whiteTexture.gpuResourceID atIndex:0];
+        [_argumentTables[index] setSamplerState:_sampler.gpuResourceID atIndex:0];
     }
 
-    id<MTLAllocation> allocations[kFramesInFlight * 2];
+    id<MTLAllocation> allocations[kFramesInFlight * 2 + 1];
     for (NSUInteger index = 0; index < kFramesInFlight; ++index) {
         allocations[index * 2] = _vertexBuffers[index];
         allocations[index * 2 + 1] = _indexBuffers[index];
     }
-    [_resources addAllocations:allocations count:kFramesInFlight * 2];
+    allocations[kFramesInFlight * 2] = _whiteTexture;
+    [_resources addAllocations:allocations count:kFramesInFlight * 2 + 1];
     [_resources commit];
     [_resources requestResidency];
     [_queue addResidencySet:_resources];
@@ -303,6 +351,25 @@ constexpr NSUInteger kIndexBufferSize = 512 * 1024;
     _displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30.0, 120.0, 120.0);
     _displayLink.preferredFrameLatency = 2.0;
     return self;
+}
+
+- (BOOL)ensureDepthTextureWidth:(NSUInteger)width height:(NSUInteger)height {
+    if (_depthTexture && _depthTexture.width == width && _depthTexture.height == height) return YES;
+    if (_depthTexture) {
+        if (_frame && ![_completed waitUntilSignaledValue:_frame timeoutMS:1000]) return NO;
+        [_resources removeAllocation:_depthTexture];
+    }
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                    width:width height:height mipmapped:NO];
+    descriptor.storageMode = MTLStorageModePrivate;
+    descriptor.usage = MTLTextureUsageRenderTarget;
+    _depthTexture = [_device newTextureWithDescriptor:descriptor];
+    if (!_depthTexture) return NO;
+    _depthTexture.label = @"DK2 depth buffer";
+    [_resources addAllocation:_depthTexture];
+    [_resources commit];
+    return YES;
 }
 
 static void *renderWorker(void *context) {
@@ -344,6 +411,12 @@ static void *renderWorker(void *context) {
                 return;
             }
         }
+        if (![self ensureDepthTextureWidth:update.drawable.texture.width
+                                     height:update.drawable.texture.height]) {
+            fail(@"Metal depth buffer creation failed.");
+            link.paused = YES;
+            return;
+        }
 
         [_allocators[slot] reset];
         id<MTL4CommandBuffer> commandBuffer = _commandBuffers[slot];
@@ -353,6 +426,7 @@ static void *renderWorker(void *context) {
         const double t = update.targetPresentationTimestamp;
         const double pulse = 0.5 + 0.5 * std::sin(t * 1.8);
         MTLClearColor clearColor = MTLClearColorMake(0.025 + pulse * 0.035, 0.07, 0.10 + pulse * 0.08, 1.0);
+        BOOL residencyChanged = NO;
         if (snapshot) {
             size_t offset = 0;
             while (offset + sizeof(DK2MCommandHeader) <= snapshot->bytes.size()) {
@@ -363,35 +437,98 @@ static void *renderWorker(void *context) {
                     DK2MClearCommand clear;
                     std::memcpy(&clear, snapshot->bytes.data() + offset, sizeof(clear));
                     clearColor = MTLClearColorMake(clear.red, clear.green, clear.blue, clear.alpha);
+                } else if (header.type == DK2M_COMMAND_TEXTURE_UPDATE &&
+                           header.size >= sizeof(DK2MTextureUpdateCommand)) {
+                    DK2MTextureUpdateCommand textureUpdate;
+                    std::memcpy(&textureUpdate, snapshot->bytes.data() + offset, sizeof(textureUpdate));
+                    const size_t expected = sizeof(textureUpdate) + textureUpdate.data_size;
+                    NSNumber *key = @(textureUpdate.texture_id);
+                    if (textureUpdate.texture_id && !_textures[key] && expected <= header.size &&
+                        textureUpdate.width && textureUpdate.height &&
+                        textureUpdate.row_pitch >= textureUpdate.width * 4 &&
+                        textureUpdate.data_size >= textureUpdate.row_pitch * textureUpdate.height) {
+                        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+                            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                        width:textureUpdate.width
+                                                       height:textureUpdate.height
+                                                    mipmapped:NO];
+                        descriptor.storageMode = MTLStorageModeShared;
+                        descriptor.usage = MTLTextureUsageShaderRead;
+                        id<MTLTexture> texture = [_device newTextureWithDescriptor:descriptor];
+                        if (texture) {
+                            const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
+                            [texture replaceRegion:MTLRegionMake2D(0, 0, textureUpdate.width, textureUpdate.height)
+                                       mipmapLevel:0 withBytes:pixels bytesPerRow:textureUpdate.row_pitch];
+                            texture.label = [NSString stringWithFormat:@"DK2 texture %u", textureUpdate.texture_id];
+                            _textures[key] = texture;
+                            [_resources addAllocation:texture];
+                            residencyChanged = YES;
+                        }
+                    }
                 }
                 offset += header.size;
             }
         }
+        if (residencyChanged) [_resources commit];
         MTL4RenderPassDescriptor *pass = [[MTL4RenderPassDescriptor alloc] init];
         MTLRenderPassColorAttachmentDescriptor *color = pass.colorAttachments[0];
         color.texture = update.drawable.texture;
         color.loadAction = MTLLoadActionClear;
         color.storeAction = MTLStoreActionStore;
         color.clearColor = clearColor;
+        MTLRenderPassDepthAttachmentDescriptor *depth = pass.depthAttachment;
+        depth.texture = _depthTexture;
+        depth.loadAction = MTLLoadActionClear;
+        depth.storeAction = MTLStoreActionDontCare;
+        depth.clearDepth = 1.0;
 
         id<MTL4RenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
         encoder.label = @"DK2 native Metal frame";
+        [encoder setDepthStencilState:_depthState];
         if (snapshot) {
             NSUInteger vertexOffset = 0;
             NSUInteger indexOffset = 0;
+            uint32_t currentTextureBinding = 0;
+            uint32_t nextTextureBinding = 1;
+            std::unordered_map<uint32_t, uint32_t> textureBindings;
+            [_argumentTables[slot] setAddress:_vertexBuffers[slot].gpuAddress atIndex:0];
+            [_argumentTables[slot] setTexture:_whiteTexture.gpuResourceID atIndex:0];
+            [_argumentTables[slot] setSamplerState:_sampler.gpuResourceID atIndex:0];
+            [encoder setArgumentTable:_argumentTables[slot]
+                             atStages:MTLRenderStageVertex | MTLRenderStageFragment];
             size_t commandOffset = 0;
             while (commandOffset + sizeof(DK2MCommandHeader) <= snapshot->bytes.size()) {
                 DK2MCommandHeader header;
                 std::memcpy(&header, snapshot->bytes.data() + commandOffset, sizeof(header));
                 if (header.size < sizeof(header) || commandOffset + header.size > snapshot->bytes.size()) break;
-                if (header.type == DK2M_COMMAND_DRAW_INDEXED && header.size >= sizeof(DK2MDrawIndexedCommand)) {
+                if (header.type == DK2M_COMMAND_SET_TEXTURE && header.size == sizeof(DK2MSetTextureCommand)) {
+                    DK2MSetTextureCommand binding;
+                    std::memcpy(&binding, snapshot->bytes.data() + commandOffset, sizeof(binding));
+                    if (binding.stage == 0 && binding.texture_id) {
+                        auto found = textureBindings.find(binding.texture_id);
+                        if (found != textureBindings.end()) {
+                            currentTextureBinding = found->second;
+                        } else if (nextTextureBinding < kTextureBindingsPerFrame) {
+                            id<MTLTexture> texture = _textures[@(binding.texture_id)];
+                            if (texture) {
+                                currentTextureBinding = nextTextureBinding++;
+                                textureBindings.emplace(binding.texture_id, currentTextureBinding);
+                                [_argumentTables[slot] setTexture:texture.gpuResourceID
+                                                         atIndex:currentTextureBinding];
+                            } else {
+                                currentTextureBinding = 0;
+                            }
+                        }
+                    } else if (binding.stage == 0) {
+                        currentTextureBinding = 0;
+                    }
+                } else if (header.type == DK2M_COMMAND_DRAW_INDEXED && header.size >= sizeof(DK2MDrawIndexedCommand)) {
                     DK2MDrawIndexedCommand draw;
                     std::memcpy(&draw, snapshot->bytes.data() + commandOffset, sizeof(draw));
                     const size_t vertexBytes = static_cast<size_t>(draw.vertex_count) * sizeof(DK2MVertex1C);
                     const size_t indexBytes = static_cast<size_t>(draw.index_count) * sizeof(uint16_t);
                     const size_t expected = sizeof(draw) + vertexBytes + indexBytes;
                     const NSUInteger metalVertexBytes = static_cast<NSUInteger>(draw.vertex_count) * sizeof(MetalVertex);
-                    vertexOffset = (vertexOffset + 15u) & ~15u;
                     indexOffset = (indexOffset + 3u) & ~3u;
                     if (draw.fvf == DK2M_FVF_VERTEX1C && expected <= header.size &&
                         vertexOffset + metalVertexBytes <= kVertexBufferSize &&
@@ -411,12 +548,23 @@ static void *renderWorker(void *context) {
                             metalVertices[index].color[1] = ((vertex.diffuse >> 8) & 0xFF) / 255.0f;
                             metalVertices[index].color[2] = (vertex.diffuse & 0xFF) / 255.0f;
                             metalVertices[index].color[3] = ((vertex.diffuse >> 24) & 0xFF) / 255.0f;
+                            metalVertices[index].texCoord[0] = vertex.u;
+                            metalVertices[index].texCoord[1] = vertex.v;
+                            metalVertices[index].textureIndex = currentTextureBinding;
+                            metalVertices[index].padding = 0;
                         }
-                        std::memcpy(static_cast<uint8_t *>(_indexBuffers[slot].contents) + indexOffset,
-                                    rawIndices, indexBytes);
-                        [_argumentTables[slot] setAddress:_vertexBuffers[slot].gpuAddress + vertexOffset atIndex:0];
+                        auto *metalIndices = reinterpret_cast<uint16_t *>(
+                            static_cast<uint8_t *>(_indexBuffers[slot].contents) + indexOffset);
+                        const auto *sourceIndices = reinterpret_cast<const uint16_t *>(rawIndices);
+                        const uint32_t baseVertex = static_cast<uint32_t>(vertexOffset / sizeof(MetalVertex));
+                        bool validIndices = true;
+                        for (uint32_t index = 0; index < draw.index_count; ++index) {
+                            const uint32_t adjusted = baseVertex + sourceIndices[index];
+                            if (adjusted > UINT16_MAX) { validIndices = false; break; }
+                            metalIndices[index] = static_cast<uint16_t>(adjusted);
+                        }
+                        if (!validIndices) { commandOffset += header.size; continue; }
                         [encoder setRenderPipelineState:_pipeline];
-                        [encoder setArgumentTable:_argumentTables[slot] atStages:MTLRenderStageVertex];
                         [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                             indexCount:draw.index_count
                                              indexType:MTLIndexTypeUInt16

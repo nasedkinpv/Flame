@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 1u
+#define DK2M_VERSION 2u
 #define DK2M_SLOT_COUNT 3u
 #define DK2M_SLOT_CAPACITY (4u * 1024u * 1024u)
 #define DK2M_NO_SLOT 0xFFFFFFFFu
@@ -14,6 +14,8 @@
 enum DK2MCommandType {
     DK2M_COMMAND_CLEAR = 1,
     DK2M_COMMAND_DRAW_INDEXED = 2,
+    DK2M_COMMAND_TEXTURE_UPDATE = 3,
+    DK2M_COMMAND_SET_TEXTURE = 4,
 };
 
 #pragma pack(push, 4)
@@ -75,6 +77,21 @@ typedef struct DK2MDrawIndexedCommand {
     uint32_t index_count;
     uint32_t flags;
 } DK2MDrawIndexedCommand;
+
+typedef struct DK2MTextureUpdateCommand {
+    DK2MCommandHeader header;
+    uint32_t texture_id;
+    uint32_t width;
+    uint32_t height;
+    uint32_t row_pitch;
+    uint32_t data_size;
+} DK2MTextureUpdateCommand;
+
+typedef struct DK2MSetTextureCommand {
+    DK2MCommandHeader header;
+    uint32_t stage;
+    uint32_t texture_id;
+} DK2MSetTextureCommand;
 #pragma pack(pop)
 
 #define DK2M_FILE_SIZE ((uint32_t)(sizeof(DK2MFileHeader) + DK2M_SLOT_COUNT * DK2M_SLOT_CAPACITY))
@@ -87,6 +104,8 @@ static_assert(sizeof(DK2MCommandHeader) == 8, "bridge command layout changed");
 static_assert(sizeof(DK2MClearCommand) == 24, "bridge clear layout changed");
 static_assert(sizeof(DK2MVertex1C) == 28, "DK2 Vertex1C layout changed");
 static_assert(sizeof(DK2MDrawIndexedCommand) == 24, "bridge draw layout changed");
+static_assert(sizeof(DK2MTextureUpdateCommand) == 28, "bridge texture update layout changed");
+static_assert(sizeof(DK2MSetTextureCommand) == 16, "bridge texture binding layout changed");
 #endif
 
 #endif

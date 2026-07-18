@@ -60,7 +60,7 @@ HRESULT FakeSurface4::QueryInterface(REFIID riid, LPVOID FAR *ppvObj) {
         IDirect3DTexture2 *orig_tex;
         HRESULT hr = this->f8_orig_surf->QueryInterface(IID_IDirect3DTexture2, (LPVOID *) &orig_tex);
         if (SUCCEEDED(hr)) {
-            *ppvObj = new FakeTexture(orig_tex);
+            *ppvObj = new FakeTexture(orig_tex, this->f8_orig_surf);
         }
         return hr;
     }

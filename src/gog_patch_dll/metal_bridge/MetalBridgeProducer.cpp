@@ -3,9 +3,22 @@
 
 #include <cstdint>
 #include <cstring>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace gog::metal_bridge {
 namespace {
+
+struct TextureCache {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t rowPitch = 0;
+    uint32_t lastSentFrame = 0;
+    bool pending = true;
+    bool sentInCurrentFrame = false;
+    std::vector<uint8_t> pixels;
+};
 
 class Producer {
 public:
@@ -18,6 +31,12 @@ public:
     void begin(DWORD width, DWORD height) {
         if (!ensureMapped()) return;
         if (active_) finish();
+
+        const uint32_t consumer = InterlockedCompareExchange(asLong(&header_->consumer_frame), 0, 0);
+        if (consumer < lastConsumerFrame_) {
+            for (auto &entry : textures_) entry.second.pending = true;
+        }
+        lastConsumerFrame_ = consumer;
 
         slotIndex_ = previousSlot_ == DK2M_NO_SLOT ? 0 : (previousSlot_ + 1) % DK2M_SLOT_COUNT;
         previousSlot_ = slotIndex_;
@@ -42,6 +61,10 @@ public:
         clear.alpha = 1.0f;
         append(&clear, sizeof(clear));
         ++commandCount_;
+
+        for (DWORD stage = 0; stage < 3; ++stage) {
+            if (boundTextures_[stage]) emitTexture(stage, boundTextures_[stage]);
+        }
     }
 
     void draw(DWORD fvf, const void *vertices, DWORD vertexCount,
@@ -65,6 +88,17 @@ public:
         ++commandCount_;
     }
 
+    void texture(DWORD stage, DWORD textureId, IDirectDrawSurface4 *surface) {
+        if (stage >= 3 || !ensureMapped()) return;
+        boundTextures_[stage] = textureId;
+        if (textureId && textures_.find(textureId) == textures_.end()) {
+            TextureCache cache;
+            if (!captureTexture(surface, cache)) return;
+            textures_.emplace(textureId, std::move(cache));
+        }
+        if (active_) emitTexture(stage, textureId);
+    }
+
     void finish() {
         if (!active_) return;
         ++frame_;
@@ -81,6 +115,13 @@ public:
         InterlockedExchange(asLong(&slot_->sequence), sequence_);
         InterlockedExchange(asLong(&header_->latest_slot), static_cast<LONG>(slotIndex_));
         InterlockedExchange(asLong(&header_->latest_frame), static_cast<LONG>(frame_));
+        for (auto &entry : textures_) {
+            TextureCache &texture = entry.second;
+            if (texture.sentInCurrentFrame) {
+                texture.lastSentFrame = frame_;
+                texture.sentInCurrentFrame = false;
+            }
+        }
         active_ = false;
     }
 
@@ -122,6 +163,77 @@ private:
         return true;
     }
 
+    bool captureTexture(IDirectDrawSurface4 *surface, TextureCache &texture) {
+        if (!surface) return false;
+        DDSURFACEDESC2 desc = {};
+        desc.dwSize = sizeof(desc);
+        const HRESULT hr = surface->Lock(nullptr, &desc, DDLOCK_WAIT | DDLOCK_READONLY, nullptr);
+        if (FAILED(hr)) return false;
+
+        bool valid = desc.lpSurface && desc.dwWidth && desc.dwHeight &&
+                     desc.dwWidth <= 8192 && desc.dwHeight <= 8192 &&
+                     desc.ddpfPixelFormat.dwRGBBitCount == 32 && desc.lPitch >= 0;
+        const uint64_t rowPitch = static_cast<uint64_t>(desc.dwWidth) * 4;
+        const uint64_t dataSize = rowPitch * desc.dwHeight;
+        if (dataSize > DK2M_SLOT_CAPACITY - sizeof(DK2MTextureUpdateCommand)) valid = false;
+        if (valid) {
+            texture.width = desc.dwWidth;
+            texture.height = desc.dwHeight;
+            texture.rowPitch = static_cast<uint32_t>(rowPitch);
+            texture.pixels.resize(static_cast<size_t>(dataSize));
+            const auto *source = static_cast<const uint8_t *>(desc.lpSurface);
+            for (uint32_t y = 0; y < texture.height; ++y) {
+                uint8_t *destination = texture.pixels.data() + static_cast<size_t>(y) * texture.rowPitch;
+                std::memcpy(destination, source + static_cast<size_t>(y) * desc.lPitch, texture.rowPitch);
+                if (desc.ddpfPixelFormat.dwRGBAlphaBitMask == 0) {
+                    for (uint32_t x = 0; x < texture.width; ++x) destination[x * 4 + 3] = 0xFF;
+                }
+            }
+        }
+        surface->Unlock(nullptr);
+        return valid;
+    }
+
+    void emitTexture(DWORD stage, DWORD textureId) {
+        if (textureId) {
+            auto found = textures_.find(textureId);
+            if (found != textures_.end()) {
+                TextureCache &texture = found->second;
+                const uint32_t consumer = InterlockedCompareExchange(asLong(&header_->consumer_frame), 0, 0);
+                if (texture.pending && texture.lastSentFrame && consumer >= texture.lastSentFrame) {
+                    texture.pending = false;
+                }
+                if (texture.pending && !texture.sentInCurrentFrame) {
+                    const uint32_t commandSize = static_cast<uint32_t>(
+                        sizeof(DK2MTextureUpdateCommand) + texture.pixels.size());
+                    if (used_ + commandSize <= DK2M_SLOT_CAPACITY) {
+                        DK2MTextureUpdateCommand update = {};
+                        update.header.type = DK2M_COMMAND_TEXTURE_UPDATE;
+                        update.header.size = commandSize;
+                        update.texture_id = textureId;
+                        update.width = texture.width;
+                        update.height = texture.height;
+                        update.row_pitch = texture.rowPitch;
+                        update.data_size = static_cast<uint32_t>(texture.pixels.size());
+                        append(&update, sizeof(update));
+                        append(texture.pixels.data(), update.data_size);
+                        ++commandCount_;
+                        texture.sentInCurrentFrame = true;
+                    }
+                }
+            }
+        }
+
+        if (used_ + sizeof(DK2MSetTextureCommand) > DK2M_SLOT_CAPACITY) return;
+        DK2MSetTextureCommand binding = {};
+        binding.header.type = DK2M_COMMAND_SET_TEXTURE;
+        binding.header.size = sizeof(binding);
+        binding.stage = stage;
+        binding.texture_id = textureId;
+        append(&binding, sizeof(binding));
+        ++commandCount_;
+    }
+
     void append(const void *data, uint32_t size) {
         std::memcpy(static_cast<uint8_t *>(view_) + DK2M_SLOT_OFFSET(slotIndex_) + used_, data, size);
         used_ += size;
@@ -140,6 +252,9 @@ private:
     uint32_t height_ = 0;
     uint32_t used_ = 0;
     uint32_t commandCount_ = 0;
+    uint32_t boundTextures_[3] = {};
+    uint32_t lastConsumerFrame_ = 0;
+    std::unordered_map<uint32_t, TextureCache> textures_;
     bool active_ = false;
 };
 
@@ -154,6 +269,10 @@ void beginFrame(DWORD width, DWORD height) {
 void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
                  const WORD *indices, DWORD indexCount, DWORD flags) {
     producer.draw(fvf, vertices, vertexCount, indices, indexCount, flags);
+}
+
+void setTexture(DWORD stage, DWORD textureId, IDirectDrawSurface4 *surface) {
+    producer.texture(stage, textureId, surface);
 }
 
 void endFrame() {

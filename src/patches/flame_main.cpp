@@ -114,7 +114,12 @@ void patch::flameInit(int argc, const char **argv) {
         SetProcessAffinityMask(hProc, 1);
     }
     if(o_windowed.get()) {
-        o_gog_enabled.set_tmp(false);  // gog is incompatible with windowed mode
+        // The native Metal host needs GOG's exact D3D3 wrapper even though the
+        // compatibility window remains windowed and will eventually be hidden.
+        // Ordinary Flame windowed runs retain the established behavior.
+        if (GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", nullptr, 0) == 0) {
+            o_gog_enabled.set_tmp(false);  // gog is incompatible with windowed mode
+        }
         patch::control_windowed_mode::enabled = true;
     }
 
