@@ -73,9 +73,9 @@ int __cdecl dk2::sub_58AF70(int idx, float *v) {
     RenderData &r = RenderData_instance_arr[idx];
     g_idxFlags[idx] = 1;
     const float x = v[0], y = v[1], z = v[2];
-    r.f0_vec.x = x;
-    r.f0_vec.y = y;
-    r.f0_vec.z = z;
+    r.vec.x = x;
+    r.vec.y = y;
+    r.vec.z = z;
     uint32_t code = signBit(z + y)
                   | signBit(z - y) << 1
                   | signBit(x + z) << 2
@@ -90,11 +90,11 @@ int __cdecl dk2::sub_58AF70(int idx, float *v) {
             if (signBit(fog)) {
                 code |= 0x20;
                 g_idxFlags[idx] |= 0x10;
-                r.field_24 = 0;
+                r.f24 = 0;
             } else if (signBit(fog - fd2[7])) {  // fog < 0066FE44
                 g_idxFlags[idx] |= 0x10;
                 const float fv = fd2[21] - (fd2[20] - fog * fd2[24]);  // 66FE7C-(66FE78-fog*66FE88)
-                r.field_24 = (int) (floatBits(fv) & 0x7fffff) - 0x400000;
+                r.f24 = (int) (floatBits(fv) & 0x7fffff) - 0x400000;
             }
         }
         const float rz = fd2[7] / z;                                              // 0066FE44 / z
@@ -103,14 +103,14 @@ int __cdecl dk2::sub_58AF70(int idx, float *v) {
         const float sy = scaleY * y + reinterpret_cast<float *>(&g_renMode_77F928)[2];  // +0077F930
         const float sx = scaleX * x + (&g_right_77F4EC)[1];                       // +0077F4F0
         const float sel = fd2[5] - z;                                             // 0066FE3C - z
-        r.fC_xC = sx;
-        r.f10_y10 = sy;
-        r.f14_z14 = signBit(sel) ? g_zAdd3_7793A0 - g_zMul3_77F934 * rz
-                                 : g_zMul2_77F490 * z + g_zAdd2_77F4D0;
-        if (signBit(fd2[3] - r.f14_z14)) r.f14_z14 = fd2[3];                      // clamp to 0066FE34
-        r.field_18 = rz;
+        r.xC = sx;
+        r.y10 = sy;
+        r.z14 = signBit(sel) ? g_zAdd3_7793A0 - g_zMul3_77F934 * rz
+                             : g_zMul2_77F490 * z + g_zAdd2_77F4D0;
+        if (signBit(fd2[3] - r.z14)) r.z14 = fd2[3];                              // clamp to 0066FE34
+        r.f18 = rz;
     }
-    r.f1C__viewOffsets = (int) code;
+    r._viewOffsets = (int) code;
     return 0;  // eax is garbage in the original; no caller reads it
 }
 
@@ -123,17 +123,17 @@ int __cdecl dk2::sub_58B190(int idx, Vec3f *v) {
     if (signBit(z - fd2[4])) z = fd2[4];  // clamp to 0066FE38
     if (signBit(fd2[7] - z)) z = fd2[7];  // clamp to 0066FE44
     RenderData &r = RenderData_instance_arr[idx];
-    r.field_18 = 1.0f;
-    r.fC_xC = x;
-    r.f10_y10 = y;
-    r.f14_z14 = g_zMul2_77F490 * z + g_zAdd2_77F4D0;
-    r.f0_vec.x = x;
-    r.f0_vec.y = y;
-    r.f0_vec.z = z;
-    r.f1C__viewOffsets = (int) (signBit(y - g_top_780938)
-                              | signBit(g_bottom_77937C - y) << 1
-                              | signBit(x - g_left_77F3F4) << 2
-                              | signBit(g_right_77F4EC - x) << 3);
+    r.f18 = 1.0f;
+    r.xC = x;
+    r.y10 = y;
+    r.z14 = g_zMul2_77F490 * z + g_zAdd2_77F4D0;
+    r.vec.x = x;
+    r.vec.y = y;
+    r.vec.z = z;
+    r._viewOffsets = (int) (signBit(y - g_top_780938)
+                          | signBit(g_bottom_77937C - y) << 1
+                          | signBit(x - g_left_77F3F4) << 2
+                          | signBit(g_right_77F4EC - x) << 3);
     return 0;  // eax is garbage in the original; no caller reads it
 }
 
@@ -143,10 +143,10 @@ int __cdecl dk2::sub_58B190(int idx, Vec3f *v) {
 uint8_t __cdecl dk2::renderFun_sub_58B2A0(int idx, Vec3f *vecs, Uv2f *uvs) {
     if (!(g_idxFlags[idx] & 4)) return (uint8_t) renderFun_sub_58B440(idx, vecs, uvs);
     SceneObject2E *obj = g_pSceneObject2E;
-    const int nVec = obj->f1E_propsCount;
-    for (int i = 0; i < nVec; ++i) g_vectors[i].f0_arr[idx] = vecs[i];
-    const int nUv = obj->f1D_surfhCount;
-    for (int i = 0; i < nUv; ++i) Uv2f_arr_instance[i].f0_arr[idx] = uvs[i];
+    const int nVec = obj->propsCount;
+    for (int i = 0; i < nVec; ++i) g_vectors[i].arr[idx] = vecs[i];
+    const int nUv = obj->surfhCount;
+    for (int i = 0; i < nUv; ++i) Uv2f_arr_instance[i].arr[idx] = uvs[i];
     uint8_t flags = g_idxFlags[idx];
     if (!(flags & 8)) {
         flags &= 0xFD;
@@ -159,18 +159,18 @@ uint8_t __cdecl dk2::renderFun_sub_58B2A0(int idx, Vec3f *vecs, Uv2f *uvs) {
 // 0058B940: triangle outcode test; fully-outside rejected, partially-outside
 // queued into g_Idx3b_arr_instance for clipping, fully-inside emitted.
 void __cdecl dk2::addTriangleToRender2(int a, int b, int c) {
-    const int oa = RenderData_instance_arr[a].f1C__viewOffsets;
-    const int ob = RenderData_instance_arr[b].f1C__viewOffsets;
-    const int oc = RenderData_instance_arr[c].f1C__viewOffsets;
+    const int oa = RenderData_instance_arr[a]._viewOffsets;
+    const int ob = RenderData_instance_arr[b]._viewOffsets;
+    const int oc = RenderData_instance_arr[c]._viewOffsets;
     if (ob & (oc & oa)) return;
     if ((oc | oa | ob) != 0) {
         const int n = g_Idx3b_arr_count;
         g_idxFlags[a] |= 6;
         g_idxFlags[b] |= 6;
         g_idxFlags[c] |= 6;
-        g_Idx3b_arr_instance[n].f0_i = (uint8_t) a;
-        g_Idx3b_arr_instance[n].f1_j = (uint8_t) b;
-        g_Idx3b_arr_instance[n].f2_k = (uint8_t) c;
+        g_Idx3b_arr_instance[n].i = (uint8_t) a;
+        g_Idx3b_arr_instance[n].j = (uint8_t) b;
+        g_Idx3b_arr_instance[n].k = (uint8_t) c;
         g_Idx3b_arr_count = n + 1;
     } else {
         addTriangleToRender1(a, b, c);
@@ -184,33 +184,33 @@ void __cdecl dk2::addTriangleToRender1(int a, int b, int c) {
     RenderData &ra = RenderData_instance_arr[a];
     RenderData &rb = RenderData_instance_arr[b];
     RenderData &rc = RenderData_instance_arr[c];
-    if (rc.f1C__viewOffsets & (rb.f1C__viewOffsets & ra.f1C__viewOffsets)) return;
-    const float cross = (rb.fC_xC - ra.fC_xC) * (rc.f10_y10 - ra.f10_y10)
-                      - (rb.f10_y10 - ra.f10_y10) * (rc.fC_xC - ra.fC_xC);
+    if (rc._viewOffsets & (rb._viewOffsets & ra._viewOffsets)) return;
+    const float cross = (rb.xC - ra.xC) * (rc.y10 - ra.y10)
+                      - (rb.y10 - ra.y10) * (rc.xC - ra.xC);
     const float *fd2 = litPool();
     if (!(cross >= fd2[6])) return;  // fcomp 0066FE40; NaN rejects like C0=1
-    if (ra.f20_vtxIdx < 0) {
-        ra.f20_vtxIdx = DrawTriangleList_verticesCount++;
+    if (ra.vtxIdx < 0) {
+        ra.vtxIdx = DrawTriangleList_verticesCount++;
         g_idxFlags[a] |= 0xA;
     }
-    if (rb.f20_vtxIdx < 0) {
-        rb.f20_vtxIdx = DrawTriangleList_verticesCount++;
+    if (rb.vtxIdx < 0) {
+        rb.vtxIdx = DrawTriangleList_verticesCount++;
         g_idxFlags[b] |= 0xA;
     }
-    if (rc.f20_vtxIdx < 0) {
-        rc.f20_vtxIdx = DrawTriangleList_verticesCount++;
+    if (rc.vtxIdx < 0) {
+        rc.vtxIdx = DrawTriangleList_verticesCount++;
         g_idxFlags[c] |= 0xA;
     }
-    if (g_pSceneObject2E->f10_drawFlags_x2[0] & 0x200) {
-        const float key = (rb.f0_vec.z + ra.f0_vec.z + rc.f0_vec.z) * g_zMul_77F3E8
+    if (g_pSceneObject2E->drawFlags_x2[0] & 0x200) {
+        const float key = (rb.vec.z + ra.vec.z + rc.vec.z) * g_zMul_77F3E8
                         + g_zAdd_77F924 - fd2[20] - fd2[25];  // -66FE78 -66FE8C
         const int ki = (int) (floatBits(key) & 0x7fffff) - 0x400000;
-        MyEntryBuf_Triangle24_add(ra.f20_vtxIdx, rb.f20_vtxIdx, rc.f20_vtxIdx, ki);
+        MyEntryBuf_Triangle24_add(ra.vtxIdx, rb.vtxIdx, rc.vtxIdx, ki);
     } else {
         int16_t *w = reinterpret_cast<int16_t *>(g_lpwTrianglesIndices);
-        w[0] = (int16_t) ra.f20_vtxIdx;
-        w[1] = (int16_t) rb.f20_vtxIdx;
-        w[2] = (int16_t) rc.f20_vtxIdx;
+        w[0] = (int16_t) ra.vtxIdx;
+        w[1] = (int16_t) rb.vtxIdx;
+        w[2] = (int16_t) rc.vtxIdx;
         g_lpwTrianglesIndices = reinterpret_cast<Idx3s *>(w + 3);
         DrawTriangleList_trianglesCount += 1;
     }
