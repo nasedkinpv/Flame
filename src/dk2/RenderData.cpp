@@ -23,19 +23,19 @@ dk2::Vec3f worldTransform(dk2::Vec3f *v) {
 }
 
 
-int dk2::sub_58ACB0(int a1, Vec3f *v) {
+int __cdecl dk2::sub_58ACB0(int a1, Vec3f *v) {
     Vec3f tmp = worldTransform(v);
     return sub_58AF70(a1, &tmp.x);
 }
 
 
-int dk2::sub_58AD10(int a1, Vec3f *v) {
+int __cdecl dk2::sub_58AD10(int a1, Vec3f *v) {
     Vec3f tmp = worldTransform(v);
     return RenderData_addToArr(a1, &tmp);
 }
 
 
-int dk2::sub_58AD70(int a1, float *v) {
+int __cdecl dk2::sub_58AD70(int a1, float *v) {
     // original scales by two unnamed floats right after g_mat_77F498 and before g_zAdd3_7793A0
     const float sx = (&g_vec_77F4C0.x)[-1];                          // 0077F4BC
     const float sy = (&g_zAdd3_7793A0)[-1];  // 0077939C
