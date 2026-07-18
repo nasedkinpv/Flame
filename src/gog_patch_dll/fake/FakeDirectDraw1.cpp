@@ -44,8 +44,6 @@ HRESULT FakeDirectDraw1::Compact(void) {
 }
 
 HRESULT FakeDirectDraw1::CreateClipper(DWORD a1, LPDIRECTDRAWCLIPPER *a2, IUnknown *a3) {
-    gog_unused_function_called("FakeDirectDraw1::CreateClipper");
-//    return DDERR_GENERIC;
     return orig::pIDirectDraw4->CreateClipper(a1, a2, a3);
 }
 
@@ -325,4 +323,3 @@ HRESULT FakeDirectDraw1::WaitForVerticalBlank(DWORD, HANDLE) {
     gog_unused_function_called("FakeDirectDraw1::WaitForVerticalBlank");
     return DDERR_GENERIC;
 }
-

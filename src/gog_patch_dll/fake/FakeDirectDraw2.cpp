@@ -21,9 +21,8 @@ HRESULT FakeDirectDraw2::Compact(void) {
     return DDERR_GENERIC;
 }
 
-HRESULT FakeDirectDraw2::CreateClipper(DWORD, LPDIRECTDRAWCLIPPER *, IUnknown *) {
-    gog_unused_function_called("FakeDirectDraw2::CreateClipper");
-    return DDERR_GENERIC;
+HRESULT FakeDirectDraw2::CreateClipper(DWORD flags, LPDIRECTDRAWCLIPPER *clipper, IUnknown *outer) {
+    return orig::pIDirectDraw4->CreateClipper(flags, clipper, outer);
 }
 
 HRESULT FakeDirectDraw2::CreatePalette(DWORD, LPPALETTEENTRY, LPDIRECTDRAWPALETTE *, IUnknown *) {
@@ -184,4 +183,3 @@ HRESULT FakeDirectDraw2::GetAvailableVidMem(LPDDSCAPS, LPDWORD a3, LPDWORD a4) {
         *a4 = 0x2000000;
     return DD_OK;
 }
-

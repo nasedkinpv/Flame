@@ -25,9 +25,8 @@ HRESULT FakeDirectDraw4::Compact(void) {
     return DDERR_GENERIC;
 }
 
-HRESULT FakeDirectDraw4::CreateClipper(DWORD, LPDIRECTDRAWCLIPPER *, IUnknown *) {
-    gog_unused_function_called("FakeDirectDraw4::CreateClipper");
-    return DDERR_GENERIC;
+HRESULT FakeDirectDraw4::CreateClipper(DWORD flags, LPDIRECTDRAWCLIPPER *clipper, IUnknown *outer) {
+    return orig::pIDirectDraw4->CreateClipper(flags, clipper, outer);
 }
 
 HRESULT FakeDirectDraw4::CreatePalette(DWORD, LPPALETTEENTRY, LPDIRECTDRAWPALETTE *, IUnknown *) {
