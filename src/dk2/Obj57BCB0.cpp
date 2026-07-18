@@ -34,8 +34,12 @@ void calculateLighting(
         const float *normal,
         uint32_t &invalidTableIndex) {
     const auto *distanceTable = reinterpret_cast<const float *>(0x007818A0);
+    const int32_t lightCount = static_cast<int32_t>(lights.count);
+    if (lightCount <= 0) {
+        return;
+    }
 
-    for (uint32_t i = 0; i < lights.count; ++i) {
+    for (int32_t i = 0; i < lightCount; ++i) {
         const auto &light = lights.items[i];
         const float dx = position[0] - light.vec.x;
         const float dy = position[1] - light.vec.y;
