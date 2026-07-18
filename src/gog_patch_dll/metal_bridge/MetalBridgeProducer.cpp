@@ -262,6 +262,11 @@ Producer producer;
 
 } // namespace
 
+bool isEnabled() {
+    char path[2];
+    return GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", path, sizeof(path)) != 0;
+}
+
 void beginFrame(DWORD width, DWORD height) {
     producer.begin(width, height);
 }

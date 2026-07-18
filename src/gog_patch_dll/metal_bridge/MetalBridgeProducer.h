@@ -6,6 +6,7 @@
 
 namespace gog::metal_bridge {
 
+bool isEnabled();
 void beginFrame(DWORD width, DWORD height);
 void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
                  const WORD *indices, DWORD indexCount, DWORD flags);

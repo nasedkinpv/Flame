@@ -7,6 +7,7 @@
 #include <gog_fake.h>
 #include <fake/FakeSurface4.h>
 #include <gog_debug.h>
+#include <metal_bridge/MetalBridgeProducer.h>
 
 using namespace gog;
 
@@ -52,7 +53,9 @@ FakeSurface::FakeSurface(DDSURFACEDESC2 *desc) {
         }
         static_assert(8 == DDSCAPS_COMPLEX);
         static_assert(0x10 == DDSCAPS_FLIP);
-        if ((descCpy.ddsCaps.dwCaps & DDSCAPS_COMPLEX) == 0 || (descCpy.ddsCaps.dwCaps & DDSCAPS_FLIP) == 0) {
+        if (!metal_bridge::isEnabled() &&
+            ((descCpy.ddsCaps.dwCaps & DDSCAPS_COMPLEX) == 0 ||
+             (descCpy.ddsCaps.dwCaps & DDSCAPS_FLIP) == 0)) {
             gog_assert_failed("FakeSurface::FakeSurface:379");
             dwFlags = descCpy.dwFlags;
         }
@@ -477,4 +480,3 @@ HRESULT FakeSurface::PageUnlock(DWORD) {
     gog_unused_function_called("FakeSurface::PageUnlock");
     return DDERR_GENERIC;
 }
-
