@@ -29,6 +29,11 @@
 0041C4C0 Vec3f *Vec3f::substractAssign(Vec3f *, Vec3f *)
 0059E6E0 float *Vec3f::sub_59E6E0(float *)
 
+# RenderData transform wrappers
+0058ACB0 int __cdecl sub_58ACB0(int, Vec3f *)
+0058AD10 int __cdecl sub_58AD10(int, Vec3f *)
+0058AD70 int __cdecl sub_58AD70(int, float *)
+
 # CBridge
 0043E0F0 MySurface *CBridge::loadPng(const char *)
 0043E320 void CBridge::sub_43E320(uint32_t, uint32_t, MyTerrainDataObj *, CEngineStaticMeshDataArrays *)
