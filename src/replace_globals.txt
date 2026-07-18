@@ -27,7 +27,7 @@
 # Vec3f
 0041C480 Vec3f *Vec3f::mulV(Vec3f *, float)
 0041C4C0 Vec3f *Vec3f::substractAssign(Vec3f *, Vec3f *)
-0059E6E0 float *__thiscall sub_59E6E0(float *, float *)
+0059E6E0 float *Vec3f::sub_59E6E0(float *)
 
 # CBridge
 0043E0F0 MySurface *CBridge::loadPng(const char *)

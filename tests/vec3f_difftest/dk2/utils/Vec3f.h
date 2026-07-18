@@ -8,6 +8,7 @@ struct Vec3f {
     Vec3f *mulV(Vec3f *, float);
     Vec3f *substractAssign(Vec3f *, Vec3f *);
     Vec3f *sumVec3f(Vec3f *, Vec3f *);
+    float *sub_59E6E0(float *);
 };
 #pragma pack(pop)
 static_assert(sizeof(Vec3f) == 0xC);

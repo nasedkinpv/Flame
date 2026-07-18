@@ -61948,7 +61948,7 @@ global: va=0059E670,name=sub_59E670,size=109
     arg: kind=int,size=4,signed=True
     arg: kind=int,size=4,signed=True
     arg: kind=int,size=4,signed=True
-global: va=0059E6E0,name=sub_59E6E0,size=31
+global: va=0059E6E0,name=sub_59E6E0,size=31,member_of=vecf_xyz
   type: kind=function,declspec=thiscall
     ret: kind=ptr
       type: kind=float,size=4
