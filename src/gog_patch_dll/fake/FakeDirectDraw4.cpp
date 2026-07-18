@@ -5,6 +5,7 @@
 #include <fake/FakeD3D3.h>
 #include <fake/FakeSurface4.h>
 #include <gog_debug.h>
+#include <gog_globals.h>
 
 using namespace gog;
 
@@ -195,4 +196,3 @@ HRESULT FakeDirectDraw4::GetDeviceIdentifier(LPDDDEVICEIDENTIFIER pDevId, DWORD)
     memcpy(pDevId, &devId, sizeof(tagDDDEVICEIDENTIFIER));
     return 0;
 }
-

@@ -117,7 +117,10 @@ public:
             if (sequenceBefore == sequenceAfter && (sequenceAfter & 1u) == 0) {
                 snapshot_ = std::move(next);
                 __atomic_store_n(&header_->consumer_frame, frame, __ATOMIC_RELEASE);
-                NSLog(@"Bridge accepted frame %u (%u commands, %u bytes)", frame, snapshot_.commandCount, byteCount);
+                if (frame <= 2 || frame % 300 == 0) {
+                    NSLog(@"Bridge accepted frame %u (%u commands, %u bytes)",
+                          frame, snapshot_.commandCount, byteCount);
+                }
             }
         }
         return snapshot_.frame == 0 ? nullptr : &snapshot_;
@@ -206,6 +209,7 @@ static_assert(sizeof(MetalVertex) == 48);
     std::unique_ptr<BridgeReader> _bridge;
     uint64_t _frame;
     uint64_t _appliedDrawableSize;
+    uint32_t _lastBridgeFrame;
 }
 
 - (instancetype)initWithLayer:(CAMetalLayer *)layer {
@@ -402,6 +406,9 @@ static void *renderWorker(void *context) {
 
 - (void)metalDisplayLink:(CAMetalDisplayLink *)link needsUpdate:(CAMetalDisplayLinkUpdate *)update {
     @autoreleasepool {
+        const FrameSnapshot *snapshot = _bridge ? _bridge->poll() : nullptr;
+        if (gSelfTestFrames == 0 && _bridge && snapshot && snapshot->frame == _lastBridgeFrame) return;
+
         const NSUInteger slot = _frame % kFramesInFlight;
         if (_frame >= kFramesInFlight) {
             const uint64_t required = _frame - kFramesInFlight + 1;
@@ -422,7 +429,6 @@ static void *renderWorker(void *context) {
         id<MTL4CommandBuffer> commandBuffer = _commandBuffers[slot];
         [commandBuffer beginCommandBufferWithAllocator:_allocators[slot]];
 
-        const FrameSnapshot *snapshot = _bridge ? _bridge->poll() : nullptr;
         const double t = update.targetPresentationTimestamp;
         const double pulse = 0.5 + 0.5 * std::sin(t * 1.8);
         MTLClearColor clearColor = MTLClearColorMake(0.025 + pulse * 0.035, 0.07, 0.10 + pulse * 0.08, 1.0);
@@ -589,6 +595,7 @@ static void *renderWorker(void *context) {
         [update.drawable present];
 
         ++_frame;
+        if (snapshot) _lastBridgeFrame = snapshot->frame;
         gRenderedFrames.store(_frame, std::memory_order_release);
 
         const uint64_t requested = gRequestedDrawableSize.load(std::memory_order_acquire);
