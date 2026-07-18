@@ -9,6 +9,7 @@
 #include <gog_debug.h>
 #include <dk2/TexCoord.h>
 #include <dk2/Vertex1C.h>
+#include <metal_bridge/MetalBridgeProducer.h>
 
 using namespace gog;
 
@@ -215,6 +216,7 @@ HRESULT FakeDevice3::EnumTextureFormats(LPD3DENUMPIXELFORMATSCALLBACK cb, LPVOID
 }
 
 HRESULT FakeDevice3::BeginScene(void) {
+    metal_bridge::beginFrame(g_dwWidth, g_dwHeight);
     HRESULT hr;
     if (gog::g_isFlip) {
         D3DRECT rect;
@@ -256,6 +258,7 @@ HRESULT FakeDevice3::EndScene(void) {
     if (FAILED(hr)) {
         gog_assert_failed_hr("FakeDevice3::EndScene:855", hr);
     }
+    metal_bridge::endFrame();
     if (!orig::pIDirectDrawSurface4_zbuf)
         return hr;
     if (g_isAntialiasGt10 && g_dwWidth == 640 && cfg::iAntialias > 1) {
@@ -398,6 +401,8 @@ FakeDevice3::DrawIndexedPrimitive(D3DPRIMITIVETYPE primitive_type, DWORD fvf, LP
     if (!indices) gog_assert_failed("FakeDevice3::DrawIndexedPrimitive:923");
     if (!index_count) gog_assert_failed("FakeDevice3::DrawIndexedPrimitive:924");
     if (flags != 0x1C) gog_assert_failed("FakeDevice3::DrawIndexedPrimitive:925");
+
+    metal_bridge::drawIndexed(fvf, vertices, vertex_count, indices, index_count, flags);
 
     if (fvf == Vertex1C_TypeDesc) {
         if (vertex_count) {
@@ -573,4 +578,3 @@ HRESULT FakeDevice3::ValidateDevice(LPDWORD) {
     gog_unused_function_called("FakeDevice3::ValidateDevice");
     return DDERR_GENERIC;
 }
-

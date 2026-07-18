@@ -49,6 +49,7 @@ venv.bak/
 /.cache/
 /dist/
 /.DS_Store
+/macos/native/build/
 /flame/
 **/genlib/*.exp
 **/genlib/*.lib

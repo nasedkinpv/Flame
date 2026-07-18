@@ -22,4 +22,5 @@ set(SOURCES
         fake/FakeViewport3.cpp
         fake/FakeZBuffer.cpp
         fake/FakeUnknown.cpp
+        metal_bridge/MetalBridgeProducer.cpp
 )
