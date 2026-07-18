@@ -360,7 +360,8 @@
 00578EC0 void __cdecl CEngine2DRotatableSprite_create(int16_t, int16_t, int, int, float, float, int, Vec3f, float, float, int)
 
 # Obj57AD20
-0057A9A0 int *Obj57AD20::sub_57A9A0(int, SceneObject2E *, uint32_t *, int, int, int, int, float)
+# Keep the tiny original dispatcher: patching its entry triggers a Wine 11
+# WOW64 page fault before the first frame. Its hot 57B6D0 callee remains native.
 0057B6D0 int *Obj57AD20::sub_57B6D0(int, SceneObject2E *, int, uint32_t *, int, int, float)
 
 # MyScaledSurface
