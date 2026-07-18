@@ -23,11 +23,18 @@ bool gog::parseCommandLine_patch::isEnabled() { return *o_gog_enabled; }
 bool gog::BullfrogWindow_proc_patch::isEnabled() { return *o_gog_enabled; }
 bool gog::BullfrogWindow_proc_patch::window_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
     if (!isEnabled()) return false;
+    const bool nativeMetalBridge =
+        GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", nullptr, 0) != 0;
     switch (Msg) {
         case WM_KILLFOCUS:
+            if (nativeMetalBridge) return true;
             ShowWindow(gog::g_hWnd, SW_MINIMIZE);
             break;
         case WM_ACTIVATEAPP:
+            if (nativeMetalBridge) {
+                gog::g_isRendererPaused = false;
+                return true;
+            }
             if (wParam) {  // activated
                 gog::g_isRendererPaused = false;
                 gog_debug("Resumed Render");
@@ -35,6 +42,9 @@ bool gog::BullfrogWindow_proc_patch::window_proc(HWND hWnd, UINT Msg, WPARAM wPa
                 gog::g_isRendererPaused = true;
                 gog_debug("Paused Render");
             }
+            break;
+        case WM_ACTIVATE:
+            if (nativeMetalBridge) return true;
             break;
         case WM_MOUSEMOVE: return true;  // do not call original fun
     }

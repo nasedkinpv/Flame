@@ -114,9 +114,15 @@ HRESULT FakeDirectDraw2::GetCaps(LPDDCAPS hwCaps, LPDDCAPS halCaps) {
     return DD_OK;
 }
 
-HRESULT FakeDirectDraw2::GetDisplayMode(LPDDSURFACEDESC) {
-    gog_unused_function_called("FakeDirectDraw2::GetDisplayMode");
-    return DDERR_GENERIC;
+HRESULT FakeDirectDraw2::GetDisplayMode(LPDDSURFACEDESC desc) {
+    if (!desc) return DDERR_INVALIDPARAMS;
+    IDirectDraw2 *directDraw2 = nullptr;
+    HRESULT hr = orig::pIDirectDraw4->QueryInterface(IID_IDirectDraw2,
+                                                      reinterpret_cast<void **>(&directDraw2));
+    if (FAILED(hr)) return hr;
+    hr = directDraw2->GetDisplayMode(desc);
+    directDraw2->Release();
+    return hr;
 }
 
 HRESULT FakeDirectDraw2::GetFourCCCodes(LPDWORD a2, LPDWORD a3) {
@@ -178,5 +184,4 @@ HRESULT FakeDirectDraw2::GetAvailableVidMem(LPDDSCAPS, LPDWORD a3, LPDWORD a4) {
         *a4 = 0x2000000;
     return DD_OK;
 }
-
 

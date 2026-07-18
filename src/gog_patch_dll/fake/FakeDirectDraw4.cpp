@@ -110,9 +110,9 @@ HRESULT FakeDirectDraw4::GetCaps(LPDDCAPS hwCaps, LPDDCAPS halCaps) {
     return DD_OK;
 }
 
-HRESULT FakeDirectDraw4::GetDisplayMode(LPDDSURFACEDESC2) {
-    gog_unused_function_called("FakeDirectDraw4::GetDisplayMode");
-    return DDERR_GENERIC;
+HRESULT FakeDirectDraw4::GetDisplayMode(LPDDSURFACEDESC2 desc) {
+    if (!desc) return DDERR_INVALIDPARAMS;
+    return orig::pIDirectDraw4->GetDisplayMode(desc);
 }
 
 HRESULT FakeDirectDraw4::GetFourCCCodes(LPDWORD, LPDWORD) {
@@ -195,5 +195,4 @@ HRESULT FakeDirectDraw4::GetDeviceIdentifier(LPDDDEVICEIDENTIFIER pDevId, DWORD)
     memcpy(pDevId, &devId, sizeof(tagDDDEVICEIDENTIFIER));
     return 0;
 }
-
 
