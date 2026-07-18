@@ -146,6 +146,8 @@ constexpr NSUInteger kIndexBufferSize = 512 * 1024;
 constexpr NSUInteger kTextureBindingsPerFrame = 128;
 constexpr uint32_t kD3DRenderStateZEnable = 7;
 constexpr uint32_t kD3DRenderStateZWriteEnable = 14;
+constexpr uint32_t kD3DRenderStateSourceBlend = 19;
+constexpr uint32_t kD3DRenderStateDestinationBlend = 20;
 constexpr uint32_t kD3DRenderStateCullMode = 22;
 constexpr uint32_t kD3DRenderStateZFunc = 23;
 constexpr uint32_t kD3DRenderStateAlphaBlendEnable = 27;
@@ -215,6 +217,7 @@ MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
     id<MTLSharedEvent> _completed;
     id<MTLRenderPipelineState> _opaquePipeline;
     id<MTLRenderPipelineState> _alphaPipeline;
+    id<MTLRenderPipelineState> _additivePipeline;
     id<MTLDepthStencilState> _depthStates[9][2];
     id<MTLSamplerState> _sampler;
     id<MTLTexture> _whiteTexture;
@@ -282,7 +285,14 @@ MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
     _alphaPipeline = vertexFunction && fragmentFunction
                          ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error]
                          : nil;
-    if (!_opaquePipeline || !_alphaPipeline) {
+    pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+    pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
+    pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+    pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
+    _additivePipeline = vertexFunction && fragmentFunction
+                            ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error]
+                            : nil;
+    if (!_opaquePipeline || !_alphaPipeline || !_additivePipeline) {
         fail([NSString stringWithFormat:@"Metal shader pipeline failed: %@", error.localizedDescription ?: @"library missing"]);
         return nil;
     }
@@ -534,6 +544,8 @@ static void *renderWorker(void *context) {
             BOOL zEnabled = YES;
             BOOL zWriteEnabled = YES;
             BOOL alphaBlendEnabled = NO;
+            uint32_t sourceBlend = 2;
+            uint32_t destinationBlend = 1;
             uint32_t cullMode = 1;
             std::unordered_map<uint32_t, uint32_t> textureBindings;
             [_argumentTables[slot] setAddress:_vertexBuffers[slot].gpuAddress atIndex:0];
@@ -578,6 +590,8 @@ static void *renderWorker(void *context) {
                         case kD3DRenderStateZFunc:
                             if (state.value >= 1 && state.value <= 8) zFunction = state.value;
                             break;
+                        case kD3DRenderStateSourceBlend: sourceBlend = state.value; break;
+                        case kD3DRenderStateDestinationBlend: destinationBlend = state.value; break;
                         case kD3DRenderStateAlphaBlendEnable: alphaBlendEnabled = state.value != 0; break;
                         default: break;
                     }
@@ -627,7 +641,12 @@ static void *renderWorker(void *context) {
                             metalIndices[index] = static_cast<uint16_t>(adjusted);
                         }
                         if (!validIndices) { commandOffset += header.size; continue; }
-                        [encoder setRenderPipelineState:alphaBlendEnabled ? _alphaPipeline : _opaquePipeline];
+                        id<MTLRenderPipelineState> pipeline = _opaquePipeline;
+                        if (alphaBlendEnabled) {
+                            pipeline = sourceBlend == 2 && destinationBlend == 2
+                                           ? _additivePipeline : _alphaPipeline;
+                        }
+                        [encoder setRenderPipelineState:pipeline];
                         const uint32_t effectiveZFunction = zEnabled ? zFunction : 8;
                         const uint32_t effectiveZWrite = zEnabled && zWriteEnabled ? 1 : 0;
                         [encoder setDepthStencilState:_depthStates[effectiveZFunction][effectiveZWrite]];

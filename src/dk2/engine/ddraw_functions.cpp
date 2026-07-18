@@ -348,7 +348,9 @@ namespace dk2 {
         if (!g_hBullfrogWindow)
             HWindow = getHWindow();
         g_hWnd = HWindow;
-        ShowWindow(HWindow, 5);
+        const bool nativeMetalBridge =
+            GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", nullptr, 0) != 0;
+        ShowWindow(HWindow, nativeMetalBridge ? SW_HIDE : SW_SHOW);
         if (g_hWnd) {
             MSG msg;
             while (PeekMessageA(&msg, NULL, 0, 0, 1u)) {

@@ -180,9 +180,13 @@ int *dk2::CWindowTest::create(int *pstatus, AABB *rect) {
     HMENU SystemMenu = GetSystemMenu(hWnd, 0);
     EnableMenuItem(SystemMenu, 3u, 0x402u);
     EnableMenuItem(SystemMenu, 5u, 0x402u);
-    ShowWindow(hWnd, 5);
-    UpdateWindow(hWnd);
-    SetFocus(hWnd);
+    const bool nativeMetalBridge =
+        GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", nullptr, 0) != 0;
+    ShowWindow(hWnd, nativeMetalBridge ? SW_HIDE : SW_SHOW);
+    if (!nativeMetalBridge) {
+        UpdateWindow(hWnd);
+        SetFocus(hWnd);
+    }
     this->hWnd = hWnd;
     this->created = 1;
 

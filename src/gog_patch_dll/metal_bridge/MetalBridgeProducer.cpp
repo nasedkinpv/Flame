@@ -230,7 +230,7 @@ private:
             if (found != textures_.end()) {
                 TextureCache &texture = found->second;
                 const uint32_t consumer = InterlockedCompareExchange(asLong(&header_->consumer_frame), 0, 0);
-                if (texture.pending && texture.lastSentFrame && consumer >= texture.lastSentFrame) {
+                if (texture.pending && texture.lastSentFrame && consumer == texture.lastSentFrame) {
                     texture.pending = false;
                 }
                 if (texture.pending && !texture.sentInCurrentFrame) {
