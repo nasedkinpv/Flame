@@ -133,6 +133,7 @@
 00574200 void __cdecl setGammaRamp(const void *)
 00574310 void __cdecl textureCache_init(float, float, const char *, int)
 00575780 bool __cdecl engine_drawScene(char)
+0057BF00 float *Obj57BCB0::sub_57BF00(float *, float *, float *)
 0057CEB0 void *__cdecl MyHeap_alloc(int)
 0057D0B0 void __cdecl MyHeap_free(void *)
 005899F0 void __cdecl static_MyDirectDraw_triangles_init(MyDirectDraw *)
@@ -427,4 +428,3 @@
 
 # globals
 006AC8A0 NameCfg nameList[38]
-
