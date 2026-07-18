@@ -122,14 +122,12 @@ public:
         const auto texture = textures_.find(surfaceEntry->second);
         if (texture == textures_.end()) return;
 
-        const uint64_t started = timerTicks();
         TextureCache updated;
         if (lockedDesc && copyTexture(*lockedDesc, updated)) {
             texture->second = std::move(updated);
         } else {
             texture->second.dirty = true;
         }
-        textureCaptureTicks_ += timerTicks() - started;
     }
 
     void renderState(DWORD state, DWORD value) {
@@ -145,6 +143,13 @@ public:
         return true;
     }
 
+    void gameTimings(uint32_t tickMicroseconds, uint32_t guiMicroseconds,
+                     uint32_t presentMicroseconds) {
+        gameTickMicroseconds_ = tickMicroseconds;
+        guiMicroseconds_ = guiMicroseconds;
+        presentMicroseconds_ = presentMicroseconds;
+    }
+
     void finish() {
         if (!active_) return;
         ++frame_;
@@ -154,8 +159,11 @@ public:
         slot_->command_count = commandCount_;
         slot_->width = width_;
         slot_->height = height_;
-        slot_->reserved[0] = elapsedMicroseconds(sceneStarted_, timerTicks());
-        slot_->reserved[1] = elapsedMicroseconds(0, textureCaptureTicks_);
+        const uint32_t sceneMicroseconds = elapsedMicroseconds(sceneStarted_, timerTicks());
+        slot_->reserved[0] = clampMicroseconds(sceneMicroseconds) |
+                             (clampMicroseconds(gameTickMicroseconds_) << 16);
+        slot_->reserved[1] = clampMicroseconds(guiMicroseconds_) |
+                             (clampMicroseconds(presentMicroseconds_) << 16);
         header_->width = width_;
         header_->height = height_;
         header_->producer_pid = GetCurrentProcessId();
@@ -170,7 +178,6 @@ public:
                 texture.sentInCurrentFrame = false;
             }
         }
-        textureCaptureTicks_ = 0;
         active_ = false;
     }
 
@@ -365,14 +372,12 @@ private:
 
     bool captureTexture(IDirectDrawSurface4 *surface, TextureCache &texture) {
         if (!surface) return false;
-        const uint64_t started = timerTicks();
         DDSURFACEDESC2 desc = {};
         desc.dwSize = sizeof(desc);
         const HRESULT hr = surface->Lock(nullptr, &desc, DDLOCK_WAIT | DDLOCK_READONLY, nullptr);
         if (FAILED(hr)) return false;
         const bool valid = copyTexture(desc, texture);
         surface->Unlock(nullptr);
-        textureCaptureTicks_ += timerTicks() - started;
         return valid;
     }
 
@@ -387,6 +392,10 @@ private:
         const uint64_t value = (ended - started) * 1000000u /
                                static_cast<uint64_t>(timerFrequency_.QuadPart);
         return value > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(value);
+    }
+
+    static uint32_t clampMicroseconds(uint32_t value) {
+        return value > UINT16_MAX ? UINT16_MAX : value;
     }
 
     void emitTexture(DWORD stage, DWORD textureId) {
@@ -460,7 +469,9 @@ private:
     uint32_t commandCount_ = 0;
     LARGE_INTEGER timerFrequency_ = {};
     uint64_t sceneStarted_ = 0;
-    uint64_t textureCaptureTicks_ = 0;
+    uint32_t gameTickMicroseconds_ = 0;
+    uint32_t guiMicroseconds_ = 0;
+    uint32_t presentMicroseconds_ = 0;
     uint32_t boundTextures_[3] = {};
     uint32_t lastConsumerSession_ = 0;
     uint32_t lastConsumerFrame_ = 0;
@@ -516,6 +527,11 @@ void setRenderState(DWORD state, DWORD value) {
 
 bool getRenderState(DWORD state, DWORD *value) {
     return producer.renderState(state, value);
+}
+
+void setGameTimings(uint32_t tickMicroseconds, uint32_t guiMicroseconds,
+                    uint32_t presentMicroseconds) {
+    producer.gameTimings(tickMicroseconds, guiMicroseconds, presentMicroseconds);
 }
 
 void endFrame() {

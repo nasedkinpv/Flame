@@ -26,6 +26,7 @@
 #include "patches/protocol_dump.h"
 #include "dk2/engine/game_engine.h"
 #include <metal_bridge/MetalBridgeProducer.h>
+#include <chrono>
 #if __has_include(<dk2_research.h>)
 #include "dk2_research.h"
 #endif
@@ -230,12 +231,15 @@ dk2::CComponent *dk2::CGameComponent::mainGuiLoop() {
             if (CFrontEndComponent_instance.is_component_destroy)
                 this->exit_flag = 1;
         }
+        const auto tickStarted = std::chrono::steady_clock::now();
         if (!MyResources_instance.gameCfg.useFe2d_unk1 && !this->gameSession.tick(needBlt))
             this->exit_flag = 1;
+        const auto tickFinished = std::chrono::steady_clock::now();
         if (needBlt && (this->gameSession.f268 || MyResources_instance.gameCfg.f12C)) {
             MyWindow_instance.takeScreenshot();
             this->gameSession.f268 = 0;
         }
+        const auto guiStarted = std::chrono::steady_clock::now();
         if (MyResources_instance.gameCfg.useFe3d) {
             if (CFrontEndComponent_instance.key_DIK_SYSRQ) {
                 MyWindow_instance.takeScreenshot();
@@ -244,11 +248,21 @@ dk2::CComponent *dk2::CGameComponent::mainGuiLoop() {
             if (MyResources_instance.gameCfg.useFe3d)
                 CFrontEndComponent_instance.draw2dGui();
         }
+        const auto guiFinished = std::chrono::steady_clock::now();
+        const auto presentStarted = std::chrono::steady_clock::now();
         if (needBlt) {
             MyWindow_instance.prepareScreen();
             if (MyResources_instance.video_settings.selected_3D_engine != 4)
                 MyWindow_instance.surf_Blt();
         }
+        const auto presentFinished = std::chrono::steady_clock::now();
+        gog::metal_bridge::setGameTimings(
+            static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                tickFinished - tickStarted).count()),
+            static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                guiFinished - guiStarted).count()),
+            static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                presentFinished - presentStarted).count()));
         patch::autosave::Autosave_tick();
         ++this->fpsCalc_drawCount;
         patch::limit_tps::call();

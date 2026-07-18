@@ -3,6 +3,7 @@
 
 #include <Windows.h>
 #include <ddraw.h>
+#include <cstdint>
 
 namespace gog::metal_bridge {
 
@@ -15,6 +16,8 @@ void setTexture(DWORD stage, DWORD textureId, IDirectDrawSurface4 *surface);
 void textureDirty(IDirectDrawSurface4 *surface, const DDSURFACEDESC2 *lockedDesc = nullptr);
 void setRenderState(DWORD state, DWORD value);
 bool getRenderState(DWORD state, DWORD *value);
+void setGameTimings(uint32_t tickMicroseconds, uint32_t guiMicroseconds,
+                    uint32_t presentMicroseconds);
 void endFrame();
 
 }
