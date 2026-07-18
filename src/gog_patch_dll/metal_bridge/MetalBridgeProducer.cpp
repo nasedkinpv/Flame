@@ -43,7 +43,7 @@ public:
         }
         lastConsumerSession_ = consumerSession;
         lastConsumerFrame_ = consumer;
-        processInput();
+        pollInput();
 
         slotIndex_ = previousSlot_ == DK2M_NO_SLOT ? 0 : (previousSlot_ + 1) % DK2M_SLOT_COUNT;
         previousSlot_ = slotIndex_;
@@ -159,6 +159,10 @@ public:
             }
         }
         active_ = false;
+    }
+
+    void pollInput() {
+        if (ensureMapped()) processInput();
     }
 
 private:
@@ -285,6 +289,7 @@ private:
             (void)wheelX;
             injectWheel(wheelY);
         }
+        InterlockedExchange(asLong(&header_->input_ack_sequence), static_cast<LONG>(input.sequence));
     }
 
     bool ensureMapped() {
@@ -446,6 +451,10 @@ Producer producer;
 bool isEnabled() {
     char path[2];
     return GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", path, sizeof(path)) != 0;
+}
+
+void pollInput() {
+    producer.pollInput();
 }
 
 void beginFrame(DWORD width, DWORD height) {

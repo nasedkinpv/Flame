@@ -71,7 +71,7 @@ typedef struct DK2MFileHeader {
     volatile uint32_t latest_slot;
     volatile uint32_t latest_frame;
     volatile uint32_t consumer_frame;
-    uint32_t flags;
+    volatile uint32_t input_ack_sequence;
     uint32_t width;
     uint32_t height;
     uint32_t producer_pid;

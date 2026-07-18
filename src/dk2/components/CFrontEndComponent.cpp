@@ -11,6 +11,7 @@
 #include <dk2/network/protocol/NetMessage_65.h>
 #include <patches/auto_network.h>
 #include <patches/big_resolution_fix/screen_resolution.h>
+#include <metal_bridge/MetalBridgeProducer.h>
 #include <weanetr_dll/MLDPlay.h>
 #include "dk2/CListBox_ItemHeightCfg.h"
 #include "dk2/engine/game_engine.h"
@@ -63,6 +64,7 @@ void dk2::CFrontEndComponent::showTitleScreen() {
 dk2::CComponent *dk2::CFrontEndComponent::mainGuiLoop() {
     patch::log::dbg("enter CFrontEndComponent");
     while (!this->is_component_destroy) {
+        gog::metal_bridge::pollInput();
         if (this->cgui_manager.sub_52C520())
             MyInputManagerCb_static_processInputs_setStaticListenersAndHandleDxActions(
                 &this->static_listeners, 0, this, 0);
@@ -979,4 +981,3 @@ dk2::NameCfg *dk2::CFrontEndComponent::sub_535A30() {
     }
     return result;
 }
-

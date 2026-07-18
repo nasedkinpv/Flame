@@ -253,7 +253,6 @@ uint8_t dikForKeyCode(GCKeyCode code) {
     GCKeyboard *_keyboard;
     DK2MInputState _input;
     NSTimer *_heartbeatTimer;
-    BOOL _cursorHidden;
 }
 
 - (CALayer *)makeBackingLayer {
@@ -290,10 +289,8 @@ uint8_t dikForKeyCode(GCKeyCode code) {
 - (void)dealloc {
     [_heartbeatTimer invalidate];
     _mouse.mouseInput.mouseMovedHandler = nil;
-    _mouse.mouseInput.scroll.valueChangedHandler = nil;
     _keyboard.keyboardInput.keyChangedHandler = nil;
     [NSNotificationCenter.defaultCenter removeObserver:self];
-    if (_cursorHidden) [NSCursor unhide];
 }
 
 - (CAMetalLayer *)metalLayer {
@@ -341,7 +338,6 @@ uint8_t dikForKeyCode(GCKeyCode code) {
 - (void)attachMouse:(GCMouse *)mouse {
     if (_mouse == mouse) return;
     _mouse.mouseInput.mouseMovedHandler = nil;
-    _mouse.mouseInput.scroll.valueChangedHandler = nil;
     _mouse = mouse;
     if (!_mouse) return;
     _mouse.handlerQueue = dispatch_get_main_queue();
@@ -354,15 +350,6 @@ uint8_t dikForKeyCode(GCKeyCode code) {
         view->_input.relative_y += static_cast<uint32_t>(lrintf(-deltaY));
         [view publishCurrentInput];
     };
-    _mouse.mouseInput.scroll.valueChangedHandler =
-        ^(GCControllerDirectionPad *dpad, float xValue, float yValue) {
-            (void)dpad;
-            DK2MetalView *view = weakSelf;
-            if (!view || (view->_input.flags & DK2M_INPUT_ACTIVE) == 0) return;
-            view->_input.wheel_x += static_cast<uint32_t>(lrintf(xValue * 120.0f));
-            view->_input.wheel_y += static_cast<uint32_t>(lrintf(yValue * 120.0f));
-            [view publishCurrentInput];
-        };
 }
 
 - (void)attachKeyboard:(GCKeyboard *)keyboard {
@@ -419,16 +406,8 @@ uint8_t dikForKeyCode(GCKeyCode code) {
         _input.cursor_x = std::clamp<float>((point.x - CGRectGetMinX(frame)) / CGRectGetWidth(frame), 0.0f, 1.0f);
         _input.cursor_y = std::clamp<float>(1.0f - (point.y - CGRectGetMinY(frame)) / CGRectGetHeight(frame), 0.0f, 1.0f);
         _input.flags |= DK2M_INPUT_CURSOR_VALID;
-        if (!_cursorHidden) {
-            [NSCursor hide];
-            _cursorHidden = YES;
-        }
     } else {
         _input.flags &= ~DK2M_INPUT_CURSOR_VALID;
-        if (_cursorHidden) {
-            [NSCursor unhide];
-            _cursorHidden = NO;
-        }
     }
     [self publishCurrentInput];
     return valid;
@@ -441,10 +420,6 @@ uint8_t dikForKeyCode(GCKeyCode code) {
         _input.flags &= ~(DK2M_INPUT_ACTIVE | DK2M_INPUT_CURSOR_VALID);
         _input.buttons = 0;
         std::memset(_input.keys, 0, sizeof(_input.keys));
-        if (_cursorHidden) {
-            [NSCursor unhide];
-            _cursorHidden = NO;
-        }
     }
     [self publishCurrentInput];
 }
@@ -479,6 +454,16 @@ uint8_t dikForKeyCode(GCKeyCode code) {
 - (void)rightMouseDragged:(NSEvent *)event { [self updatePointerFromEvent:event]; }
 - (void)otherMouseDragged:(NSEvent *)event { [self updatePointerFromEvent:event]; }
 - (void)mouseExited:(NSEvent *)event { [self updatePointerFromEvent:event]; }
+
+- (void)scrollWheel:(NSEvent *)event {
+    if (![self updatePointerFromEvent:event]) return;
+    const CGFloat scale = event.hasPreciseScrollingDeltas ? 10.0 : 120.0;
+    const long wheelX = std::clamp<long>(lrint(event.scrollingDeltaX * scale), -120, 120);
+    const long wheelY = std::clamp<long>(lrint(event.scrollingDeltaY * scale), -120, 120);
+    _input.wheel_x += static_cast<uint32_t>(wheelX);
+    _input.wheel_y += static_cast<uint32_t>(wheelY);
+    [self publishCurrentInput];
+}
 
 - (void)mouseDown:(NSEvent *)event {
     if ([self updatePointerFromEvent:event])

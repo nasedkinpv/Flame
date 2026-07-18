@@ -25,6 +25,7 @@
 #include "patches/replace_mouse_dinput_to_user32.h"
 #include "patches/protocol_dump.h"
 #include "dk2/engine/game_engine.h"
+#include <metal_bridge/MetalBridgeProducer.h>
 #if __has_include(<dk2_research.h>)
 #include "dk2_research.h"
 #endif
@@ -197,6 +198,7 @@ dk2::CComponent *dk2::CGameComponent::mainGuiLoop() {
             flame_config::save();
         patch::protocol_dump::tick();
         patch::replace_mouse_dinput_to_user32::release_handled_dinput_actions();
+        gog::metal_bridge::pollInput();
         if (!MyWindow_instance.isNeedBlt()) {
             MyCollectDxAction_Action dxAct;
             while (MyInputManagerCb_static_popDxAction(&dxAct)) {
@@ -358,4 +360,3 @@ dk2::CComponent *dk2::CGameComponent::mainGuiLoop() {
     if (g_value2 != 101) return NULL;
     return (CGameComponent*) &CFrontEndComponent_instance;
 }
-
