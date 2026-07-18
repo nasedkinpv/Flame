@@ -14,6 +14,7 @@
 using namespace gog;
 
 FakeDevice3::FakeDevice3() {
+    if (metal_bridge::isEnabled()) return;
     orig::pIDirect3D3->CreateViewport(&orig::pIDirect3DViewport3, NULL);
     DWORD height = g_dwHeight;
     DWORD width = g_dwWidth;
@@ -329,7 +330,10 @@ HRESULT FakeDevice3::End(DWORD) {
 }
 
 HRESULT FakeDevice3::GetRenderState(D3DRENDERSTATETYPE stateType, LPDWORD value) {
-    if (metal_bridge::isEnabled() && metal_bridge::getRenderState(stateType, value)) return DD_OK;
+    if (metal_bridge::isEnabled()) {
+        if (!metal_bridge::getRenderState(stateType, value)) *value = 0;
+        return DD_OK;
+    }
     return orig::pIDirect3DDevice3->GetRenderState(stateType, value);
 }
 

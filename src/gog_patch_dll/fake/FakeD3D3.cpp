@@ -8,6 +8,7 @@
 #include <gog_globals.h>
 #include <fake/FakeSurface4.h>
 #include <gog_debug.h>
+#include <metal_bridge/MetalBridgeProducer.h>
 
 using namespace gog;
 
@@ -53,7 +54,9 @@ HRESULT FakeD3D3::CreateDevice(REFCLSID riid, LPDIRECTDRAWSURFACE4 surf_, LPDIRE
     if (!a4) gog_assert_failed("FakeD3D3::CreateDevice:1013");
     if (a5) gog_assert_failed("FakeD3D3::CreateDevice:1014");
     if (surf->orig() != FakeSurface::instance_cpy->orig()) gog_assert_failed("FakeD3D3::CreateDevice:1015");
-    if (orig::pIDirect3DDevice3) {
+    if (metal_bridge::isEnabled()) {
+        if (orig::pIDirect3DDevice3) gog_assert_failed("FakeD3D3::CreateDevice:1016");
+    } else if (orig::pIDirect3DDevice3) {
         gog_assert_failed("FakeD3D3::CreateDevice:1017");
     } else {
         LPDIRECTDRAWSURFACE4 orig_surf = orig::pIDirectDrawSurface4_zbuf;

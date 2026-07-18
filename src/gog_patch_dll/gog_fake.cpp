@@ -12,6 +12,7 @@
 #include <gog_cfg.h>
 #include <cmath>
 #include <gog_debug.h>
+#include <metal_bridge/MetalBridgeProducer.h>
 
 
 void gog::fakeInit() {
@@ -61,6 +62,7 @@ LPDIRECTDRAWSURFACE4 gog::Fake_CreateZBuf(DWORD width, DWORD height) {
 }
 
 void gog::Fake_Redraw() {
+    if (metal_bridge::isEnabled()) return;
     if (orig::pIDirectDrawSurface4_coop == nullptr) {
         gog_assert_failed("Redraw:51");
     }
@@ -126,4 +128,3 @@ void gog::Fake_InitRenderRect() {
         gog::g_renderRect = rect;
     }
 }
-
