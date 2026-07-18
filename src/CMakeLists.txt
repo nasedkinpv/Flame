@@ -46,6 +46,7 @@ add_library(${TARGET} SHARED
         dk2/MyComputerPlayer_drop_condition.cpp
         dk2/computer_player_flags.cpp
         dk2/MyCreatureCollection.cpp
+        dk2/Mat3x3f.cpp
         dk2/Obj57BCB0.cpp
         dk2/MyComputerPlayer_drop_condition.cpp
         dk2/MyComputerPlayer_drop_condition.h

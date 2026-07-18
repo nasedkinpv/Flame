@@ -143,6 +143,7 @@
 0058F640 void draw3dScene()
 00592B80 void __cdecl renderer_setSurfaceHolder(SurfaceHolder *, uint32_t)
 00592EA0 int __cdecl static_MyDirectDraw_devTexture_init(MyDirectDraw *)
+00594E10 Vec3f *Mat3x3f::sub_594E10(Vec3f *, Vec3f *)
 0059A4B0 MySurface *__cdecl static_CBridge_loadPng(const char *)
 005A5DA0 int __cdecl dk2_main(int, LPCSTR *)
 005A63B0 int __cdecl parse_command_line(int, const char **)
