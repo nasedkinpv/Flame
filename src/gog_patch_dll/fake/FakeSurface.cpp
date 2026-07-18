@@ -43,9 +43,9 @@ FakeSurface::FakeSurface(DDSURFACEDESC2 *desc) {
     DWORD dwFlags = descCpy.dwFlags;
     descCpy.dwSize = 124;
     if (
-            (descCpy.dwFlags & 1) != 0 &&
-            (descCpy.ddsCaps.dwCaps & 0x200) != 0 &&
-            ((descCpy.dwFlags & 4) == 0 || metal_bridge::isEnabled())
+            (descCpy.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) != 0 &&
+            (metal_bridge::isEnabled() ||
+             ((descCpy.dwFlags & DDSD_CAPS) != 0 && (descCpy.dwFlags & DDSD_WIDTH) == 0))
             ) {
         if (FakeSurface::instance_mod) {
             gog_assert_failed("FakeSurface::FakeSurface:377");
