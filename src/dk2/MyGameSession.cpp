@@ -42,13 +42,11 @@ int dk2::MyGameSession::tick(int a2_isNeedBlt) {
     if (MyResources_instance.gameCfg.useFe2d_unk1)
         return 1;
     CDefaultPlayerInterface *fC_player_i = this->pPlayer;
-    const auto playerStarted = std::chrono::steady_clock::now();
     if (fC_player_i) {
         int result = fC_player_i->v_fun_4039A0(a2_isNeedBlt);
         if (!result)
             return result;
     }
-    const auto playerFinished = std::chrono::steady_clock::now();
     if (!a2_isNeedBlt) {
         if (CCommunicationInterface *communication = this->pCommunication) {
             if (!communication->v_f38())
@@ -312,8 +310,10 @@ int dk2::MyGameSession::tick(int a2_isNeedBlt) {
         try_level = -1;
         for_each_destruct<GameAction, true>(actions.actionArr, 16);
     }
-    const auto bridgeStarted = std::chrono::steady_clock::now();
+    uint32_t renderPrepareMicroseconds = 0;
+    uint32_t drawSceneMicroseconds = 0;
     if (this->pBridge) {
+        const auto renderPrepareStarted = std::chrono::steady_clock::now();
         DWORD TimeMs = getTimeMs();
         CBridge *v39 = this->pBridge;
         DWORD f284_inMenu_ = TimeMs;
@@ -337,7 +337,11 @@ int dk2::MyGameSession::tick(int a2_isNeedBlt) {
                         return result;
                 }
             }
+            const auto drawSceneStarted = std::chrono::steady_clock::now();
+            renderPrepareMicroseconds = elapsedMicroseconds(renderPrepareStarted, drawSceneStarted);
             int result = this->pBridge->v_f3C__drawScene();
+            drawSceneMicroseconds = elapsedMicroseconds(
+                drawSceneStarted, std::chrono::steady_clock::now());
             if (!result)
                 return result;
         }
@@ -355,9 +359,7 @@ int dk2::MyGameSession::tick(int a2_isNeedBlt) {
             GameSession_dword_70D42C = 0;
         }
     }
-    const auto bridgeFinished = std::chrono::steady_clock::now();
-    gog::metal_bridge::setGameSubTimings(
-        elapsedMicroseconds(playerStarted, playerFinished),
-        elapsedMicroseconds(bridgeStarted, bridgeFinished));
+    gog::metal_bridge::setGameRenderTimings(
+        renderPrepareMicroseconds, drawSceneMicroseconds);
     return 1;
 }

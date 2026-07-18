@@ -17,7 +17,7 @@ void textureDirty(IDirectDrawSurface4 *surface, const DDSURFACEDESC2 *lockedDesc
 void setRenderState(DWORD state, DWORD value);
 bool getRenderState(DWORD state, DWORD *value);
 void setGameTickTiming(uint32_t tickMicroseconds);
-void setGameSubTimings(uint32_t playerMicroseconds, uint32_t bridgeMicroseconds);
+void setGameRenderTimings(uint32_t prepareMicroseconds, uint32_t drawMicroseconds);
 void endFrame();
 
 }
