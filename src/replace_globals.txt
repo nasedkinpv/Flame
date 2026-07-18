@@ -140,7 +140,6 @@
 00589D90 void __cdecl addObjectToDraw(ToDraw *)
 0058A150 void drawTexToSurfTriangles()
 0058A520 void __cdecl static_MyDirectDraw_uvs_init(MyDirectDraw *)
-0058ADC0 int __cdecl RenderData_addToArr(int, Vec3f *)
 0058F640 void draw3dScene()
 00592B80 void __cdecl renderer_setSurfaceHolder(SurfaceHolder *, uint32_t)
 00592EA0 int __cdecl static_MyDirectDraw_devTexture_init(MyDirectDraw *)
