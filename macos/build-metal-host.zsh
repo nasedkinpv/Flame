@@ -34,6 +34,7 @@ readonly SIGNING_IDENTITY="${DK2_CODESIGN_IDENTITY:--}"
   -mmacosx-version-min=26.0 \
   -Wall -Wextra -Werror \
   -framework AppKit \
+  -framework GameController \
   -framework Metal \
   -framework QuartzCore \
   -I "${REPO_ROOT}/src/gog_patch_dll" \

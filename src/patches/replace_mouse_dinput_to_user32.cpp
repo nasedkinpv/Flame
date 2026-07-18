@@ -76,6 +76,19 @@ namespace {
     POINT g_savedPos;
     bool g_wasRelative = false;
     POINT g_lastPos = {0, 0};
+
+    bool is_relative_mode() {
+        if (dk2::g_pWorld != NULL) {
+            if (dk2::CPlayer *pl = (dk2::CPlayer *) dk2::sceneObjects[dk2::g_pWorld->v_getMEPlayerTagId()]) {
+                if (!dk2::CDefaultPlayerInterface_instance.inMenu &&
+                    (pl->creaturePossessed != 0 ||
+                     dk2::CDefaultPlayerInterface_instance.isMouseRotateOrSoomPressed)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 }
 
 void handle_fpv_mouse_move(HWND hWnd, POINT pos) {
@@ -117,17 +130,7 @@ void handle_fpv_mouse_move(HWND hWnd, POINT pos) {
 }
 
 void patch::replace_mouse_dinput_to_user32::handle_mouse_move(HWND hWnd, POINT pos) {
-    bool relativeMode = false;
-    // handle first person view mouse
-    if(dk2::g_pWorld != NULL) {
-        if(dk2::CPlayer *pl = (dk2::CPlayer *) dk2::sceneObjects[dk2::g_pWorld->v_getMEPlayerTagId()]) {
-            if (!dk2::CDefaultPlayerInterface_instance.inMenu) {
-                if(pl->creaturePossessed != 0 || dk2::CDefaultPlayerInterface_instance.isMouseRotateOrSoomPressed) {
-                    relativeMode = true;
-                }
-            }
-        }
-    }
+    const bool relativeMode = is_relative_mode();
     if (relativeMode) {
         if (!g_wasRelative) {
             g_savedPos = pos;
@@ -165,6 +168,53 @@ void patch::replace_mouse_dinput_to_user32::handle_mouse_move(HWND hWnd, POINT p
     }
     g_wasRelative = relativeMode;
 }
+
+void patch::replace_mouse_dinput_to_user32::inject_metal_pointer(
+        float normalizedX, float normalizedY, LONG deltaX, LONG deltaY) {
+    const bool relativeMode = is_relative_mode();
+    if (relativeMode) {
+        const float sensitivity = dk2::MyResources_instance.playerCfg.mouseSensitivity / 10.0f;
+        dk2::MyInputManagerCb_instance.f60_mouse->f24_flX_delta = deltaX * sensitivity;
+        dk2::MyInputManagerCb_instance.f60_mouse->f28_flY_delta = deltaY * sensitivity;
+    } else {
+        if (normalizedX < 0.0f) normalizedX = 0.0f;
+        if (normalizedX > 1.0f) normalizedX = 1.0f;
+        if (normalizedY < 0.0f) normalizedY = 0.0f;
+        if (normalizedY > 1.0f) normalizedY = 1.0f;
+        const dk2::AABB renderRect = dk2::MyInputManagerCb_instance.f60_mouse->f30_aabb;
+        const int width = renderRect.maxX - renderRect.minX;
+        const int height = renderRect.maxY - renderRect.minY;
+        dk2::MyInputManagerCb_instance.f60_mouse->f1C_flX = normalizedX * width;
+        dk2::MyInputManagerCb_instance.f60_mouse->f20_flY = normalizedY * height;
+        dk2::MyInputManagerCb_instance.f60_mouse->updatePos();
+    }
+    g_wasRelative = relativeMode;
+}
+
+void patch::replace_mouse_dinput_to_user32::inject_metal_button(DWORD button, DWORD value) {
+    if (button >= 4) return;
+    DWORD flags = controlFlags;
+    if (value == 1) flags |= DK2_IsPressed;
+    else if (value == 2) flags |= DK2_IsDblClick;
+    click_mouse(DIK_DK2_LEFTMOUSE + button, flags);
+}
+
+void patch::replace_mouse_dinput_to_user32::inject_metal_key(DWORD dikScancode, bool pressed) {
+    DWORD modifier = 0;
+    switch (dikScancode) {
+        case 0x2A:
+        case 0x36: modifier = DK2_Shift; break;
+        case 0x1D:
+        case 0x9D: modifier = DK2_Ctrl; break;
+        case 0x38:
+        case 0xB8: modifier = DK2_Alt; break;
+        default: break;
+    }
+    click_mouse(dikScancode, (pressed ? DK2_IsPressed : 0) | controlFlags);
+    if (pressed) controlFlags |= modifier;
+    else controlFlags &= ~modifier;
+}
+
 void patch::replace_mouse_dinput_to_user32::emulate_dinput_from_user32(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
     if(!enabled) return;
     switch (Msg) {
@@ -269,4 +319,3 @@ void patch::replace_mouse_dinput_to_user32::release_handled_dinput_actions() {
     });
     xyzActionsInProgress.erase(it, xyzActionsInProgress.end());
 }
-

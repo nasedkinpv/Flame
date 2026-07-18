@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import <GameController/GameController.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 
@@ -30,6 +31,20 @@ std::atomic<uint64_t> gBridgeFramesRendered{0};
 uint64_t gSelfTestFrames = 0;
 NSString *gBridgePath = nil;
 bool gBridgeRequired = false;
+std::atomic<DK2MFileHeader *> gInputHeader{nullptr};
+
+void publishInputState(const DK2MInputState &state) {
+    DK2MFileHeader *header = gInputHeader.load(std::memory_order_acquire);
+    if (!header) return;
+    DK2MInputState *destination = &header->input;
+    uint32_t sequence = __atomic_load_n(&destination->sequence, __ATOMIC_ACQUIRE);
+    if ((sequence & 1u) != 0) ++sequence;
+    __atomic_store_n(&destination->sequence, sequence + 1, __ATOMIC_RELEASE);
+    std::memcpy(reinterpret_cast<uint8_t *>(destination) + sizeof(sequence),
+                reinterpret_cast<const uint8_t *>(&state) + sizeof(sequence),
+                sizeof(state) - sizeof(sequence));
+    __atomic_store_n(&destination->sequence, sequence + 2, __ATOMIC_RELEASE);
+}
 
 uint64_t packSize(CGSize size) {
     const auto width = static_cast<uint32_t>(std::max<CGFloat>(1, std::round(size.width)));
@@ -87,9 +102,16 @@ public:
         uint32_t session = __atomic_add_fetch(&header_->consumer_session, 1, __ATOMIC_ACQ_REL);
         if (session == 0) __atomic_add_fetch(&header_->consumer_session, 1, __ATOMIC_ACQ_REL);
         __atomic_store_n(&header_->consumer_frame, 0, __ATOMIC_RELEASE);
+        gInputHeader.store(header_, std::memory_order_release);
     }
 
     ~BridgeReader() {
+        if (header_) {
+            DK2MInputState stopped = {};
+            publishInputState(stopped);
+        }
+        DK2MFileHeader *expected = header_;
+        gInputHeader.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
         if (mapping_) munmap(mapping_, DK2M_FILE_SIZE);
         if (descriptor_ >= 0) close(descriptor_);
     }
@@ -171,16 +193,71 @@ MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
     }
 }
 
+uint8_t dikForKeyCode(GCKeyCode code) {
+#define DK2_MAP_KEY(name, dik) if (code == GCKeyCode##name) return dik
+    DK2_MAP_KEY(Escape, 0x01);
+    DK2_MAP_KEY(One, 0x02); DK2_MAP_KEY(Two, 0x03); DK2_MAP_KEY(Three, 0x04);
+    DK2_MAP_KEY(Four, 0x05); DK2_MAP_KEY(Five, 0x06); DK2_MAP_KEY(Six, 0x07);
+    DK2_MAP_KEY(Seven, 0x08); DK2_MAP_KEY(Eight, 0x09); DK2_MAP_KEY(Nine, 0x0A);
+    DK2_MAP_KEY(Zero, 0x0B); DK2_MAP_KEY(Hyphen, 0x0C); DK2_MAP_KEY(EqualSign, 0x0D);
+    DK2_MAP_KEY(DeleteOrBackspace, 0x0E); DK2_MAP_KEY(Tab, 0x0F);
+    DK2_MAP_KEY(KeyQ, 0x10); DK2_MAP_KEY(KeyW, 0x11); DK2_MAP_KEY(KeyE, 0x12);
+    DK2_MAP_KEY(KeyR, 0x13); DK2_MAP_KEY(KeyT, 0x14); DK2_MAP_KEY(KeyY, 0x15);
+    DK2_MAP_KEY(KeyU, 0x16); DK2_MAP_KEY(KeyI, 0x17); DK2_MAP_KEY(KeyO, 0x18);
+    DK2_MAP_KEY(KeyP, 0x19); DK2_MAP_KEY(OpenBracket, 0x1A); DK2_MAP_KEY(CloseBracket, 0x1B);
+    DK2_MAP_KEY(ReturnOrEnter, 0x1C); DK2_MAP_KEY(LeftControl, 0x1D);
+    DK2_MAP_KEY(KeyA, 0x1E); DK2_MAP_KEY(KeyS, 0x1F); DK2_MAP_KEY(KeyD, 0x20);
+    DK2_MAP_KEY(KeyF, 0x21); DK2_MAP_KEY(KeyG, 0x22); DK2_MAP_KEY(KeyH, 0x23);
+    DK2_MAP_KEY(KeyJ, 0x24); DK2_MAP_KEY(KeyK, 0x25); DK2_MAP_KEY(KeyL, 0x26);
+    DK2_MAP_KEY(Semicolon, 0x27); DK2_MAP_KEY(Quote, 0x28);
+    DK2_MAP_KEY(GraveAccentAndTilde, 0x29); DK2_MAP_KEY(LeftShift, 0x2A);
+    DK2_MAP_KEY(Backslash, 0x2B); DK2_MAP_KEY(KeyZ, 0x2C); DK2_MAP_KEY(KeyX, 0x2D);
+    DK2_MAP_KEY(KeyC, 0x2E); DK2_MAP_KEY(KeyV, 0x2F); DK2_MAP_KEY(KeyB, 0x30);
+    DK2_MAP_KEY(KeyN, 0x31); DK2_MAP_KEY(KeyM, 0x32); DK2_MAP_KEY(Comma, 0x33);
+    DK2_MAP_KEY(Period, 0x34); DK2_MAP_KEY(Slash, 0x35); DK2_MAP_KEY(RightShift, 0x36);
+    DK2_MAP_KEY(KeypadAsterisk, 0x37); DK2_MAP_KEY(LeftAlt, 0x38); DK2_MAP_KEY(Spacebar, 0x39);
+    DK2_MAP_KEY(CapsLock, 0x3A); DK2_MAP_KEY(F1, 0x3B); DK2_MAP_KEY(F2, 0x3C);
+    DK2_MAP_KEY(F3, 0x3D); DK2_MAP_KEY(F4, 0x3E); DK2_MAP_KEY(F5, 0x3F);
+    DK2_MAP_KEY(F6, 0x40); DK2_MAP_KEY(F7, 0x41); DK2_MAP_KEY(F8, 0x42);
+    DK2_MAP_KEY(F9, 0x43); DK2_MAP_KEY(F10, 0x44); DK2_MAP_KEY(KeypadNumLock, 0x45);
+    DK2_MAP_KEY(ScrollLock, 0x46); DK2_MAP_KEY(Keypad7, 0x47); DK2_MAP_KEY(Keypad8, 0x48);
+    DK2_MAP_KEY(Keypad9, 0x49); DK2_MAP_KEY(KeypadHyphen, 0x4A); DK2_MAP_KEY(Keypad4, 0x4B);
+    DK2_MAP_KEY(Keypad5, 0x4C); DK2_MAP_KEY(Keypad6, 0x4D); DK2_MAP_KEY(KeypadPlus, 0x4E);
+    DK2_MAP_KEY(Keypad1, 0x4F); DK2_MAP_KEY(Keypad2, 0x50); DK2_MAP_KEY(Keypad3, 0x51);
+    DK2_MAP_KEY(Keypad0, 0x52); DK2_MAP_KEY(KeypadPeriod, 0x53);
+    DK2_MAP_KEY(F11, 0x57); DK2_MAP_KEY(F12, 0x58); DK2_MAP_KEY(KeypadEnter, 0x9C);
+    DK2_MAP_KEY(RightControl, 0x9D); DK2_MAP_KEY(KeypadSlash, 0xB5);
+    DK2_MAP_KEY(PrintScreen, 0xB7); DK2_MAP_KEY(RightAlt, 0xB8); DK2_MAP_KEY(Pause, 0xC5);
+    DK2_MAP_KEY(Home, 0xC7); DK2_MAP_KEY(UpArrow, 0xC8); DK2_MAP_KEY(PageUp, 0xC9);
+    DK2_MAP_KEY(LeftArrow, 0xCB); DK2_MAP_KEY(RightArrow, 0xCD); DK2_MAP_KEY(End, 0xCF);
+    DK2_MAP_KEY(DownArrow, 0xD0); DK2_MAP_KEY(PageDown, 0xD1); DK2_MAP_KEY(Insert, 0xD2);
+    DK2_MAP_KEY(DeleteForward, 0xD3); DK2_MAP_KEY(LeftGUI, 0xDB); DK2_MAP_KEY(RightGUI, 0xDC);
+    DK2_MAP_KEY(Application, 0xDD);
+#undef DK2_MAP_KEY
+    return 0;
+}
+
 } // namespace
 
 @interface DK2MetalView : NSView
+@property(nonatomic, readonly) CAMetalLayer *metalLayer;
+- (void)setInputActive:(BOOL)active;
+- (void)publishCurrentInput;
+- (void)configureInputDevices;
 @end
 
-@implementation DK2MetalView
+@implementation DK2MetalView {
+    CAMetalLayer *_metalLayer;
+    NSTrackingArea *_trackingArea;
+    GCMouse *_mouse;
+    GCKeyboard *_keyboard;
+    DK2MInputState _input;
+    NSTimer *_heartbeatTimer;
+    BOOL _cursorHidden;
+}
 
 - (CALayer *)makeBackingLayer {
-    CAMetalLayer *layer = [CAMetalLayer layer];
-    layer.contentsGravity = kCAGravityResizeAspect;
+    CALayer *layer = [CALayer layer];
     layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
     return layer;
 }
@@ -190,9 +267,248 @@ MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
     if (self) {
         self.wantsLayer = YES;
         self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
+        _metalLayer = [CAMetalLayer layer];
+        _metalLayer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+        [self.layer addSublayer:_metalLayer];
+        std::memset(&_input, 0, sizeof(_input));
+        _input.host_pid = getpid();
+        [self configureInputDevices];
+        __weak DK2MetalView *weakSelf = self;
+        _heartbeatTimer = [NSTimer scheduledTimerWithTimeInterval:0.1
+                                                         repeats:YES
+                                                           block:^(NSTimer *timer) {
+            (void)timer;
+            DK2MetalView *view = weakSelf;
+            if (!view) return;
+            ++view->_input.heartbeat;
+            [view publishCurrentInput];
+        }];
     }
     return self;
 }
+
+- (void)dealloc {
+    [_heartbeatTimer invalidate];
+    _mouse.mouseInput.mouseMovedHandler = nil;
+    _mouse.mouseInput.scroll.valueChangedHandler = nil;
+    _keyboard.keyboardInput.keyChangedHandler = nil;
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+    if (_cursorHidden) [NSCursor unhide];
+}
+
+- (CAMetalLayer *)metalLayer {
+    return _metalLayer;
+}
+
+- (void)publishCurrentInput {
+    publishInputState(_input);
+}
+
+- (void)appendInputEvent:(uint16_t)type code:(uint16_t)code value:(int32_t)value {
+    const uint32_t write = ++_input.event_write;
+    DK2MInputEvent *event = &_input.events[(write - 1) % 4];
+    event->type = type;
+    event->code = code;
+    event->value = value;
+}
+
+- (void)setKey:(uint8_t)dik pressed:(BOOL)pressed {
+    if (dik == 0) return;
+    const uint8_t mask = static_cast<uint8_t>(1u << (dik & 7));
+    uint8_t *byte = &_input.keys[dik >> 3];
+    const BOOL wasPressed = (*byte & mask) != 0;
+    if (wasPressed == pressed) return;
+    if (pressed) *byte |= mask;
+    else *byte &= static_cast<uint8_t>(~mask);
+    [self appendInputEvent:DK2M_INPUT_EVENT_KEY code:dik value:pressed ? 1 : 0];
+    [self publishCurrentInput];
+}
+
+- (void)setButton:(uint16_t)button pressed:(BOOL)pressed doubleClick:(BOOL)doubleClick {
+    if (button >= 4) return;
+    const uint32_t mask = 1u << button;
+    const BOOL wasPressed = (_input.buttons & mask) != 0;
+    if (pressed) _input.buttons |= mask;
+    else _input.buttons &= ~mask;
+    if (wasPressed != pressed || doubleClick) {
+        [self appendInputEvent:DK2M_INPUT_EVENT_BUTTON
+                         code:button
+                        value:doubleClick ? 2 : (pressed ? 1 : 0)];
+        [self publishCurrentInput];
+    }
+}
+
+- (void)attachMouse:(GCMouse *)mouse {
+    if (_mouse == mouse) return;
+    _mouse.mouseInput.mouseMovedHandler = nil;
+    _mouse.mouseInput.scroll.valueChangedHandler = nil;
+    _mouse = mouse;
+    if (!_mouse) return;
+    _mouse.handlerQueue = dispatch_get_main_queue();
+    __weak DK2MetalView *weakSelf = self;
+    _mouse.mouseInput.mouseMovedHandler = ^(GCMouseInput *input, float deltaX, float deltaY) {
+        (void)input;
+        DK2MetalView *view = weakSelf;
+        if (!view || (view->_input.flags & DK2M_INPUT_ACTIVE) == 0) return;
+        view->_input.relative_x += static_cast<uint32_t>(lrintf(deltaX));
+        view->_input.relative_y += static_cast<uint32_t>(lrintf(-deltaY));
+        [view publishCurrentInput];
+    };
+    _mouse.mouseInput.scroll.valueChangedHandler =
+        ^(GCControllerDirectionPad *dpad, float xValue, float yValue) {
+            (void)dpad;
+            DK2MetalView *view = weakSelf;
+            if (!view || (view->_input.flags & DK2M_INPUT_ACTIVE) == 0) return;
+            view->_input.wheel_x += static_cast<uint32_t>(lrintf(xValue * 120.0f));
+            view->_input.wheel_y += static_cast<uint32_t>(lrintf(yValue * 120.0f));
+            [view publishCurrentInput];
+        };
+}
+
+- (void)attachKeyboard:(GCKeyboard *)keyboard {
+    if (_keyboard == keyboard) return;
+    _keyboard.keyboardInput.keyChangedHandler = nil;
+    _keyboard = keyboard;
+    if (!_keyboard) return;
+    _keyboard.handlerQueue = dispatch_get_main_queue();
+    __weak DK2MetalView *weakSelf = self;
+    _keyboard.keyboardInput.keyChangedHandler =
+        ^(GCKeyboardInput *input, GCDeviceButtonInput *key, GCKeyCode code, BOOL pressed) {
+            (void)input;
+            (void)key;
+            DK2MetalView *view = weakSelf;
+            if (!view || (view->_input.flags & DK2M_INPUT_ACTIVE) == 0) return;
+            [view setKey:dikForKeyCode(code) pressed:pressed];
+        };
+}
+
+- (void)configureInputDevices {
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    [center addObserver:self selector:@selector(mouseConnected:) name:GCMouseDidConnectNotification object:nil];
+    [center addObserver:self selector:@selector(mouseDisconnected:) name:GCMouseDidDisconnectNotification object:nil];
+    [center addObserver:self selector:@selector(mouseConnected:) name:GCMouseDidBecomeCurrentNotification object:nil];
+    [center addObserver:self selector:@selector(keyboardConnected:) name:GCKeyboardDidConnectNotification object:nil];
+    [center addObserver:self selector:@selector(keyboardDisconnected:) name:GCKeyboardDidDisconnectNotification object:nil];
+    [self attachMouse:GCMouse.current ?: GCMouse.mice.firstObject];
+    [self attachKeyboard:GCKeyboard.coalescedKeyboard];
+}
+
+- (void)mouseConnected:(NSNotification *)notification {
+    [self attachMouse:static_cast<GCMouse *>(notification.object)];
+}
+
+- (void)mouseDisconnected:(NSNotification *)notification {
+    if (notification.object == _mouse) [self attachMouse:GCMouse.current ?: GCMouse.mice.firstObject];
+}
+
+- (void)keyboardConnected:(NSNotification *)notification {
+    [self attachKeyboard:static_cast<GCKeyboard *>(notification.object)];
+}
+
+- (void)keyboardDisconnected:(NSNotification *)notification {
+    if (notification.object == _keyboard) [self attachKeyboard:GCKeyboard.coalescedKeyboard];
+}
+
+- (BOOL)updatePointerFromEvent:(NSEvent *)event {
+    const NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+    const CGRect frame = _metalLayer.frame;
+    const BOOL valid = (_input.flags & DK2M_INPUT_ACTIVE) != 0 &&
+                       CGRectContainsPoint(frame, point) &&
+                       CGRectGetWidth(frame) > 0 && CGRectGetHeight(frame) > 0;
+    if (valid) {
+        _input.cursor_x = std::clamp<float>((point.x - CGRectGetMinX(frame)) / CGRectGetWidth(frame), 0.0f, 1.0f);
+        _input.cursor_y = std::clamp<float>(1.0f - (point.y - CGRectGetMinY(frame)) / CGRectGetHeight(frame), 0.0f, 1.0f);
+        _input.flags |= DK2M_INPUT_CURSOR_VALID;
+        if (!_cursorHidden) {
+            [NSCursor hide];
+            _cursorHidden = YES;
+        }
+    } else {
+        _input.flags &= ~DK2M_INPUT_CURSOR_VALID;
+        if (_cursorHidden) {
+            [NSCursor unhide];
+            _cursorHidden = NO;
+        }
+    }
+    [self publishCurrentInput];
+    return valid;
+}
+
+- (void)setInputActive:(BOOL)active {
+    if (active) {
+        _input.flags |= DK2M_INPUT_ACTIVE;
+    } else {
+        _input.flags &= ~(DK2M_INPUT_ACTIVE | DK2M_INPUT_CURSOR_VALID);
+        _input.buttons = 0;
+        std::memset(_input.keys, 0, sizeof(_input.keys));
+        if (_cursorHidden) {
+            [NSCursor unhide];
+            _cursorHidden = NO;
+        }
+    }
+    [self publishCurrentInput];
+}
+
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    if (_trackingArea) [self removeTrackingArea:_trackingArea];
+    const NSTrackingAreaOptions options = NSTrackingMouseEnteredAndExited |
+                                          NSTrackingMouseMoved |
+                                          NSTrackingActiveInKeyWindow |
+                                          NSTrackingInVisibleRect |
+                                          NSTrackingEnabledDuringMouseDrag;
+    _trackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                 options:options
+                                                   owner:self
+                                                userInfo:nil];
+    [self addTrackingArea:_trackingArea];
+}
+
+- (void)viewDidMoveToWindow {
+    [super viewDidMoveToWindow];
+    self.window.acceptsMouseMovedEvents = YES;
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent *)event {
+    (void)event;
+    return YES;
+}
+
+- (void)mouseMoved:(NSEvent *)event { [self updatePointerFromEvent:event]; }
+- (void)mouseDragged:(NSEvent *)event { [self updatePointerFromEvent:event]; }
+- (void)rightMouseDragged:(NSEvent *)event { [self updatePointerFromEvent:event]; }
+- (void)otherMouseDragged:(NSEvent *)event { [self updatePointerFromEvent:event]; }
+- (void)mouseExited:(NSEvent *)event { [self updatePointerFromEvent:event]; }
+
+- (void)mouseDown:(NSEvent *)event {
+    if ([self updatePointerFromEvent:event])
+        [self setButton:0 pressed:YES doubleClick:event.clickCount >= 2];
+}
+- (void)mouseUp:(NSEvent *)event {
+    [self updatePointerFromEvent:event];
+    [self setButton:0 pressed:NO doubleClick:NO];
+}
+- (void)rightMouseDown:(NSEvent *)event {
+    if ([self updatePointerFromEvent:event])
+        [self setButton:1 pressed:YES doubleClick:event.clickCount >= 2];
+}
+- (void)rightMouseUp:(NSEvent *)event {
+    [self updatePointerFromEvent:event];
+    [self setButton:1 pressed:NO doubleClick:NO];
+}
+- (void)otherMouseDown:(NSEvent *)event {
+    if ([self updatePointerFromEvent:event])
+        [self setButton:event.buttonNumber == 2 ? 2 : 3
+                 pressed:YES
+             doubleClick:event.clickCount >= 2];
+}
+- (void)otherMouseUp:(NSEvent *)event {
+    [self updatePointerFromEvent:event];
+    [self setButton:event.buttonNumber == 2 ? 2 : 3 pressed:NO doubleClick:NO];
+}
+
+- (void)keyDown:(NSEvent *)event { (void)event; }
+- (void)keyUp:(NSEvent *)event { (void)event; }
 
 - (BOOL)acceptsFirstResponder {
     return YES;
@@ -200,6 +516,23 @@ MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
 
 - (void)layout {
     [super layout];
+    const CGRect bounds = self.bounds;
+    const CGFloat targetAspect = (CGFloat)kDrawableWidth / (CGFloat)kDrawableHeight;
+    CGFloat width = CGRectGetWidth(bounds);
+    CGFloat height = width / targetAspect;
+    if (height > CGRectGetHeight(bounds)) {
+        height = CGRectGetHeight(bounds);
+        width = height * targetAspect;
+    }
+    const CGRect frame = CGRectMake(
+        CGRectGetMidX(bounds) - width * 0.5,
+        CGRectGetMidY(bounds) - height * 0.5,
+        width,
+        height);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _metalLayer.frame = frame;
+    [CATransaction commit];
     gRequestedDrawableSize.store(
         packSize(CGSizeMake(kDrawableWidth, kDrawableHeight)),
         std::memory_order_release);
@@ -738,15 +1071,27 @@ static void *renderWorker(void *context) {
     [_window makeKeyAndOrderFront:nil];
     [_window makeFirstResponder:_view];
     [NSApp activateIgnoringOtherApps:YES];
+    [_view setInputActive:YES];
 
     [_view layoutSubtreeIfNeeded];
-    CAMetalLayer *layer = (CAMetalLayer *)_view.layer;
+    CAMetalLayer *layer = _view.metalLayer;
     const CGSize drawableSize = CGSizeMake(kDrawableWidth, kDrawableHeight);
     layer.drawableSize = drawableSize;
     gRequestedDrawableSize.store(packSize(drawableSize), std::memory_order_release);
 
     _renderer = [[DK2MetalRenderer alloc] initWithLayer:layer];
+    [_view publishCurrentInput];
     [_renderer start];
+}
+
+- (void)windowDidBecomeKey:(NSNotification *)notification {
+    (void)notification;
+    [_view setInputActive:YES];
+}
+
+- (void)windowDidResignKey:(NSNotification *)notification {
+    (void)notification;
+    [_view setInputActive:NO];
 }
 
 - (void)installMenu {

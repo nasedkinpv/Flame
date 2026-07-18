@@ -1,5 +1,7 @@
 #include <metal_bridge/MetalBridgeProducer.h>
 #include <metal_bridge/DK2BridgeProtocol.h>
+#include <gog_globals.h>
+#include <patches/replace_mouse_dinput_to_user32.h>
 
 #include <cstdint>
 #include <cstring>
@@ -41,6 +43,7 @@ public:
         }
         lastConsumerSession_ = consumerSession;
         lastConsumerFrame_ = consumer;
+        processInput();
 
         slotIndex_ = previousSlot_ == DK2M_NO_SLOT ? 0 : (previousSlot_ + 1) % DK2M_SLOT_COUNT;
         previousSlot_ = slotIndex_;
@@ -161,6 +164,127 @@ public:
 private:
     static volatile LONG *asLong(volatile uint32_t *value) {
         return reinterpret_cast<volatile LONG *>(value);
+    }
+
+    bool readInput(DK2MInputState &input) const {
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            const uint32_t before = InterlockedCompareExchange(
+                asLong(&header_->input.sequence), 0, 0);
+            if ((before & 1u) != 0) continue;
+            std::memcpy(&input, &header_->input, sizeof(input));
+            MemoryBarrier();
+            const uint32_t after = InterlockedCompareExchange(
+                asLong(&header_->input.sequence), 0, 0);
+            if (before == after && (after & 1u) == 0) return true;
+        }
+        return false;
+    }
+
+    void applyButton(uint32_t button, int32_t value) {
+        if (button >= 4) return;
+        patch::replace_mouse_dinput_to_user32::inject_metal_button(button, value);
+        if (value == 0) appliedButtons_ &= ~(1u << button);
+        else appliedButtons_ |= 1u << button;
+    }
+
+    void applyKey(uint32_t key, bool pressed) {
+        if (key == 0 || key >= 256) return;
+        patch::replace_mouse_dinput_to_user32::inject_metal_key(key, pressed);
+        const uint8_t mask = static_cast<uint8_t>(1u << (key & 7));
+        if (pressed) appliedKeys_[key >> 3] |= mask;
+        else appliedKeys_[key >> 3] &= static_cast<uint8_t>(~mask);
+    }
+
+    void releaseAppliedInput() {
+        for (uint32_t button = 0; button < 4; ++button) {
+            if (appliedButtons_ & (1u << button)) applyButton(button, 0);
+        }
+        for (uint32_t key = 1; key < 256; ++key) {
+            if (appliedKeys_[key >> 3] & (1u << (key & 7))) applyKey(key, false);
+        }
+    }
+
+    void injectWheel(int32_t delta) {
+        while (delta != 0 && gog::g_hWnd) {
+            const int32_t chunk = delta > 32760 ? 32760 : (delta < -32760 ? -32760 : delta);
+            const WPARAM keysAndDelta = MAKEWPARAM(0, static_cast<WORD>(static_cast<SHORT>(chunk)));
+            SendMessageA(gog::g_hWnd, WM_MOUSEWHEEL, keysAndDelta, 0);
+            delta -= chunk;
+        }
+    }
+
+    void processInput() {
+        DK2MInputState input = {};
+        if (!readInput(input)) return;
+        if (input.host_pid == 0) {
+            if (inputHostPid_ != 0) {
+                releaseAppliedInput();
+                inputHostPid_ = 0;
+            }
+            return;
+        }
+        const bool newHost = input.host_pid != inputHostPid_;
+        const DWORD now = GetTickCount();
+        if (newHost) {
+            releaseAppliedInput();
+            inputHostPid_ = input.host_pid;
+            inputEventWrite_ = input.event_write;
+            lastRelativeX_ = input.relative_x;
+            lastRelativeY_ = input.relative_y;
+            lastWheelX_ = input.wheel_x;
+            lastWheelY_ = input.wheel_y;
+            lastInputHeartbeat_ = input.heartbeat;
+            lastInputHeartbeatTick_ = now;
+        } else if (input.heartbeat != lastInputHeartbeat_) {
+            lastInputHeartbeat_ = input.heartbeat;
+            lastInputHeartbeatTick_ = now;
+        } else if (now - lastInputHeartbeatTick_ > 2000) {
+            releaseAppliedInput();
+            inputHostPid_ = 0;
+            return;
+        }
+
+        const bool active = (input.flags & DK2M_INPUT_ACTIVE) != 0;
+        if (!newHost && active) {
+            const uint32_t eventCount = input.event_write - inputEventWrite_;
+            if (eventCount <= 4) {
+                for (uint32_t serial = inputEventWrite_ + 1; serial != input.event_write + 1; ++serial) {
+                    const DK2MInputEvent &event = input.events[(serial - 1) % 4];
+                    if (event.type == DK2M_INPUT_EVENT_BUTTON) applyButton(event.code, event.value);
+                    else if (event.type == DK2M_INPUT_EVENT_KEY) applyKey(event.code, event.value != 0);
+                }
+            }
+        }
+        inputEventWrite_ = input.event_write;
+
+        const uint32_t desiredButtons = active ? input.buttons : 0;
+        for (uint32_t button = 0; button < 4; ++button) {
+            const bool desired = (desiredButtons & (1u << button)) != 0;
+            const bool applied = (appliedButtons_ & (1u << button)) != 0;
+            if (desired != applied) applyButton(button, desired ? 1 : 0);
+        }
+        for (uint32_t key = 1; key < 256; ++key) {
+            const bool desired = active && (input.keys[key >> 3] & (1u << (key & 7))) != 0;
+            const bool applied = (appliedKeys_[key >> 3] & (1u << (key & 7))) != 0;
+            if (desired != applied) applyKey(key, desired);
+        }
+
+        const int32_t deltaX = static_cast<int32_t>(input.relative_x - lastRelativeX_);
+        const int32_t deltaY = static_cast<int32_t>(input.relative_y - lastRelativeY_);
+        const int32_t wheelX = static_cast<int32_t>(input.wheel_x - lastWheelX_);
+        const int32_t wheelY = static_cast<int32_t>(input.wheel_y - lastWheelY_);
+        lastRelativeX_ = input.relative_x;
+        lastRelativeY_ = input.relative_y;
+        lastWheelX_ = input.wheel_x;
+        lastWheelY_ = input.wheel_y;
+        if (active && (input.flags & DK2M_INPUT_CURSOR_VALID) != 0) {
+            patch::replace_mouse_dinput_to_user32::inject_metal_pointer(
+                input.cursor_x, input.cursor_y, deltaX, deltaY);
+        }
+        if (active) {
+            (void)wheelX;
+            injectWheel(wheelY);
+        }
     }
 
     bool ensureMapped() {
@@ -299,6 +423,16 @@ private:
     uint32_t boundTextures_[3] = {};
     uint32_t lastConsumerSession_ = 0;
     uint32_t lastConsumerFrame_ = 0;
+    uint32_t inputHostPid_ = 0;
+    uint32_t inputEventWrite_ = 0;
+    uint32_t lastRelativeX_ = 0;
+    uint32_t lastRelativeY_ = 0;
+    uint32_t lastWheelX_ = 0;
+    uint32_t lastWheelY_ = 0;
+    uint32_t appliedButtons_ = 0;
+    uint32_t lastInputHeartbeat_ = 0;
+    DWORD lastInputHeartbeatTick_ = 0;
+    uint8_t appliedKeys_[32] = {};
     std::unordered_map<uint32_t, TextureCache> textures_;
     std::unordered_map<uintptr_t, uint32_t> surfaceTextures_;
     std::unordered_map<uint32_t, uint32_t> renderStates_;
