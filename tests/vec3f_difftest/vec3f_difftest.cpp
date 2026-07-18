@@ -55,6 +55,10 @@ int main() {
           assert(bitEq(tt.x,e.x) && bitEq(tt.y,e.y) && bitEq(tt.z,e.z)); }
         { Vec3f tt = t, e; refAdd(&t, &e, &t); tt.sumVec3f(&tt, &tt);
           assert(bitEq(tt.x,e.x) && bitEq(tt.y,e.y) && bitEq(tt.z,e.z)); }
+        { Vec3f tt = t, rr = r, e; refAdd(&t, &e, &r); float *ret = dk2::sub_59E6E0(&tt.x, &rr.x);
+          assert(ret == &tt.x && bitEq(tt.x,e.x) && bitEq(tt.y,e.y) && bitEq(tt.z,e.z)); }
+        { Vec3f tt = t, e; refAdd(&t, &e, &t); dk2::sub_59E6E0(&tt.x, &tt.x);
+          assert(bitEq(tt.x,e.x) && bitEq(tt.y,e.y) && bitEq(tt.z,e.z)); }
         n++;
     }
     // Vec3f is 12 bytes; a heap allocation of exactly 12 bytes catches a

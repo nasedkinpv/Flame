@@ -2,6 +2,12 @@
 
 #include <emmintrin.h>
 
+#if defined(_M_IX86)
+#define DK2_THISCALL __thiscall
+#else
+#define DK2_THISCALL
+#endif
+
 
 namespace {
 
@@ -38,3 +44,17 @@ dk2::Vec3f *dk2::Vec3f::sumVec3f(Vec3f *output, Vec3f *right) {
     storeVec3(output, _mm_add_ps(leftValue, rightValue));
     return output;
 }
+
+
+namespace dk2 {
+
+float *DK2_THISCALL sub_59E6E0(float *self, float *right) {
+    auto *leftValue = reinterpret_cast<Vec3f *>(self);
+    const auto *rightValue = reinterpret_cast<const Vec3f *>(right);
+    storeVec3(leftValue, _mm_add_ps(loadVec3(leftValue), loadVec3(rightValue)));
+    return self;
+}
+
+}
+
+#undef DK2_THISCALL
