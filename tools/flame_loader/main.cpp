@@ -367,6 +367,20 @@ bool connectFlameAndDkii(
     const std::map<std::string, void *> &flameImports,
     const std::map<std::string, void *> &flameExports
 ) {
+    // pre-flight: verify every replace symbol resolves in Flame before writing anything,
+    // so a version-mismatched Flame.dll (e.g. stale copy shadowing flame/Flame.dll in
+    // the dll search order) fails cleanly instead of leaving DKII .text half-patched
+    {
+        bool missing = false;
+        for(auto &s : dkiiSyms) {
+            if(s.replace && !flameExports.contains(s.name)) {
+                log_err("[-] replace sym %s is not found in Flame", s.name.c_str());
+                missing = true;
+            }
+        }
+        if(missing) return false;
+    }
+
     // prepare for binary search by reference destination va
     std::vector<VaReloc> dkiiRelocsByDst = dkiiRelocs;
     std::sort(dkiiRelocsByDst.begin(), dkiiRelocsByDst.end(), [](VaReloc &l, VaReloc &r){
