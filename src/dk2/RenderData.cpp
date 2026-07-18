@@ -1,3 +1,8 @@
+#include "dk2/Idx3b.h"
+#include "dk2/RenderData.h"
+#include "dk2/SceneObject2E.h"
+#include "dk2/Uv2f_arr1024.h"
+#include "dk2/Vec3f_arr1024.h"
 #include "dk2/utils/Mat3x3f.h"
 #include "dk2/utils/Vec3f.h"
 #include "dk2_functions.h"
