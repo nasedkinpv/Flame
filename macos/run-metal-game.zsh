@@ -46,7 +46,8 @@ initial_frame="$(bridge_frame)"
     DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
     MVK_CONFIG_LOG_LEVEL='0' \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
-      -skip-launcher -game-res=1024x768 -Level=level1 -Q -NoMovies -DisableGamma \
+      -skip-launcher -game-res=1024x768 -Level=level1 \
+      -Q -NoMovies -DisableGamma -NoSound \
       -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
       -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1
 ) >>"${LOG_FILE}" 2>&1 &
