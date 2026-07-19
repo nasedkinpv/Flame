@@ -37,10 +37,10 @@ The first public importer intentionally accepts an already installed original
 GOG copy. Automating the GOG offline installer is kept separate so the normal
 launch path does not depend on a particular third-party installer version.
 
-The Metal launcher defaults to DK2 shadow level 1. It keeps cached character
-shadows while avoiding the original level-3 path that rebuilds animated shadow
-geometry every frame. Set `DK2_SHADOW_LEVEL=2` or `3` before launching to trade
-CPU time for the original dynamic-shadow modes.
+The Metal launcher defaults to DK2 shadow level 3. The bounds-safe Flame
+rasterizer keeps the original dynamic-shadow mode from writing outside its
+32x32 coverage surface. Set `DK2_SHADOW_LEVEL=0`, `1`, or `2` before launching
+to select a cheaper mode when profiling older hardware.
 
 The packaging script pins Wine 11 and verifies its SHA-256 checksum. Maintainer
 builds take the matching Release Flame payload from the CI cache; set

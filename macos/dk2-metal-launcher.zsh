@@ -11,6 +11,7 @@ readonly GAME_DIR="${PREFIX}/drive_c/GOG Games/Dungeon Keeper 2"
 readonly BRIDGE_FILE="${PREFIX}/drive_c/dk2-metal/frame.bin"
 readonly LOG_DIR="${HOME}/Library/Logs/Dungeon Keeper II Metal"
 readonly LOG_FILE="${LOG_DIR}/game.log"
+readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-3}"
 
 show_error() {
   /usr/bin/osascript -e "display alert \"Dungeon Keeper II\" message \"$1\" as critical" >/dev/null 2>&1 || true
@@ -83,7 +84,7 @@ fi
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
       -skip-launcher -game-res=1600x1200 \
       "${game_mode_args[@]}" \
-      -NoMovies -NoSound -Shadows 1 \
+      -NoMovies -NoSound -Shadows "${SHADOW_LEVEL}" \
       -enablebumpmapping -enablebumpluminance -32biteverything -disablegamma \
       -gog:video:HighRes=true -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
       -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1

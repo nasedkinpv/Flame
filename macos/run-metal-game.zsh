@@ -11,7 +11,7 @@ readonly GAME_DIR="${PREFIX}/drive_c/GOG Games/Dungeon Keeper 2"
 readonly BRIDGE_FILE="${PREFIX}/drive_c/dk2-metal/frame.bin"
 readonly LOG_DIR="${HOME}/Library/Logs/Dungeon Keeper II Metal"
 readonly LOG_FILE="${LOG_DIR}/game.log"
-readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-1}"
+readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-3}"
 readonly LEVEL="${DK2_LEVEL:-level1}"
 readonly IMPORTER="${SCRIPT_DIR}/import-original-game.zsh"
 
