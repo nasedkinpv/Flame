@@ -9,12 +9,14 @@
 #include <emmintrin.h>
 
 
-namespace dk2 {
-int __thiscall sub_57BD70(
-        int *, uint32_t *, int,
-        float, int, int, int, int, int, int, int, int,
-        float, float, float);
-}
+extern "C" int __fastcall sub_57BD70_fastcall(
+        dk2::Obj57BCB0 *, void *, int32_t *, int,
+        dk2::Mat3x3f, dk2::Vec3f);
+
+// The sgmap describes 0057BD70 as a namespace-level __thiscall function.
+// MSVC cannot spell that in C++, so give the generated export its ABI-equivalent
+// fastcall implementation (ECX=this, EDX=unused, the remaining 56 bytes on stack).
+#pragma comment(linker, "/alternatename:?sub_57BD70@dk2@@YEHPAHPAIHMHHHHHHHHMMM@Z=@sub_57BD70_fastcall@64")
 
 
 namespace {
@@ -143,22 +145,10 @@ dk2::Obj57BCB0 *dk2::Obj57BCB0::constructor(uint32_t *opaqueCollection, int mask
 }
 
 
-int __thiscall dk2::sub_57BD70(
-        int *selfRaw, uint32_t *opaqueCollectionRaw, int mask,
-        float m0, int m1, int m2, int m3, int m4,
-        int m5, int m6, int m7, int m8,
-        float x, float y, float z) {
-    auto *self = reinterpret_cast<Obj57BCB0 *>(selfRaw);
-    auto *opaqueCollection = reinterpret_cast<int32_t *>(opaqueCollectionRaw);
-    Mat3x3f matrix;
-    const uint32_t matrixBits[9] = {
-            lighting::floatBits(m0),
-            static_cast<uint32_t>(m1), static_cast<uint32_t>(m2),
-            static_cast<uint32_t>(m3), static_cast<uint32_t>(m4),
-            static_cast<uint32_t>(m5), static_cast<uint32_t>(m6),
-            static_cast<uint32_t>(m7), static_cast<uint32_t>(m8)};
-    std::memcpy(&matrix, matrixBits, sizeof(matrix));
-    const Vec3f position{x, y, z};
+int __fastcall sub_57BD70_fastcall(
+        dk2::Obj57BCB0 *self, void *,
+        int32_t *opaqueCollection, int mask,
+        dk2::Mat3x3f matrix, dk2::Vec3f position) {
     const int32_t total = opaqueCollection[0] + opaqueCollection[1];
     const SceneLight *const *lights = sceneLights(opaqueCollection);
     const float multiplier = *reinterpret_cast<const float *>(0x0066FB74);
@@ -198,13 +188,13 @@ int __thiscall dk2::sub_57BD70(
                 source.attenuationScale);
         if (!(attenuation > zero)) continue;
 
-        Obj57BCB0_item &destination = self->items[outputCount++];
-        const Vec3f fromLight{
+        dk2::Obj57BCB0_item &destination = self->items[outputCount++];
+        const dk2::Vec3f fromLight{
                 source.position.x - position.x,
                 source.position.y - position.y,
                 source.position.z - position.z};
         destination.vec = transformDirection(matrix, fromLight);
-        destination.f14 = static_cast<int>(lighting::floatBits(attenuation));
+        destination.f14 = static_cast<int>(dk2::lighting::floatBits(attenuation));
         destination.f18 = source.facingScale;
         destination.vec_1C = source.color;
     }
