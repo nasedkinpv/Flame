@@ -74,6 +74,10 @@ public:
             if (boundTextures_[stage]) emitTexture(stage, boundTextures_[stage]);
         }
         for (const auto &entry : renderStates_) emitRenderState(entry.first, entry.second);
+        for (const auto &entry : textureStageStates_) {
+            emitTextureStageState(static_cast<DWORD>(entry.first >> 32),
+                                  static_cast<DWORD>(entry.first), entry.second);
+        }
     }
 
     void draw(DWORD fvf, const void *vertices, DWORD vertexCount,
@@ -147,6 +151,12 @@ public:
         if (found == renderStates_.end()) return false;
         *value = found->second;
         return true;
+    }
+
+    void textureStageState(DWORD stage, DWORD state, DWORD value) {
+        const uint64_t key = (static_cast<uint64_t>(stage) << 32) | state;
+        textureStageStates_[key] = value;
+        if (active_) emitTextureStageState(stage, state, value);
     }
 
     void gameTickTiming(uint32_t tickMicroseconds) {
@@ -477,6 +487,18 @@ private:
         ++commandCount_;
     }
 
+    void emitTextureStageState(DWORD stage, DWORD state, DWORD value) {
+        if (used_ + sizeof(DK2MTextureStageStateCommand) > DK2M_SLOT_CAPACITY) return;
+        DK2MTextureStageStateCommand command = {};
+        command.header.type = DK2M_COMMAND_TEXTURE_STAGE_STATE;
+        command.header.size = sizeof(command);
+        command.stage = stage;
+        command.state = state;
+        command.value = value;
+        append(&command, sizeof(command));
+        ++commandCount_;
+    }
+
     void append(const void *data, uint32_t size) {
         std::memcpy(static_cast<uint8_t *>(view_) + DK2M_SLOT_OFFSET(slotIndex_) + used_, data, size);
         used_ += size;
@@ -516,6 +538,7 @@ private:
     std::unordered_map<uint32_t, TextureCache> textures_;
     std::unordered_map<uintptr_t, uint32_t> surfaceTextures_;
     std::unordered_map<uint32_t, uint32_t> renderStates_;
+    std::unordered_map<uint64_t, uint32_t> textureStageStates_;
     bool active_ = false;
 };
 
@@ -555,6 +578,10 @@ void setRenderState(DWORD state, DWORD value) {
 
 bool getRenderState(DWORD state, DWORD *value) {
     return producer.renderState(state, value);
+}
+
+void setTextureStageState(DWORD stage, DWORD state, DWORD value) {
+    producer.textureStageState(stage, state, value);
 }
 
 void setGameTickTiming(uint32_t tickMicroseconds) {

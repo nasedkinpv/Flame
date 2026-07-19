@@ -585,6 +585,7 @@ HRESULT FakeDevice3::SetTextureStageState(DWORD Stage, D3DTEXTURESTAGESTATETYPE 
         default:
             break;
     }
+    metal_bridge::setTextureStageState(Stage, Type, Value);
     if (metal_bridge::isEnabled()) return DD_OK;
     HRESULT hr = orig::pIDirect3DDevice3->SetTextureStageState(Stage, Type, Value);
     if (FAILED(hr)) {

@@ -20,6 +20,7 @@ enum DK2MCommandType {
     DK2M_COMMAND_TEXTURE_UPDATE = 3,
     DK2M_COMMAND_SET_TEXTURE = 4,
     DK2M_COMMAND_RENDER_STATE = 5,
+    DK2M_COMMAND_TEXTURE_STAGE_STATE = 6,
 };
 
 enum DK2MInputFlags {
@@ -144,6 +145,13 @@ typedef struct DK2MRenderStateCommand {
     uint32_t state;
     uint32_t value;
 } DK2MRenderStateCommand;
+
+typedef struct DK2MTextureStageStateCommand {
+    DK2MCommandHeader header;
+    uint32_t stage;
+    uint32_t state;
+    uint32_t value;
+} DK2MTextureStageStateCommand;
 #pragma pack(pop)
 
 #define DK2M_FILE_SIZE ((uint32_t)(sizeof(DK2MFileHeader) + DK2M_SLOT_COUNT * DK2M_SLOT_CAPACITY))
@@ -162,6 +170,8 @@ static_assert(sizeof(DK2MDrawIndexedCommand) == 24, "bridge draw layout changed"
 static_assert(sizeof(DK2MTextureUpdateCommand) == 28, "bridge texture update layout changed");
 static_assert(sizeof(DK2MSetTextureCommand) == 16, "bridge texture binding layout changed");
 static_assert(sizeof(DK2MRenderStateCommand) == 16, "bridge render state layout changed");
+static_assert(sizeof(DK2MTextureStageStateCommand) == 20,
+              "bridge texture stage state layout changed");
 #endif
 
 #endif
