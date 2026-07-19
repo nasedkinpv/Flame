@@ -34,6 +34,7 @@
 namespace dk2 {
     bool installSpatialSamplerHotCallsite();
     bool installCameraPhaseProfiler();
+    bool installRenderDispatchTargets();
 }
 
 
@@ -137,6 +138,7 @@ void patch::flameInit(int argc, const char **argv) {
     patch::protocol_dump::init();
     patch::screen_resolution::init();
     if (GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", nullptr, 0) != 0) {
+        dk2::installRenderDispatchTargets();
         dk2::installSpatialSamplerHotCallsite();
         dk2::installCameraPhaseProfiler();
     }

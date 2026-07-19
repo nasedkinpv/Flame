@@ -57,10 +57,58 @@ struct CameraPhaseProfile {
 
 CameraPhaseProfile g_profile;
 
+enum PrimitiveKind : uint32_t {
+    DynamicMesh,
+    AnimatedMesh,
+    StaticMesh,
+    StaticHeightField,
+    PrimitiveKindCount,
+};
+
+struct PrimitiveProfile {
+    uint64_t ticks[PrimitiveKindCount]{};
+    uint32_t calls[PrimitiveKindCount]{};
+
+    void add(PrimitiveKind kind, uint64_t elapsed) {
+        ticks[kind] += elapsed;
+        ++calls[kind];
+    }
+
+    void finish(uint32_t frames) {
+        LARGE_INTEGER frequency;
+        QueryPerformanceFrequency(&frequency);
+        const uint64_t divisor = static_cast<uint64_t>(frequency.QuadPart) * frames;
+        auto averageUs = [&](PrimitiveKind kind) -> uint64_t {
+            return divisor ? ticks[kind] * 1000000u / divisor : 0;
+        };
+        patch::log::dbg(
+                "PERF render-list avg us: dynamic=%llu anim=%llu static=%llu "
+                "height=%llu; calls/frame x100: dynamic=%u anim=%u static=%u height=%u",
+                averageUs(DynamicMesh), averageUs(AnimatedMesh),
+                averageUs(StaticMesh), averageUs(StaticHeightField),
+                calls[DynamicMesh] * 100u / frames,
+                calls[AnimatedMesh] * 100u / frames,
+                calls[StaticMesh] * 100u / frames,
+                calls[StaticHeightField] * 100u / frames);
+        *this = {};
+    }
+};
+
+PrimitiveProfile g_primitiveProfile;
+
 uint64_t profileTicks() {
     LARGE_INTEGER value;
     QueryPerformanceCounter(&value);
     return static_cast<uint64_t>(value.QuadPart);
+}
+
+template <uintptr_t Target, PrimitiveKind Kind>
+int __fastcall profilePrimitive(void *self, void *, void *context) {
+    using Function = int (__thiscall *)(void *, void *);
+    const uint64_t started = profileTicks();
+    const int result = reinterpret_cast<Function>(Target)(self, context);
+    g_primitiveProfile.add(Kind, profileTicks() - started);
+    return result;
 }
 
 template <typename Result, typename Function, typename... Args>
@@ -131,6 +179,7 @@ uint32_t *__cdecl profileCleanup() {
     using Function = uint32_t *(__cdecl *)();
     uint32_t *result = measure<uint32_t *>(
             Cleanup, reinterpret_cast<Function>(0x00572CF0));
+    if (g_profile.frames == 299) g_primitiveProfile.finish(300);
     g_profile.finishFrame();
     return result;
 }
@@ -172,6 +221,33 @@ bool patchCall(const CallPatch &entry) {
     return true;
 }
 
+struct PointerPatch {
+    uintptr_t address;
+    uintptr_t target;
+    uintptr_t replacement;
+    const char *name;
+};
+
+bool patchPointer(const PointerPatch &entry) {
+    auto *pointer = reinterpret_cast<uintptr_t *>(entry.address);
+    if (*pointer != entry.target) {
+        patch::log::err(
+                "camera profile: unexpected pointer %08X at %08X (%s)",
+                *pointer, entry.address, entry.name);
+        return false;
+    }
+    DWORD oldProtection = 0;
+    if (!VirtualProtect(pointer, sizeof(*pointer), PAGE_READWRITE, &oldProtection)) {
+        patch::log::err("camera profile: vtable VirtualProtect failed: %08X",
+                        GetLastError());
+        return false;
+    }
+    *pointer = entry.replacement;
+    DWORD ignored = 0;
+    VirtualProtect(pointer, sizeof(*pointer), oldProtection, &ignored);
+    return true;
+}
+
 }
 
 
@@ -198,6 +274,24 @@ bool dk2::installCameraPhaseProfiler() {
     };
     for (const CallPatch &patch : patches) {
         if (!patchCall(patch)) return false;
+    }
+    const PointerPatch primitivePatches[]{
+            {0x0066FD24, 0x00580EC0,
+             reinterpret_cast<uintptr_t>(
+                     &profilePrimitive<0x00580EC0, DynamicMesh>), "dynamic mesh"},
+            {0x0066FD6C, 0x00584900,
+             reinterpret_cast<uintptr_t>(
+                     &profilePrimitive<0x00584900, AnimatedMesh>), "animated mesh"},
+            {0x0066FD94, 0x00586190,
+             reinterpret_cast<uintptr_t>(
+                     &profilePrimitive<0x00586190, StaticMesh>), "static mesh"},
+            {0x0066FDBC, 0x00587060,
+             reinterpret_cast<uintptr_t>(
+                     &profilePrimitive<0x00587060, StaticHeightField>),
+             "static height field"},
+    };
+    for (const PointerPatch &patch : primitivePatches) {
+        if (!patchPointer(patch)) return false;
     }
     patch::log::dbg("camera profile: installed %u phase probes",
                     static_cast<unsigned>(sizeof(patches) / sizeof(patches[0])));

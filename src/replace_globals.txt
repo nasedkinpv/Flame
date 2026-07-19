@@ -50,10 +50,11 @@
 0058B2A0 uint8_t __cdecl renderFun_sub_58B2A0(int, Vec3f *, Uv2f *)
 # Verified alternative-FVF cache path and its software-format fallback.
 0058B370 uint8_t __cdecl renderFun_sub_58B370(int, Vec3f *, Uv2f *)
-# Verified D3D FVF emitter.  UV stages retain the original four-table mapping
-# and the shared stage cursor across property streams.
-0058B440 char __cdecl renderFun_sub_58B440(int, Vec3f *, Uv2f *)
-0058B680 char __cdecl renderFun_sub_58B680(int, Vec3f *, Uv2f *)
+# The verified large emitters are installed into __renderFun's two immediate
+# dispatch targets at runtime.  Direct linker replacement of either large entry
+# prevents Wine 11 WOW64 from reaching its first frame.
+#0058B440 char __cdecl renderFun_sub_58B440(int, Vec3f *, Uv2f *)
+#0058B680 char __cdecl renderFun_sub_58B680(int, Vec3f *, Uv2f *)
 0058B940 void __cdecl addTriangleToRender2(int, int, int)
 0058B9D0 void __cdecl addTriangleToRender1(int, int, int)
 

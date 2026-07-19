@@ -10,11 +10,13 @@
 #include "dk2/utils/Vec3f.h"
 #include "dk2_functions.h"
 #include "dk2_globals.h"
+#include "patches/logging.h"
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <emmintrin.h>
+#include <windows.h>
 
 
 namespace {
@@ -459,6 +461,46 @@ char __cdecl dk2::renderFun_sub_58B680(int idx, Vec3f *vecs, Uv2f *uvs) {
                 stream, stream, render, vecs[stream], uvs, useFogScale);
     }
     return static_cast<char>(streamCount);
+}
+
+
+bool dk2::installRenderDispatchTargets() {
+    struct Patch {
+        uintptr_t immediate;
+        uintptr_t expected;
+        uintptr_t replacement;
+        const char *name;
+    };
+    const Patch patches[]{
+            {0x0058ABB4, 0x0058B680,
+             reinterpret_cast<uintptr_t>(&renderFun_sub_58B680), "58B680"},
+            {0x0058ABC6, 0x0058B440,
+             reinterpret_cast<uintptr_t>(&renderFun_sub_58B440), "58B440"},
+    };
+    for (const Patch &entry : patches) {
+        auto *immediate = reinterpret_cast<uintptr_t *>(entry.immediate);
+        if (*immediate != entry.expected) {
+            patch::log::err(
+                    "render dispatch: unexpected target %08X at %08X (%s)",
+                    *immediate, entry.immediate, entry.name);
+            return false;
+        }
+        DWORD oldProtection = 0;
+        if (!VirtualProtect(
+                    immediate, sizeof(*immediate), PAGE_EXECUTE_READWRITE,
+                    &oldProtection)) {
+            patch::log::err(
+                    "render dispatch: VirtualProtect failed: %08X",
+                    GetLastError());
+            return false;
+        }
+        *immediate = entry.replacement;
+        FlushInstructionCache(GetCurrentProcess(), immediate, sizeof(*immediate));
+        DWORD ignored = 0;
+        VirtualProtect(immediate, sizeof(*immediate), oldProtection, &ignored);
+    }
+    patch::log::dbg("render dispatch: installed verified FVF emitters");
+    return true;
 }
 
 
