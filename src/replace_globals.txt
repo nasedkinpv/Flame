@@ -415,8 +415,8 @@
 005848B0 void CEngineAnimMesh::fun_5848B0(int, SceneObject2E *)
 
 # CEngineDynamicMesh
-# Route the hot low-mode mesh path through translated C++ while preserving the
-# original high-mode implementations and their raw 32-bit mode ABI.
+# Keep the small ABI-safe dispatcher replacement, but stage the translated
+# low-mode body until its missing-mesh regression has a differential test.
 00582CE0 void CEngineDynamicMesh::fun_582CE0(int, SceneObject2E *)
 
 # MyScaledSurface
