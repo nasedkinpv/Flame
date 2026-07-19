@@ -31,6 +31,11 @@
 #include "dk2_functions.h"
 
 
+namespace dk2 {
+    bool installSpatialSamplerHotCallsite();
+}
+
+
 flame_config::define_flame_option<bool> o_console(
     "flame:console", flame_config::OG_Config,
     "Show console window to see logs\n",
@@ -130,6 +135,9 @@ void patch::flameInit(int argc, const char **argv) {
     patch::original_compatible::init();
     patch::protocol_dump::init();
     patch::screen_resolution::init();
+    if (GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", nullptr, 0) != 0) {
+        dk2::installSpatialSamplerHotCallsite();
+    }
 
 #if __has_include(<dk2_research.h>)
     bug_hunter::init_keyWatcher();

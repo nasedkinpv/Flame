@@ -1,7 +1,9 @@
 #include "dk2/Obj58EF60.h"
+#include "patches/logging.h"
 
 #include <cstdint>
 #include <emmintrin.h>
+#include <windows.h>
 
 
 namespace {
@@ -42,6 +44,12 @@ void storeVec3(float *output, __m128 value) {
                  _mm_shuffle_ps(value, value, _MM_SHUFFLE(1, 1, 1, 1)));
     _mm_store_ss(output + 2,
                  _mm_shuffle_ps(value, value, _MM_SHUFFLE(2, 2, 2, 2)));
+}
+
+float *__fastcall sampleHotCallsite(
+        dk2::Obj58EF60 *self, void *,
+        float x, float y, float z, float *output) {
+    return self->sub_58F030(x, y, z, output);
 }
 
 }
@@ -111,4 +119,41 @@ float *dk2::Obj58EF60::sub_58F030(float x, float y, float z, float *output) {
     }
     storeVec3(output, result);
     return output;
+}
+
+
+bool dk2::installSpatialSamplerHotCallsite() {
+    // Replacing all seven references previously exposed an unrelated early
+    // startup path in Wine.  The measured renderer hotspot is this one call in
+    // Obj57AD20::constructor, so patch only that proven site.
+    constexpr uintptr_t callAddress = 0x0057AE49;
+    constexpr uintptr_t originalTarget = 0x0058F030;
+    auto *call = reinterpret_cast<uint8_t *>(callAddress);
+    if (call[0] != 0xE8) {
+        patch::log::err("spatial sampler: %08X is not a relative call", callAddress);
+        return false;
+    }
+
+    const int32_t oldDisplacement = *reinterpret_cast<const int32_t *>(call + 1);
+    const uintptr_t currentTarget = callAddress + 5 + oldDisplacement;
+    if (currentTarget != originalTarget) {
+        patch::log::err(
+                "spatial sampler: unexpected target %08X at %08X",
+                currentTarget, callAddress);
+        return false;
+    }
+
+    const uintptr_t replacement = reinterpret_cast<uintptr_t>(&sampleHotCallsite);
+    const int32_t displacement = static_cast<int32_t>(replacement - (callAddress + 5));
+    DWORD oldProtection = 0;
+    if (!VirtualProtect(call, 5, PAGE_EXECUTE_READWRITE, &oldProtection)) {
+        patch::log::err("spatial sampler: VirtualProtect failed: %08X", GetLastError());
+        return false;
+    }
+    *reinterpret_cast<int32_t *>(call + 1) = displacement;
+    FlushInstructionCache(GetCurrentProcess(), call, 5);
+    DWORD ignored = 0;
+    VirtualProtect(call, 5, oldProtection, &ignored);
+    patch::log::dbg("spatial sampler: accelerated callsite %08X", callAddress);
+    return true;
 }
