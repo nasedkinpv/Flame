@@ -3,6 +3,7 @@
 #include <metal_bridge/OverlayUnmatte.h>
 #include <gog_globals.h>
 #include <gog_debug.h>
+#include <dk2_functions.h>
 #include <patches/replace_mouse_dinput_to_user32.h>
 #include <d3d.h>
 
@@ -549,11 +550,14 @@ private:
         const bool active = (input.flags & DK2M_INPUT_ACTIVE) != 0;
         if (!newHost && active) {
             const uint32_t eventCount = input.event_write - inputEventWrite_;
-            if (eventCount <= 4) {
+            if (eventCount <= DK2M_INPUT_EVENT_CAPACITY) {
                 for (uint32_t serial = inputEventWrite_ + 1; serial != input.event_write + 1; ++serial) {
-                    const DK2MInputEvent &event = input.events[(serial - 1) % 4];
+                    const DK2MInputEvent &event =
+                        input.events[(serial - 1) % DK2M_INPUT_EVENT_CAPACITY];
                     if (event.type == DK2M_INPUT_EVENT_BUTTON) applyButton(event.code, event.value);
                     else if (event.type == DK2M_INPUT_EVENT_KEY) applyKey(event.code, event.value != 0);
+                    else if (event.type == DK2M_INPUT_EVENT_CHAR)
+                        dk2::MyInputManagerCb_static_windowMsgW(WM_CHAR, event.value);
                 }
             }
         }

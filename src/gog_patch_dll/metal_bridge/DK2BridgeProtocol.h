@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 7u
+#define DK2M_VERSION 8u
 #define DK2M_TIMING_QUANTUM_US 8u
 #define DK2M_SLOT_COUNT 3u
 // A 1600x1200 High-Res frame can introduce 9-12 MiB of 128x128 surfaces while
@@ -16,6 +16,7 @@
 #define DK2M_FVF_VERTEX2C 0x344u
 #define DK2M_OVERLAY_TEXTURE_ID 0xFFFFFFFEu
 #define DK2M_CURSOR_TEXTURE_ID 0xFFFFFFFDu
+#define DK2M_INPUT_EVENT_CAPACITY 64u
 
 enum DK2MCommandType {
     DK2M_COMMAND_CLEAR = 1,
@@ -35,6 +36,7 @@ enum DK2MInputFlags {
 enum DK2MInputEventType {
     DK2M_INPUT_EVENT_BUTTON = 1,
     DK2M_INPUT_EVENT_KEY = 2,
+    DK2M_INPUT_EVENT_CHAR = 3,
 };
 
 #pragma pack(push, 4)
@@ -68,7 +70,7 @@ typedef struct DK2MInputState {
     uint32_t host_pid;
     uint8_t keys[32];
     uint32_t event_write;
-    DK2MInputEvent events[4];
+    DK2MInputEvent events[DK2M_INPUT_EVENT_CAPACITY];
     uint32_t heartbeat;
 } DK2MInputState;
 
@@ -176,8 +178,8 @@ typedef struct DK2MTextureStageStateCommand {
 #if defined(__cplusplus)
 static_assert(sizeof(DK2MFrameSlot) == 40, "bridge slot layout changed");
 static_assert(sizeof(DK2MInputEvent) == 8, "bridge input event layout changed");
-static_assert(sizeof(DK2MInputState) == 112, "bridge input state layout changed");
-static_assert(sizeof(DK2MFileHeader) == 280, "bridge header layout changed");
+static_assert(sizeof(DK2MInputState) == 592, "bridge input state layout changed");
+static_assert(sizeof(DK2MFileHeader) == 760, "bridge header layout changed");
 static_assert(sizeof(DK2MCommandHeader) == 8, "bridge command layout changed");
 static_assert(sizeof(DK2MClearCommand) == 24, "bridge clear layout changed");
 static_assert(sizeof(DK2MVertex1C) == 28, "DK2 Vertex1C layout changed");

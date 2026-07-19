@@ -859,7 +859,8 @@ bool inputLogEnabled() {
 
 - (void)appendInputEvent:(uint16_t)type code:(uint16_t)code value:(int32_t)value {
     const uint32_t write = ++_input.event_write;
-    DK2MInputEvent *event = &_input.events[(write - 1) % 4];
+    DK2MInputEvent *event =
+        &_input.events[(write - 1) % DK2M_INPUT_EVENT_CAPACITY];
     event->type = type;
     event->code = code;
     event->value = value;
@@ -1056,15 +1057,27 @@ bool inputLogEnabled() {
 }
 
 - (void)keyDown:(NSEvent *)event {
-    if (!_keyboard) [self setKey:dikForMacKeyCode(event.keyCode) pressed:YES];
+    // GameController supplies low-latency scan codes, while AppKit is the
+    // authoritative source for translated text. setKey de-duplicates the two
+    // paths, and WM_CHAR events keep DK2 text fields (save names, chat) usable.
+    [self setKey:dikForMacKeyCode(event.keyCode) pressed:YES];
+    if ((event.modifierFlags & NSEventModifierFlagCommand) != 0) return;
+    NSString *characters = event.characters;
+    for (NSUInteger index = 0; index < characters.length; ++index) {
+        unichar character = [characters characterAtIndex:index];
+        if (character == 0x7F) character = 0x08; // Cocoa delete -> WM_CHAR backspace
+        if (character < 0x20 && character != 0x08 && character != 0x09 &&
+            character != 0x0D && character != 0x1B) continue;
+        [self appendInputEvent:DK2M_INPUT_EVENT_CHAR code:0 value:character];
+    }
+    [self publishCurrentInput];
 }
 
 - (void)keyUp:(NSEvent *)event {
-    if (!_keyboard) [self setKey:dikForMacKeyCode(event.keyCode) pressed:NO];
+    [self setKey:dikForMacKeyCode(event.keyCode) pressed:NO];
 }
 
 - (void)flagsChanged:(NSEvent *)event {
-    if (_keyboard) return;
     const NSEventModifierFlags mask = modifierMaskForMacKeyCode(event.keyCode);
     if (mask != 0) [self setKey:dikForMacKeyCode(event.keyCode)
                         pressed:(event.modifierFlags & mask) != 0];

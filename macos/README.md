@@ -2,7 +2,7 @@
 
 The current native pipeline keeps the original 32-bit game simulation isolated in Wine and renders it in a separate arm64 AppKit/Metal 4 host:
 
-`DK2 + Flame (i386/Wine) → shared protocol v7 → AppKit + Metal 4 (arm64)`
+`DK2 + Flame (i386/Wine) → shared protocol v8 → AppKit + Metal 4 (arm64)`
 
 Flame captures the game's Direct3D 3 command stream without asking WineD3D to render it. The native host owns presentation, scaling, focus, keyboard and mouse input. Absolute pointer coordinates use AppKit, raw relative motion and keyboard state use GameController, and scrolling uses AppKit's precise wheel events.
 
