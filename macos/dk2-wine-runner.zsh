@@ -1,6 +1,6 @@
 #!/bin/zsh
-# Shared wine runner: launched BY the Metal host (--game-runner=) so the whole
-# wine chain lives in the app's coalition and gets the Game Mode boost.
+# Shared wine runner: launched BY the Metal host (--game-runner=) so lifecycle
+# and termination stay tied to the native app. Game Mode is intentionally off.
 # Configuration comes from the environment (passed via --runner-env=):
 #   DK2_LEVEL, DK2_SHADOW_LEVEL, DK2_WINE_BIN, DK2_METAL_PREFIX
 # Stays alive until every wine process exits (wineserver -w), which lets the
@@ -28,7 +28,7 @@ fail() {
 
 /bin/mkdir -p "${LOG_DIR}"
 # kill any wineserver left over from terminal sessions: a game forked by a
-# stale wineserver would inherit the terminal's coalition and lose the boost
+# stale wineserver would escape the app lifecycle and retain old bridge state
 env WINEPREFIX="${PREFIX}" "${WINESERVER}" -k >/dev/null 2>&1 || true
 env WINEPREFIX="${PREFIX}" "${WINESERVER}" -w >/dev/null 2>&1 || true
 

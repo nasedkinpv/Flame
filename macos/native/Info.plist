@@ -24,8 +24,10 @@
 	<string>public.app-category.games</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
+	<key>GCSupportsGameMode</key>
+	<false/>
 	<key>LSSupportsGameMode</key>
-	<true/>
+	<false/>
 	<key>MetalCaptureEnabled</key>
 	<false/>
 	<key>NSHighResolutionCapable</key>

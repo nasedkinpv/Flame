@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -49,6 +50,12 @@ struct CursorSnapshot {
     RECT rect = {};
     uint32_t width = 0;
     uint32_t height = 0;
+    uint32_t displayWidth = 0;
+    uint32_t displayHeight = 0;
+    int32_t mouseX = 0;
+    int32_t mouseY = 0;
+    int32_t hotspotX = 0;
+    int32_t hotspotY = 0;
     bool visible = false;
     bool matteWhite = false;
     std::vector<uint8_t> pixels;
@@ -212,6 +219,7 @@ public:
         if (!active_) return;
         const auto overlayStarted = PhaseClock::now();
         emitOverlay();
+        emitCursor();
         addOverlayTiming(phaseMicroseconds(overlayStarted));
         ++frame_;
         if (frame_ == 0) ++frame_;
@@ -301,6 +309,49 @@ public:
             cursorCaptureLogged_ = true;
         }
         cursor_ = std::move(captured);
+    }
+
+    bool cursor(IDirectDrawSurface *source, DWORD width, DWORD height, DWORD colorKey,
+                LONG mouseX, LONG mouseY, LONG hotspotX, LONG hotspotY) {
+        if (!source || !width || !height) return false;
+        IDirectDrawSurface4 *surface4 = nullptr;
+        if (FAILED(source->QueryInterface(IID_IDirectDrawSurface4,
+                                          reinterpret_cast<void **>(&surface4))) ||
+            !surface4) return false;
+        CursorSnapshot captured;
+        const bool ok = captureNativeCursor(surface4, width, height, colorKey, captured);
+        surface4->Release();
+        if (!ok) return false;
+
+        captured.mouseX = mouseX;
+        captured.mouseY = mouseY;
+        captured.hotspotX = hotspotX;
+        captured.hotspotY = hotspotY;
+        normalizeCursorSize(captured);
+        captured.rect = {mouseX - hotspotX, mouseY - hotspotY,
+                         mouseX - hotspotX + static_cast<LONG>(width),
+                         mouseY - hotspotY + static_cast<LONG>(height)};
+        captured.visible = true;
+
+        const uint64_t geometry = static_cast<uint64_t>(captured.width) |
+                                  (static_cast<uint64_t>(captured.height) << 16) |
+                                  (static_cast<uint64_t>(captured.displayWidth) << 32) |
+                                  (static_cast<uint64_t>(captured.displayHeight) << 48);
+        std::lock_guard<std::mutex> lock(overlayMutex_);
+        if (geometry != lastCursorGeometry_) {
+            gog_debugf("Metal cursor: source %ux%u, logical %ux%u, hotspot %d,%d",
+                       captured.width, captured.height,
+                       captured.displayWidth, captured.displayHeight,
+                       captured.hotspotX, captured.hotspotY);
+            lastCursorGeometry_ = geometry;
+        }
+        cursor_ = std::move(captured);
+        return true;
+    }
+
+    void hideCursor() {
+        std::lock_guard<std::mutex> lock(overlayMutex_);
+        cursor_.visible = false;
     }
 
     static RECT unionRect(const RECT &a, const RECT &b) {
@@ -699,8 +750,86 @@ private:
         cursor.rect = dst;
         cursor.width = width;
         cursor.height = height;
+        cursor.displayWidth = width;
+        cursor.displayHeight = height;
+        cursor.mouseX = static_cast<int32_t>(x);
+        cursor.mouseY = static_cast<int32_t>(y);
         cursor.visible = true;
         return true;
+    }
+
+    static bool captureNativeCursor(IDirectDrawSurface4 *source, DWORD width, DWORD height,
+                                    DWORD colorKey, CursorSnapshot &cursor) {
+        DDSURFACEDESC2 info = {};
+        info.dwSize = sizeof(info);
+        if (FAILED(source->GetSurfaceDesc(&info))) return false;
+        width = std::min(width, info.dwWidth);
+        height = std::min(height, info.dwHeight);
+        if (!width || !height) return false;
+
+        RECT rect = {0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+        DDSURFACEDESC2 lock = {};
+        lock.dwSize = sizeof(lock);
+        if (FAILED(source->Lock(&rect, &lock, DDLOCK_READONLY | DDLOCK_WAIT, nullptr)))
+            return false;
+        const bool source32 = lock.lpSurface && lock.lPitch >= 0 &&
+                              lock.ddpfPixelFormat.dwRGBBitCount == 32 &&
+                              lock.ddpfPixelFormat.dwBBitMask == 0x000000FF &&
+                              lock.ddpfPixelFormat.dwGBitMask == 0x0000FF00 &&
+                              lock.ddpfPixelFormat.dwRBitMask == 0x00FF0000;
+        if (!source32) {
+            source->Unlock(&rect);
+            return false;
+        }
+
+        cursor.width = width;
+        cursor.height = height;
+        cursor.displayWidth = width;
+        cursor.displayHeight = height;
+        cursor.pixels.resize(static_cast<size_t>(width) * height * 4);
+        const uint32_t rgbMask = lock.ddpfPixelFormat.dwRBitMask |
+                                 lock.ddpfPixelFormat.dwGBitMask |
+                                 lock.ddpfPixelFormat.dwBBitMask;
+        const uint32_t keyLow = colorKey & rgbMask;
+        for (uint32_t row = 0; row < height; ++row) {
+            const auto *input = reinterpret_cast<const uint32_t *>(
+                static_cast<const uint8_t *>(lock.lpSurface) +
+                static_cast<size_t>(row) * lock.lPitch);
+            auto *output = cursor.pixels.data() + static_cast<size_t>(row) * width * 4;
+            for (uint32_t column = 0; column < width; ++column) {
+                const uint32_t raw = input[column];
+                const uint32_t rgb = raw & rgbMask;
+                std::memcpy(output + column * 4, &raw, 3);
+                output[column * 4 + 3] = rgb == keyLow ? 0 : 0xFF;
+            }
+        }
+        source->Unlock(&rect);
+        return true;
+    }
+
+    void normalizeCursorSize(CursorSnapshot &cursor) const {
+        struct CursorSize { uint16_t width; uint16_t height; };
+        static constexpr CursorSize originalSizes[] = {
+            {82, 53}, {87, 104}, {64, 64}, {87, 95}, {88, 103},
+            {126, 99}, {83, 39}, {88, 65}, {84, 86}, {63, 100},
+            {63, 43}, {74, 70}, {42, 20},
+        };
+        if (width_ <= 640 || height_ <= 480) return;
+        const float scaleX = static_cast<float>(width_) / 640.0f;
+        const float scaleY = static_cast<float>(height_) / 480.0f;
+        for (const CursorSize size : originalSizes) {
+            const int expectedWidth = static_cast<int>(std::lround(size.width * scaleX));
+            const int expectedHeight = static_cast<int>(std::lround(size.height * scaleY));
+            if (std::abs(static_cast<int>(cursor.width) - expectedWidth) > 2 ||
+                std::abs(static_cast<int>(cursor.height) - expectedHeight) > 2) continue;
+            cursor.displayWidth = size.width;
+            cursor.displayHeight = size.height;
+            cursor.hotspotX = static_cast<int32_t>(std::lround(
+                cursor.hotspotX * static_cast<float>(size.width) / cursor.width));
+            cursor.hotspotY = static_cast<int32_t>(std::lround(
+                cursor.hotspotY * static_cast<float>(size.height) / cursor.height));
+            return;
+        }
     }
 
     static void stripCursor(TextureCache &surface, const CursorSnapshot &cursor,
@@ -834,7 +963,6 @@ private:
                 overlayChanged_[static_cast<size_t>(tileY) * overlayTileColumns_ + tileX] = 1;
             }
         }
-        compositeCursor(cursor);
         for (size_t tile = 0; tile < overlayTiles_.size(); ++tile) {
             if (!overlayChanged_[tile]) continue;
             if (++overlayTiles_[tile].version == 0) overlayTiles_[tile].version = 1;
@@ -1094,6 +1222,63 @@ private:
         draw(DK2M_FVF_VERTEX1C, vertices, 4, indices, 6, 0);
     }
 
+    void emitCursor() {
+        CursorSnapshot cursor;
+        {
+            std::lock_guard<std::mutex> lock(overlayMutex_);
+            cursor = cursor_;
+        }
+        if (!cursor.visible || cursor.pixels.empty() ||
+            !cursor.displayWidth || !cursor.displayHeight) return;
+
+        constexpr WORD indices[] = {0, 1, 2, 0, 2, 3};
+        const float left = static_cast<float>(cursor.mouseX - cursor.hotspotX);
+        const float top = static_cast<float>(cursor.mouseY - cursor.hotspotY);
+        const float right = left + static_cast<float>(cursor.displayWidth);
+        const float bottom = top + static_cast<float>(cursor.displayHeight);
+        const DK2MVertex1C vertices[] = {
+            {left, top, 0.0f, 1.0f, 0xFFFFFFFFu, 0.0f, 0.0f},
+            {right, top, 0.0f, 1.0f, 0xFFFFFFFFu, 1.0f, 0.0f},
+            {right, bottom, 0.0f, 1.0f, 0xFFFFFFFFu, 1.0f, 1.0f},
+            {left, bottom, 0.0f, 1.0f, 0xFFFFFFFFu, 0.0f, 1.0f},
+        };
+        const uint32_t dataSize = static_cast<uint32_t>(cursor.pixels.size());
+        const uint32_t updateBytes = sizeof(DK2MTextureUpdateCommand) + dataSize;
+        constexpr uint32_t stateBytes =
+            sizeof(DK2MSetTextureCommand) + 6 * sizeof(DK2MRenderStateCommand) +
+            6 * sizeof(DK2MTextureStageStateCommand);
+        const uint32_t drawBytes = sizeof(DK2MDrawIndexedCommand) +
+                                   sizeof(vertices) + sizeof(indices);
+        if (used_ + updateBytes + stateBytes + drawBytes > DK2M_SLOT_CAPACITY) return;
+
+        DK2MTextureUpdateCommand update = {};
+        update.header.type = DK2M_COMMAND_TEXTURE_UPDATE;
+        update.header.size = updateBytes;
+        update.texture_id = DK2M_CURSOR_TEXTURE_ID;
+        update.width = cursor.width;
+        update.height = cursor.height;
+        update.row_pitch = cursor.width * 4;
+        update.data_size = dataSize;
+        append(&update, sizeof(update));
+        append(cursor.pixels.data(), dataSize);
+        ++commandCount_;
+
+        emitTexture(0, DK2M_CURSOR_TEXTURE_ID);
+        emitRenderState(D3DRENDERSTATE_ZENABLE, FALSE);
+        emitRenderState(D3DRENDERSTATE_ZWRITEENABLE, FALSE);
+        emitRenderState(D3DRENDERSTATE_ALPHABLENDENABLE, TRUE);
+        emitRenderState(D3DRENDERSTATE_SRCBLEND, D3DBLEND_SRCALPHA);
+        emitRenderState(D3DRENDERSTATE_DESTBLEND, D3DBLEND_INVSRCALPHA);
+        emitRenderState(D3DRENDERSTATE_CULLMODE, D3DCULL_NONE);
+        emitTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+        emitTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+        emitTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+        emitTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+        emitTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+        emitTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+        draw(DK2M_FVF_VERTEX1C, vertices, 4, indices, 6, 0);
+    }
+
     void append(const void *data, uint32_t size) {
         std::memcpy(static_cast<uint8_t *>(view_) + DK2M_SLOT_OFFSET(slotIndex_) + used_, data, size);
         used_ += size;
@@ -1144,6 +1329,7 @@ private:
     CursorSnapshot cursor_;
     bool cursorCaptureLogged_ = false;
     bool cursorCaptureFailureLogged_ = false;
+    uint64_t lastCursorGeometry_ = 0;
     RECT compositedCursorRect_ = {};
     std::vector<uint8_t> cursorUnderlay_;
     RECT parityDrawn_[2] = {};
@@ -1214,6 +1400,14 @@ void overlayBlt(IDirectDrawSurface4 *destination, const RECT *destinationRect,
                                    ? DDBLTFAST_SRCCOLORKEY : 0;
     producer.overlayBltFast(destination, x, y, source, sourceRect, captureFlags);
 }
+
+bool cursor(IDirectDrawSurface *source, DWORD width, DWORD height, DWORD colorKey,
+            LONG mouseX, LONG mouseY, LONG hotspotX, LONG hotspotY) {
+    return producer.cursor(source, width, height, colorKey,
+                           mouseX, mouseY, hotspotX, hotspotY);
+}
+
+void hideCursor() { producer.hideCursor(); }
 
 void captureOverlay(IDirectDrawSurface4 *surface) {
     const auto started = PhaseClock::now();

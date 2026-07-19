@@ -2,7 +2,7 @@
 
 The current native pipeline keeps the original 32-bit game simulation isolated in Wine and renders it in a separate arm64 AppKit/Metal 4 host:
 
-`DK2 + Flame (i386/Wine) → shared protocol v4 → AppKit + Metal 4 (arm64)`
+`DK2 + Flame (i386/Wine) → shared protocol v7 → AppKit + Metal 4 (arm64)`
 
 Flame captures the game's Direct3D 3 command stream without asking WineD3D to render it. The native host owns presentation, scaling, focus, keyboard and mouse input. Absolute pointer coordinates use AppKit, raw relative motion and keyboard state use GameController, and scrolling uses AppKit's precise wheel events.
 
@@ -47,6 +47,21 @@ builds take the matching Release Flame payload from the CI cache; set
 `DK2_FLAME_PAYLOAD=/path/to/artifact` to select one explicitly. A Developer ID
 can be supplied with `DK2_CODESIGN_IDENTITY`; local builds use ad-hoc signing.
 
+## Cursor assets
+
+The game cursor is replayed as a final independent Metal quad, so it no longer
+inherits overlay scaling or its black/white matte trail. Original RGBA cursor
+sheets can be derived locally from the user's game for future HD replacements:
+
+```sh
+python3 tools/extract_dk2_cursors.py "/path/to/Dungeon Keeper 2" scratchpad/cursors --split-frames
+```
+
+The command writes the 15 original sheets, split animation frames, hotspots,
+dimensions and hashes. These derived game assets are intentionally not stored
+in the repository. Runtime cursor textures keep participating in the existing
+hash-based `textures-hd` lookup.
+
 ## Isolation and data
 
 - Native host: `macos/native/build/Dungeon Keeper II.app`
@@ -63,7 +78,9 @@ The private prefix exposes only its `C:` drive. Wine's `Z:` drive and links to m
 - Native cursor, absolute UI clicks, raw mouse deltas, wheel zoom, and DIK-compatible keyboard events.
 - Focus loss releases all pressed input; a heartbeat also clears stuck state after a host crash.
 - Wine is retained only for the original i386 simulation, audio, and resource loading.
-- `LSSupportsGameMode` and the games application category are enabled in `Info.plist`.
+- Native full screen stays available, but Game Mode is explicitly disabled with
+  `GCSupportsGameMode` and `LSSupportsGameMode`: DK2's Wine simulation and the
+  separate Metal replay process schedule more smoothly without Game Mode.
 
 Apple's D3DMetal translation path is not used because DK2 is a 32-bit Direct3D 3/DirectDraw title. Metal 4 is used directly by the native renderer, following the lifecycle, display-link, residency, and input patterns in the GPTK 4 beta samples mounted with the toolkit.
 

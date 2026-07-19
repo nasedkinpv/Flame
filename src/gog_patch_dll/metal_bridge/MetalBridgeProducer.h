@@ -26,6 +26,11 @@ void overlayBltFast(IDirectDrawSurface4 *destination, DWORD x, DWORD y,
 void overlayBlt(IDirectDrawSurface4 *destination, const RECT *destinationRect,
                 IDirectDrawSurface4 *source, const RECT *sourceRect,
                 DWORD flags);
+// Publishes the current game cursor as an independent final Metal draw.  The
+// caller can then skip the legacy Blt into the black/white overlay surface.
+bool cursor(IDirectDrawSurface *source, DWORD width, DWORD height, DWORD colorKey,
+            LONG mouseX, LONG mouseY, LONG hotspotX, LONG hotspotY);
+void hideCursor();
 void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
                  const WORD *indices, DWORD indexCount, DWORD flags);
 void captureOverlay(IDirectDrawSurface4 *surface);

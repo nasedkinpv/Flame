@@ -1023,6 +1023,10 @@ bool inputLogEnabled() {
 }
 
 - (void)mouseDown:(NSEvent *)event {
+    // acceptsFirstMouse lets the click reach us while the window is inactive,
+    // but windowDidBecomeKey may run afterwards.  Arm the bridge here so the
+    // activation click is not discarded.
+    if ((_input.flags & DK2M_INPUT_ACTIVE) == 0) [self setInputActive:YES];
     if ([self updatePointerFromEvent:event])
         [self setButton:0 pressed:YES doubleClick:event.clickCount >= 2];
 }
@@ -1031,6 +1035,7 @@ bool inputLogEnabled() {
     [self setButton:0 pressed:NO doubleClick:NO];
 }
 - (void)rightMouseDown:(NSEvent *)event {
+    if ((_input.flags & DK2M_INPUT_ACTIVE) == 0) [self setInputActive:YES];
     if ([self updatePointerFromEvent:event])
         [self setButton:1 pressed:YES doubleClick:event.clickCount >= 2];
 }
@@ -1039,6 +1044,7 @@ bool inputLogEnabled() {
     [self setButton:1 pressed:NO doubleClick:NO];
 }
 - (void)otherMouseDown:(NSEvent *)event {
+    if ((_input.flags & DK2M_INPUT_ACTIVE) == 0) [self setInputActive:YES];
     if ([self updatePointerFromEvent:event])
         [self setButton:event.buttonNumber == 2 ? 2 : 3
                  pressed:YES
@@ -1504,18 +1510,21 @@ static void *renderWorker(void *context) {
                         const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
                         DynamicTexture &dyn = _dynamicTextures[textureUpdate.texture_id];
                         id<MTLTexture> hd = nil;
-                        if (!dyn.dynamic && textureUpdate.texture_id != DK2M_OVERLAY_TEXTURE_ID) {
+                        const bool cursorTexture =
+                            textureUpdate.texture_id == DK2M_CURSOR_TEXTURE_ID;
+                        if ((!dyn.dynamic || cursorTexture) &&
+                            textureUpdate.texture_id != DK2M_OVERLAY_TEXTURE_ID) {
                             hd = texhd::lookup(_device, pixels, textureUpdate.width,
                                                textureUpdate.height, textureUpdate.row_pitch);
                             if (hd) {
                                 dyn.misses = 0;
-                            } else if (++dyn.misses > 8) {
+                            } else if (++dyn.misses > 8 && !cursorTexture) {
                                 dyn.dynamic = true;
                                 NSLog(@"texture id %u flagged dynamic: hashing and HD lookup off",
                                       textureUpdate.texture_id);
                             }
                         }
-                        if (dyn.dynamic) {
+                        if ((dyn.dynamic || cursorTexture) && !hd) {
                             id<MTLTexture> current = dyn.ring[dyn.ringIndex];
                             if (current && (current.width != textureUpdate.width ||
                                             current.height != textureUpdate.height)) {
@@ -1864,8 +1873,7 @@ static void *renderWorker(void *context) {
 
 - (void)startBundledGameRunner {
     if (gGameRunnerPath) {
-        // dev flow: spawn the provided wine runner as our child so the whole
-        // wine chain inherits the app's coalition and the Game Mode boost
+        // Dev flow: keep the Wine runner tied to the native app lifecycle.
         _gameRunner = [[NSTask alloc] init];
         _gameRunner.executableURL = [NSURL fileURLWithPath:gGameRunnerPath];
         __weak DK2AppDelegate *weakSelf = self;
@@ -1960,7 +1968,7 @@ static void *renderWorker(void *context) {
     [_view publishCurrentInput];
     [_renderer start];
     if (gStartFullscreen && !(_window.styleMask & NSWindowStyleMaskFullScreen)) {
-        // native fullscreen space - this is what engages macOS Game Mode
+        // Native full-screen Space; Info.plist explicitly opts out of Game Mode.
         [_window toggleFullScreen:nil];
     }
 }
@@ -2025,9 +2033,8 @@ int main(int argc, const char *argv[]) {
             } else if ([argument hasPrefix:@"--game-runner="]) {
                 gGameRunnerPath = [argument substringFromIndex:14];
             } else if ([argument hasPrefix:@"--runner-env="]) {
-                // K=V exported to the runner AND to this process, so the wine
-                // chain spawns inside the app's coalition (Game Mode boost)
-                // with the caller's configuration intact
+                // K=V exported to the runner and this process so the child
+                // starts with the caller's configuration intact.
                 NSString *pair = [argument substringFromIndex:13];
                 const NSRange eq = [pair rangeOfString:@"="];
                 if (eq.location != NSNotFound && eq.location > 0) {

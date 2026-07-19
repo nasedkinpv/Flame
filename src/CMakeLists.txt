@@ -50,6 +50,7 @@ add_library(${TARGET} SHARED
         dk2/Mat3x3f.cpp
         dk2/Vec3f.cpp
         dk2/RenderData.cpp
+        dk2/CursorDrawer.cpp
         dk2/Obj57BCB0.cpp
         dk2/Obj57AD20.cpp
         dk2/Obj58EF60.cpp

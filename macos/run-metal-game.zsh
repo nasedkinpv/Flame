@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Launch the Metal host as an app (LaunchServices) and let IT spawn the wine
-# chain via macos/dk2-wine-runner.zsh, so both the host and the game share the
-# app's coalition and the macOS Game Mode boost covers the game process.
+# chain via macos/dk2-wine-runner.zsh, so lifecycle and termination stay tied
+# together. Game Mode is intentionally disabled for this two-process pipeline.
 set -euo pipefail
 
 readonly SCRIPT_DIR="${0:A:h}"

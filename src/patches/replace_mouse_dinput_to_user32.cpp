@@ -195,7 +195,7 @@ void patch::replace_mouse_dinput_to_user32::inject_metal_button(DWORD button, DW
     if (button >= 4) return;
     DWORD flags = controlFlags;
     if (value == 1) flags |= DK2_IsPressed;
-    else if (value == 2) flags |= DK2_IsDblClick;
+    else if (value == 2) flags |= DK2_IsPressed | DK2_IsDblClick;
     click_mouse(DIK_DK2_LEFTMOUSE + button, flags);
 }
 

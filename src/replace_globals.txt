@@ -481,6 +481,11 @@
 # MyInputManagerCb
 #005BB1C0 int *MyInputManagerCb::initMouse(int *)
 
+# CursorDrawer
+# The Metal bridge owns the final cursor quad so the HD overlay cannot scale it
+# twice or turn movement into a temporal black/white matte trail.
+005DC530 bool CursorDrawer::drawCursorToScreenSurf()
+
 # MyDxInputManagerCb
 005BC060 int *MyDxInputManagerCb::initMouse(int *)
 005BC210 int *MyDxInputManagerCb::onWindowActivated(int *, int)
