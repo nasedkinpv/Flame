@@ -401,6 +401,11 @@
 # same reason as Obj57AD20::sub_57B6D0 above.
 005848B0 void CEngineAnimMesh::fun_5848B0(int, SceneObject2E *)
 
+# CEngineDynamicMesh
+# Route the hot low-mode mesh path through translated C++ while preserving the
+# original high-mode implementations and their raw 32-bit mode ABI.
+00582CE0 void CEngineDynamicMesh::fun_582CE0(int, SceneObject2E *)
+
 # MyScaledSurface
 0057C420 MyScaledSurface *MyScaledSurface::constructor(MyDblNamedSurface *, int)
 
