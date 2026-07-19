@@ -229,18 +229,104 @@ public:
         active_ = false;
     }
 
-    void overlay(IDirectDrawSurface4 *surface) {
-        if (!captureTexture(surface, overlayCapture_)) return;
-        if (!previousOverlay_.pixels.empty() && previousOverlayWhite_ != overlayWhite_ &&
-            overlayCapture_.width == previousOverlay_.width &&
-            overlayCapture_.height == previousOverlay_.height &&
-            overlayCapture_.rowPitch == previousOverlay_.rowPitch) {
-            const TextureCache &black = overlayWhite_ ? previousOverlay_ : overlayCapture_;
-            const TextureCache &white = overlayWhite_ ? overlayCapture_ : previousOverlay_;
-            updateOverlay(black, white);
+    void overlayCleared() {
+        drawnValid_ = false;
+        clearedThisFrame_ = true;
+    }
+
+    void overlayDrawn(const RECT *rect) {
+        if (!rect) {
+            drawnFull_ = true;
+            return;
         }
-        std::swap(previousOverlay_, overlayCapture_);
-        previousOverlayWhite_ = overlayWhite_;
+        if (rect->right <= rect->left || rect->bottom <= rect->top) return;
+        if (!drawnValid_) {
+            drawnRect_ = *rect;
+            drawnValid_ = true;
+        } else {
+            drawnRect_.left = std::min(drawnRect_.left, rect->left);
+            drawnRect_.top = std::min(drawnRect_.top, rect->top);
+            drawnRect_.right = std::max(drawnRect_.right, rect->right);
+            drawnRect_.bottom = std::max(drawnRect_.bottom, rect->bottom);
+        }
+    }
+
+    static RECT unionRect(const RECT &a, const RECT &b) {
+        return {std::min(a.left, b.left), std::min(a.top, b.top),
+                std::max(a.right, b.right), std::max(a.bottom, b.bottom)};
+    }
+
+    void overlay(IDirectDrawSurface4 *surface) {
+        const int parity = overlayWhite_ ? 1 : 0;
+        TextureCache &cache = parityCache_[parity];
+        const bool tracked = clearedThisFrame_ && !drawnFull_;
+        clearedThisFrame_ = false;
+        drawnFull_ = false;
+        const RECT drawn = drawnValid_ ? drawnRect_ : RECT{0, 0, 0, 0};
+        const bool haveDrawn = drawnValid_;
+        drawnValid_ = false;
+
+        RECT refreshed;
+        if (tracked && !cache.pixels.empty()) {
+            // partial path: everything outside the drawn region is the clear
+            // colour; only refresh the previous and current drawn areas
+            DDSURFACEDESC2 desc = {};
+            desc.dwSize = sizeof(desc);
+            if (FAILED(surface->Lock(nullptr, &desc, DDLOCK_READONLY | DDLOCK_WAIT, nullptr)))
+                return;
+            const bool dimsOk = desc.dwWidth == cache.width && desc.dwHeight == cache.height &&
+                                desc.ddpfPixelFormat.dwRGBBitCount == 32;
+            if (!dimsOk) {
+                surface->Unlock(nullptr);
+                if (!captureTexture(surface, cache)) return;
+                parityRefresh_[parity] = {0, 0, (LONG)cache.width, (LONG)cache.height};
+            } else {
+                RECT refresh = parityDrawn_[parity].right > 0
+                        ? (haveDrawn ? unionRect(parityDrawn_[parity], drawn) : parityDrawn_[parity])
+                        : (haveDrawn ? drawn : RECT{0, 0, 0, 0});
+                refresh.left = std::clamp<LONG>(refresh.left, 0, (LONG)cache.width);
+                refresh.right = std::clamp<LONG>(refresh.right, 0, (LONG)cache.width);
+                refresh.top = std::clamp<LONG>(refresh.top, 0, (LONG)cache.height);
+                refresh.bottom = std::clamp<LONG>(refresh.bottom, 0, (LONG)cache.height);
+                const DWORD clear = overlayClearColor() | 0xFF000000u;
+                const bool opaqueAlpha = desc.ddpfPixelFormat.dwRGBAlphaBitMask == 0;
+                const auto *src = static_cast<const uint8_t *>(desc.lpSurface);
+                for (LONG y = refresh.top; y < refresh.bottom; ++y) {
+                    auto *row = reinterpret_cast<uint32_t *>(
+                            cache.pixels.data() + (size_t)y * cache.rowPitch);
+                    for (LONG x = refresh.left; x < refresh.right; ++x) row[x] = clear;
+                }
+                if (haveDrawn) {
+                    for (LONG y = drawn.top; y < drawn.bottom && y < (LONG)cache.height; ++y) {
+                        if (y < 0) continue;
+                        const LONG x0 = std::max<LONG>(drawn.left, 0);
+                        const LONG x1 = std::min<LONG>(drawn.right, (LONG)cache.width);
+                        if (x1 <= x0) break;
+                        uint8_t *dst = cache.pixels.data() + (size_t)y * cache.rowPitch + x0 * 4;
+                        std::memcpy(dst, src + (size_t)y * desc.lPitch + x0 * 4,
+                                    (size_t)(x1 - x0) * 4);
+                        if (opaqueAlpha) {
+                            for (LONG x = 0; x < x1 - x0; ++x) dst[x * 4 + 3] = 0xFF;
+                        }
+                    }
+                }
+                surface->Unlock(nullptr);
+                parityDrawn_[parity] = haveDrawn ? drawn : RECT{0, 0, 0, 0};
+                parityRefresh_[parity] = refresh;
+            }
+        } else {
+            if (!captureTexture(surface, cache)) return;
+            parityDrawn_[parity] = {0, 0, (LONG)cache.width, (LONG)cache.height};
+            parityRefresh_[parity] = {0, 0, (LONG)cache.width, (LONG)cache.height};
+        }
+        refreshed = parityRefresh_[parity];
+
+        TextureCache &other = parityCache_[1 - parity];
+        if (!other.pixels.empty() && other.width == cache.width &&
+            other.height == cache.height && other.rowPitch == cache.rowPitch) {
+            const RECT process = unionRect(refreshed, parityRefresh_[1 - parity]);
+            updateOverlay(parityCache_[0], parityCache_[1], process);
+        }
     }
 
     DWORD overlayClearColor() const { return overlayWhite_ ? 0x00FFFFFF : 0x00000000; }
@@ -466,7 +552,7 @@ private:
         current = std::move(updated);
     }
 
-    void updateOverlay(const TextureCache &black, const TextureCache &white) {
+    void updateOverlay(const TextureCache &black, const TextureCache &white, RECT process) {
         if (overlay_.width != black.width || overlay_.height != black.height ||
             overlay_.rowPitch != black.rowPitch) {
             overlay_.width = black.width;
@@ -479,10 +565,13 @@ private:
             overlayChanged_.resize(overlayTiles_.size());
             overlayLine_.resize(black.rowPitch);
             overlayForceFull_ = true;
+            process = {0, 0, (LONG)black.width, (LONG)black.height};
         }
 
+        const uint32_t yBegin = (uint32_t)std::clamp<LONG>(process.top, 0, (LONG)black.height);
+        const uint32_t yEnd = (uint32_t)std::clamp<LONG>(process.bottom, 0, (LONG)black.height);
         std::fill(overlayChanged_.begin(), overlayChanged_.end(), 0);
-        for (uint32_t y = 0; y < black.height; ++y) {
+        for (uint32_t y = yBegin; y < yEnd; ++y) {
             const uint8_t *blackRow = black.pixels.data() + static_cast<size_t>(y) * black.rowPitch;
             const uint8_t *whiteRow = white.pixels.data() + static_cast<size_t>(y) * white.rowPitch;
             uint8_t *overlayRow = overlay_.pixels.data() + static_cast<size_t>(y) * overlay_.rowPitch;
@@ -803,8 +892,13 @@ private:
     std::unordered_map<uint32_t, uint32_t> renderStates_;
     std::unordered_map<uint64_t, uint32_t> textureStageStates_;
     TextureCache overlay_;
-    TextureCache previousOverlay_;
-    TextureCache overlayCapture_;
+    TextureCache parityCache_[2];
+    RECT parityDrawn_[2] = {};
+    RECT parityRefresh_[2] = {};
+    RECT drawnRect_ = {};
+    bool drawnValid_ = false;
+    bool drawnFull_ = false;
+    bool clearedThisFrame_ = false;
     std::vector<OverlayTileState> overlayTiles_;
     std::vector<uint8_t> overlayChanged_;
     std::vector<uint8_t> overlayLine_;
@@ -814,7 +908,6 @@ private:
     uint32_t overlayLastSentFrame_ = 0;
     bool overlayForceFull_ = true;
     bool overlayWhite_ = false;
-    bool previousOverlayWhite_ = false;
     bool active_ = false;
 };
 
@@ -845,6 +938,10 @@ void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
     producer.draw(fvf, vertices, vertexCount, indices, indexCount, flags);
     producer.addDrawCopyTiming(phaseMicroseconds(started));
 }
+
+void overlayCleared() { producer.overlayCleared(); }
+
+void overlayDrawn(const RECT *rect) { producer.overlayDrawn(rect); }
 
 void captureOverlay(IDirectDrawSurface4 *surface) {
     const auto started = PhaseClock::now();

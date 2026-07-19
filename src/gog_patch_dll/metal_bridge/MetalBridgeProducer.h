@@ -11,6 +11,12 @@ bool isEnabled();
 void pollInput();
 void beginFrame(DWORD width, DWORD height);
 DWORD overlayClearColor();
+// dirty-region reporting for the overlay surface: the per-frame colorfill
+// resets the drawn region, every Lock/Blt on the overlay unions into it, and
+// the capture then reads only what was actually drawn instead of the full
+// screen every frame
+void overlayCleared();
+void overlayDrawn(const RECT *rect);  // null = whole surface
 void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
                  const WORD *indices, DWORD indexCount, DWORD flags);
 void captureOverlay(IDirectDrawSurface4 *surface);

@@ -245,6 +245,7 @@ HRESULT FakeSurface::AddOverlayDirtyRect(LPRECT) {
 
 HRESULT FakeSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE2 srcSurf_, LPRECT srcRect, DWORD flags, LPDDBLTFX bitblt) {
     auto *srcSurf = (FakeSurface *) srcSurf_;
+    if (this == FakeSurface::instance_cpy) metal_bridge::overlayDrawn(dstRect);
     HRESULT hr;
     if (!orig::pIDirectDrawSurface4_640x480 || !this->f84_isModSurf || !srcSurf) {
         IDirectDrawSurface4 *src = nullptr;
@@ -293,6 +294,21 @@ HRESULT FakeSurface::BltFast(DWORD x, DWORD y, LPDIRECTDRAWSURFACE2 srcSurf_, LP
     }
     hr = this->f88_orig_surf->BltFast(x, y, f88_orig_surf, srcRect, type);
     if (FAILED(hr)) return hr;
+    if (this == FakeSurface::instance_cpy) {
+        RECT dst;
+        if (srcRect) {
+            dst = {(LONG)x, (LONG)y,
+                   (LONG)x + (srcRect->right - srcRect->left),
+                   (LONG)y + (srcRect->bottom - srcRect->top)};
+        } else if (srcSurf) {
+            dst = {(LONG)x, (LONG)y,
+                   (LONG)(x + srcSurf->f8_surfDesc.dwWidth),
+                   (LONG)(y + srcSurf->f8_surfDesc.dwHeight)};
+        } else {
+            dst = {0, 0, 0, 0};
+        }
+        metal_bridge::overlayDrawn(dst.right > dst.left ? &dst : nullptr);
+    }
     if (this->f84_isModSurf) Fake_Redraw();
     return hr;
 }
@@ -465,6 +481,8 @@ HRESULT FakeSurface::SetPalette(LPDIRECTDRAWPALETTE) {
 HRESULT FakeSurface::Unlock(LPVOID) {
     metal_bridge::textureDirty(this->f88_orig_surf,
                                this->f9C_pLockedRect ? nullptr : &this->f8_surfDesc);
+    if (this == FakeSurface::instance_cpy)
+        metal_bridge::overlayDrawn(this->f9C_pLockedRect);
     HRESULT hr = this->f88_orig_surf->Unlock(this->f9C_pLockedRect);
     if (FAILED(hr)) return hr;
     this->f9C_pLockedRect = nullptr;

@@ -225,6 +225,7 @@ HRESULT FakeDevice3::BeginScene(void) {
             fill.dwFillColor = metal_bridge::overlayClearColor();
             FakeSurface::instance_cpy->orig()->Blt(
                 nullptr, nullptr, nullptr, DDBLT_COLORFILL | DDBLT_WAIT, &fill);
+            metal_bridge::overlayCleared();
         }
         g_isFlip = false;
         g_isSceneDrawing = true;
