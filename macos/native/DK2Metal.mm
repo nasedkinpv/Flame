@@ -127,6 +127,81 @@ void writePng(NSString *file, NSMutableData *copy, uint32_t width, uint32_t heig
     });
 }
 
+// Collage classifier (same heuristics as tools/curate_textures.py): a page
+// with a few 32x32 blocks whose mean colour is alien to an otherwise
+// homogeneous page, or with sprite colorkey pixels, is a cache-page collage
+// and goes to collage/ instead of polluting the upscale set.
+bool looksLikeCollage(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch) {
+    if (width < 64 || height < 64) return false;
+    int colorkey = 0;
+    float means[64][3];
+    const uint32_t cols = width / 32, rows = height / 32;
+    if (cols * rows > 64) return false;
+    for (uint32_t by = 0; by < rows; ++by) {
+        for (uint32_t bx = 0; bx < cols; ++bx) {
+            uint32_t r = 0, g = 0, b = 0;
+            for (uint32_t y = by * 32; y < by * 32 + 32; ++y) {
+                const uint8_t *px = pixels + (size_t)y * pitch + (size_t)bx * 32 * 4;
+                for (uint32_t x = 0; x < 32; ++x, px += 4) {
+                    b += px[0]; g += px[1]; r += px[2];
+                    if ((px[2] < 60 && px[1] > 200 && px[0] > 200) ||
+                        (px[2] > 200 && px[1] < 60 && px[0] > 200) ||
+                        (px[2] < 60 && px[1] > 220 && px[0] < 60))
+                        ++colorkey;
+                }
+            }
+            float *m = means[by * cols + bx];
+            m[0] = r / 1024.0f; m[1] = g / 1024.0f; m[2] = b / 1024.0f;
+        }
+    }
+    if (colorkey > 8) return true;
+    const uint32_t n = cols * rows;
+    float med[3];
+    for (int c = 0; c < 3; ++c) {
+        float v[64];
+        for (uint32_t i = 0; i < n; ++i) v[i] = means[i][c];
+        std::nth_element(v, v + n / 2, v + n);
+        med[c] = v[n / 2];
+    }
+    float devs[64];
+    for (uint32_t i = 0; i < n; ++i) {
+        devs[i] = (fabsf(means[i][0] - med[0]) + fabsf(means[i][1] - med[1]) +
+                   fabsf(means[i][2] - med[2])) / 3.0f;
+    }
+    uint32_t outliers = 0, restCount = 0;
+    float rest[64];
+    for (uint32_t i = 0; i < n; ++i) {
+        if (devs[i] > 28.0f) ++outliers;
+        else rest[restCount++] = devs[i];
+    }
+    if (outliers < 1 || outliers > 6 || restCount == 0) return false;
+    std::nth_element(rest, rest + restCount / 2, rest + restCount);
+    return rest[restCount / 2] < 10.0f;
+}
+
+void emitSprite(NSString *dir, const uint8_t *pixels, uint32_t pitch, uint32_t textureId,
+                uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
+    const uint32_t sw = x1 - x0, sh = y1 - y0;
+    if (!sw || !sh) return;
+    NSMutableData *copy = [NSMutableData dataWithLength:(NSUInteger)sw * sh * 4];
+    auto *out = static_cast<uint8_t *>(copy.mutableBytes);
+    for (uint32_t y = 0; y < sh; ++y) {
+        std::memcpy(out + (size_t)y * sw * 4,
+                    pixels + (size_t)(y0 + y) * pitch + x0 * 4, (size_t)sw * 4);
+    }
+    const uint64_t hash = contentHash(out, sw, sh, sw * 4);
+    static std::unordered_set<uint64_t> seenSprites;
+    if (!seenSprites.insert(hash).second) return;
+    NSString *spriteDir = [dir stringByAppendingPathComponent:@"sprites"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:spriteDir
+                              withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *file = [spriteDir stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"%016llx_%ux%u_at_%u_%u.png",
+                                       hash, sw, sh, x0, y0]];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:file]) return;
+    writePng(file, copy, sw, sh, hash, textureId, "sprite");
+}
+
 // render thread only
 void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch,
           uint32_t textureId) {
@@ -136,28 +211,50 @@ void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch
     IdState &state = perId[textureId];
 
     // diff against the previous content of this id: partial updates are
-    // sprite frames baked into a shared cache page - dump only the changed
-    // rect as its own asset instead of the combinatorial page
+    // sprite frames baked into a shared cache page. Changed rows are split
+    // into bands separated by clean gaps, so a tile blit and a sprite blit
+    // landing in one update become separate assets instead of one collage.
     bool partial = false;
-    uint32_t bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+    struct Band { uint32_t x0, y0, x1, y1; };
+    Band bands[4];
+    uint32_t bandCount = 0;
     const bool havePrev = state.prevWidth == width && state.prevHeight == height &&
                           !state.prev.empty();
     if (havePrev) {
-        bx0 = width; by0 = height;
+        std::vector<uint32_t> rowX0(height), rowX1(height);
+        bool any = false;
         for (uint32_t y = 0; y < height; ++y) {
             const uint8_t *n = pixels + (size_t)y * pitch;
             const uint8_t *p = state.prev.data() + (size_t)y * width * 4;
+            rowX0[y] = 1; rowX1[y] = 0;
             if (!std::memcmp(n, p, (size_t)width * 4)) continue;
             uint32_t x = 0, e = width;
             while (x < width && !std::memcmp(n + x * 4, p + x * 4, 4)) ++x;
             while (e > x && !std::memcmp(n + (e - 1) * 4, p + (e - 1) * 4, 4)) --e;
-            bx0 = std::min(bx0, x); bx1 = std::max(bx1, e);
-            by0 = std::min(by0, y); by1 = y + 1;
+            rowX0[y] = x; rowX1[y] = e;
+            any = true;
         }
-        if (bx0 >= bx1) {
-            return;  // no change at all
+        if (!any) return;  // no change at all
+        uint64_t changedArea = 0;
+        uint32_t y = 0;
+        bool overflow = false;
+        while (y < height) {
+            if (rowX0[y] >= rowX1[y]) { ++y; continue; }
+            Band band{rowX0[y], y, rowX1[y], y + 1};
+            uint32_t gap = 0;
+            for (uint32_t r = y + 1; r < height && gap < 8; ++r) {
+                if (rowX0[r] >= rowX1[r]) { ++gap; continue; }
+                gap = 0;
+                band.x0 = std::min(band.x0, rowX0[r]);
+                band.x1 = std::max(band.x1, rowX1[r]);
+                band.y1 = r + 1;
+            }
+            changedArea += (uint64_t)(band.x1 - band.x0) * (band.y1 - band.y0);
+            if (bandCount < 4) bands[bandCount++] = band;
+            else overflow = true;
+            y = band.y1 + 1;
         }
-        partial = (uint64_t)(bx1 - bx0) * (by1 - by0) * 2 < (uint64_t)width * height;
+        partial = !overflow && changedArea * 2 < (uint64_t)width * height;
     }
     // remember current content (tight copy)
     state.prev.resize((size_t)width * height * 4);
@@ -168,32 +265,24 @@ void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch
     }
 
     if (partial) {
-        // sprite frame: dump just the changed rect, dedup globally
-        const uint32_t sw = bx1 - bx0, sh = by1 - by0;
-        NSMutableData *copy = [NSMutableData dataWithLength:(NSUInteger)sw * sh * 4];
-        auto *out = static_cast<uint8_t *>(copy.mutableBytes);
-        for (uint32_t y = 0; y < sh; ++y) {
-            std::memcpy(out + (size_t)y * sw * 4,
-                        pixels + (size_t)(by0 + y) * pitch + bx0 * 4, (size_t)sw * 4);
+        for (uint32_t i = 0; i < bandCount; ++i) {
+            emitSprite(dir, pixels, pitch, textureId,
+                       bands[i].x0, bands[i].y0, bands[i].x1, bands[i].y1);
         }
-        const uint64_t hash = contentHash(out, sw, sh, sw * 4);
-        static std::unordered_set<uint64_t> seenSprites;
-        if (!seenSprites.insert(hash).second) return;
-        NSString *spriteDir = [dir stringByAppendingPathComponent:@"sprites"];
-        [[NSFileManager defaultManager] createDirectoryAtPath:spriteDir
-                                  withIntermediateDirectories:YES attributes:nil error:nil];
-        NSString *file = [spriteDir stringByAppendingPathComponent:
-                [NSString stringWithFormat:@"%016llx_%ux%u_at_%u_%u.png",
-                                           hash, sw, sh, bx0, by0]];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:file]) return;
-        writePng(file, copy, sw, sh, hash, textureId, "sprite");
         return;
     }
 
     if (state.dynamic) return;
     const uint64_t hash = contentHash(pixels, width, height, pitch);
     if (!state.uniqueHashes.insert(hash).second) return;
-    NSString *file = [dir stringByAppendingPathComponent:
+    const bool collage = looksLikeCollage(pixels, width, height, pitch);
+    NSString *pageDir = dir;
+    if (collage) {
+        pageDir = [dir stringByAppendingPathComponent:@"collage"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:pageDir
+                                  withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    NSString *file = [pageDir stringByAppendingPathComponent:
             [NSString stringWithFormat:@"%016llx_%ux%u.png", hash, width, height]];
     state.files.push_back(file);
 
@@ -226,7 +315,7 @@ void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch
     for (uint32_t y = 0; y < height; ++y) {
         std::memcpy(out + (size_t)y * width * 4, pixels + (size_t)y * pitch, (size_t)width * 4);
     }
-    writePng(file, copy, width, height, hash, textureId, "page");
+    writePng(file, copy, width, height, hash, textureId, collage ? "collage" : "page");
 }
 
 }  // namespace texdump
