@@ -161,10 +161,10 @@
 00574200 void __cdecl setGammaRamp(const void *)
 00574310 void __cdecl textureCache_init(float, float, const char *, int)
 00575780 bool __cdecl engine_drawScene(char)
-# Per-mesh frustum culling and projection.  Four side planes are evaluated in
-# parallel while retaining the original sign-bit boundary semantics.
+# Per-mesh frustum culling.  Four side planes are evaluated in parallel while
+# retaining the original sign-bit boundary semantics.  The adjacent 575F10
+# projection implementation remains staged in CCamera.cpp for separate rollout.
 00575D70 int __cdecl Vec3f_static_sub_575D70(Vec3f *, float, uint32_t *)
-00575F10 Vec3f *__cdecl Vec3f_static_sub_575F10(Vec3f *, float, Vec3f *, float *)
 0057BF00 float *Obj57BCB0::sub_57BF00(float *, float *, float *)
 0057C190 float *Obj57BCB0::sub_57C190(float *, float *, float *)
 0057CEB0 void *__cdecl MyHeap_alloc(int)
