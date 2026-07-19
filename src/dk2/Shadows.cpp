@@ -2,8 +2,9 @@
 #include "dk2_globals.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
+#include <emmintrin.h>
+#include <limits>
 
 
 namespace {
@@ -18,30 +19,39 @@ void addCoverage(uint8_t *pixel, int subpixels) {
     *pixel = static_cast<uint8_t>(value > 255 ? 255 : value);
 }
 
-void rasterizeSubpixelRow(
-        uint8_t *row,
-        const Point2i (&points)[3],
-        int subpixelY) {
-    const double sampleY = static_cast<double>(subpixelY) + 0.5;
-    double intersections[3];
-    int count = 0;
-    for (int edge = 0; edge < 3; ++edge) {
-        const Point2i &a = points[edge];
-        const Point2i &b = points[(edge + 1) % 3];
-        const double low = std::min(a.y, b.y);
-        const double high = std::max(a.y, b.y);
-        if (!(sampleY >= low && sampleY < high)) continue;
-
-        const double t = (sampleY - static_cast<double>(a.y))
-                       / static_cast<double>(b.y - a.y);
-        intersections[count++] = static_cast<double>(a.x)
-                               + t * static_cast<double>(b.x - a.x);
+int ceilToInt(double value) {
+    if (value <= std::numeric_limits<int>::min()) {
+        return std::numeric_limits<int>::min();
     }
-    if (count < 2) return;
+    if (value >= std::numeric_limits<int>::max()) {
+        return std::numeric_limits<int>::max();
+    }
+    const int truncated = static_cast<int>(value);
+    return truncated + (static_cast<double>(truncated) < value ? 1 : 0);
+}
 
-    std::sort(intersections, intersections + count);
-    int first = static_cast<int>(std::ceil(intersections[0] - 0.5));
-    int last = static_cast<int>(std::ceil(intersections[count - 1] - 0.5)) - 1;
+void addFullPixels(uint8_t *first, uint8_t *last) {
+    const __m128i increment = _mm_set1_epi8(32);
+    while (first + 16 <= last) {
+        const __m128i pixels = _mm_loadu_si128(
+                reinterpret_cast<const __m128i *>(first));
+        _mm_storeu_si128(
+                reinterpret_cast<__m128i *>(first),
+                _mm_adds_epu8(pixels, increment));
+        first += 16;
+    }
+    while (first != last) {
+        addCoverage(first++, 8);
+    }
+}
+
+void rasterizeSpan(uint8_t *row, double firstX, double secondX) {
+    const double left = std::min(firstX, secondX);
+    const double right = std::max(firstX, secondX);
+    if (right < -0.5 || left > 255.5) return;
+
+    int first = ceilToInt(left - 0.5);
+    int last = ceilToInt(right - 0.5) - 1;
     first = std::max(first, 0);
     last = std::min(last, 255);
     if (first > last) return;
@@ -54,10 +64,36 @@ void rasterizeSubpixelRow(
     }
 
     addCoverage(row + firstPixel, 8 - (first & 7));
-    for (int pixel = firstPixel + 1; pixel < lastPixel; ++pixel) {
-        addCoverage(row + pixel, 8);
-    }
+    addFullPixels(row + firstPixel + 1, row + lastPixel);
     addCoverage(row + lastPixel, (last & 7) + 1);
+}
+
+void rasterizeSegment(
+        uint8_t *surface,
+        int stride,
+        const Point2i &top,
+        const Point2i &bottom,
+        const Point2i &longTop,
+        const Point2i &longBottom) {
+    if (top.y == bottom.y || longTop.y == longBottom.y) return;
+    const int firstRow = std::max(top.y, 0);
+    const int lastRow = std::min(bottom.y - 1, 255);
+    if (firstRow > lastRow) return;
+
+    const double shortStep = static_cast<double>(bottom.x - top.x) /
+                             static_cast<double>(bottom.y - top.y);
+    const double longStep = static_cast<double>(longBottom.x - longTop.x) /
+                            static_cast<double>(longBottom.y - longTop.y);
+    const double firstSampleY = static_cast<double>(firstRow) + 0.5;
+    double shortX = static_cast<double>(top.x) +
+            (firstSampleY - static_cast<double>(top.y)) * shortStep;
+    double longX = static_cast<double>(longTop.x) +
+            (firstSampleY - static_cast<double>(longTop.y)) * longStep;
+    for (int subpixelY = firstRow; subpixelY <= lastRow; ++subpixelY) {
+        rasterizeSpan(surface + (subpixelY >> 3) * stride, shortX, longX);
+        shortX += shortStep;
+        longX += longStep;
+    }
 }
 
 }  // namespace
@@ -77,18 +113,11 @@ int __cdecl dk2::shadows_process_58E080(
     const int stride = shadows_dword_780A64;
     if (surface == nullptr || stride < 32) return 0;
 
-    const Point2i points[3]{{x0, y0}, {x1, y1}, {x2, y2}};
-    const int minY = std::min({y0, y1, y2});
-    const int maxY = std::max({y0, y1, y2});
-    int firstRow = static_cast<int>(std::ceil(static_cast<double>(minY) - 0.5));
-    int lastRow = static_cast<int>(std::ceil(static_cast<double>(maxY) - 0.5)) - 1;
-    firstRow = std::max(firstRow, 0);
-    lastRow = std::min(lastRow, 255);
-    for (int subpixelY = firstRow; subpixelY <= lastRow; ++subpixelY) {
-        rasterizeSubpixelRow(
-                surface + (subpixelY >> 3) * stride,
-                points,
-                subpixelY);
-    }
+    Point2i points[3]{{x0, y0}, {x1, y1}, {x2, y2}};
+    std::sort(points, points + 3, [](const Point2i &left, const Point2i &right) {
+        return left.y < right.y;
+    });
+    rasterizeSegment(surface, stride, points[0], points[1], points[0], points[2]);
+    rasterizeSegment(surface, stride, points[1], points[2], points[0], points[2]);
     return 0;
 }
