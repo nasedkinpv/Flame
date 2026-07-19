@@ -111,8 +111,8 @@ void processVertex(
 
 namespace dk2 {
 
-int __thiscall sub_57BBF0(
-        int32_t *opaqueCollection,
+int __fastcall sub_57BBF0(
+        int32_t *opaqueCollection, void *,
         float x, float y, float z, float radius, int mask) {
     const int32_t first = opaqueCollection[0];
     int32_t begin = 0;

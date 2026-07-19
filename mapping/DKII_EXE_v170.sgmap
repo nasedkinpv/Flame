@@ -58983,10 +58983,12 @@ global: va=0057BBE0,name=static_57BBE0,size=13
   type: kind=function,declspec=stdcall
     ret: kind=int,size=4,signed=True
 global: va=0057BBF0,name=sub_57BBF0,size=181
-  type: kind=function,declspec=thiscall
+  type: kind=function,declspec=fastcall
     ret: kind=int,size=4,signed=True
     arg: kind=ptr
       type: kind=int,size=4,signed=True
+    arg: kind=ptr
+      type: kind=void
     arg: kind=float,size=4
     arg: kind=float,size=4
     arg: kind=float,size=4
