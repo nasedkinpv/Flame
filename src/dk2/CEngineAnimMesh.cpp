@@ -160,7 +160,7 @@ void dk2::CEngineAnimMesh::sub_5836A0(int animation, SceneObject2E *scene) {
     const TriangleFun triangleFun = __addTriangleFun;
     const RenderFun renderFun = __renderFun;
     const uint8_t *indices = reinterpret_cast<const uint8_t *>(entry.plod_list[lod]);
-    const uint32_t triangleCount = static_cast<uint8_t>(entry.triangleCount_list[lod]);
+    const uint32_t triangleCount = static_cast<uint8_t>(entry.lod_list[lod]);
 
     for (uint32_t triangle = 0; triangle < triangleCount; ++triangle, indices += 3) {
         const uint32_t a = indices[0];
