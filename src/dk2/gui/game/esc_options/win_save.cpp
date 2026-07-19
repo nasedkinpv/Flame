@@ -15,15 +15,6 @@
 namespace {
     std::vector<dk2::ButtonCfg> buttons;
     std::unique_ptr<dk2::WindowCfg> window;
-
-    dk2::CWindow *__cdecl saveAndContinue(int arg1, int arg2,
-                                          dk2::CDefaultPlayerInterface *player) {
-        // The original layout only saves when the text field is activated;
-        // its "Continue Game" button merely closes the menu.  Commit the
-        // current filename first so the obvious action is also the safe one.
-        dk2::CButton_handleLeftClick_42A920(arg1, arg2, player);
-        return dk2::CButton_handleLeftClick_428710_toggleMenu(arg1, arg2, player);
-    }
 }
 
 dk2::WindowCfg *EscOptions_Save_layout() {
@@ -42,7 +33,7 @@ dk2::WindowCfg *EscOptions_Save_layout() {
         20, 920, 920, 72, 0, 0, 920, 72, 0, NULL, dk2::CButton_render_428CD0, 0x00000000, 20, 0x00000001, 0x00000002, 0
     };
     buttons.emplace_back() = {  // Continue Game
-        BT_CClickButton, 4, 0, saveAndContinue, NULL, 0, 0, 0x00000000, 0x00000000, 0,
+        BT_CClickButton, 4, 0, dk2::CButton_handleLeftClick_428710_toggleMenu, NULL, 0, 0, 0x00000000, 0x00000000, 0,
         20, 1100, 1240, 72, 0, 0, 1240, 96, 0, NULL, dk2::CButton_render_428A30, 0x00000000, 142, 0x000000C7, 0x00000001, 23
     };
     buttons.emplace_back() = {  // Back
