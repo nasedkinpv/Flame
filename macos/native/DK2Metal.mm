@@ -265,6 +265,24 @@ void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch
     }
 
     if (partial) {
+        // this id just proved it hosts animated sub-regions: any full-page
+        // snapshot we wrote earlier has stale sprite frames baked in - move
+        // those to collage/ retroactively
+        if (!state.files.empty()) {
+            NSString *collageDir = [dir stringByAppendingPathComponent:@"collage"];
+            std::vector<NSString *> files = std::move(state.files);
+            dispatch_async(writeQueue(), ^{
+                NSFileManager *fm = NSFileManager.defaultManager;
+                [fm createDirectoryAtPath:collageDir withIntermediateDirectories:YES
+                               attributes:nil error:nil];
+                for (NSString *path : files) {
+                    [fm moveItemAtPath:path
+                                toPath:[collageDir stringByAppendingPathComponent:
+                                               path.lastPathComponent]
+                                 error:nil];
+                }
+            });
+        }
         for (uint32_t i = 0; i < bandCount; ++i) {
             emitSprite(dir, pixels, pitch, textureId,
                        bands[i].x0, bands[i].y0, bands[i].x1, bands[i].y1);
