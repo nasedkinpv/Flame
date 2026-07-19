@@ -8,13 +8,44 @@
 #include "dk2/utils/Vec3f.h"
 #include "dk2_functions.h"
 #include "dk2_globals.h"
+#include "patches/logging.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <emmintrin.h>
+#include <windows.h>
 
 
 namespace {
+
+struct SpatialCullTelemetry {
+    uint32_t calls = 0;
+    uint32_t candidates = 0;
+    uint32_t eligible = 0;
+    uint32_t overlaps = 0;
+    uint32_t maximum = 0;
+};
+
+bool spatialCullTelemetryEnabled() {
+    static const bool enabled =
+            GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", nullptr, 0) != 0;
+    return enabled;
+}
+
+void recordSpatialCull(uint32_t candidates, uint32_t eligible, uint32_t overlaps) {
+    if (!spatialCullTelemetryEnabled()) return;
+    static SpatialCullTelemetry stats;
+    ++stats.calls;
+    stats.candidates += candidates;
+    stats.eligible += eligible;
+    stats.overlaps += overlaps;
+    if (candidates > stats.maximum) stats.maximum = candidates;
+    if (stats.calls != 8192) return;
+    patch::log::dbg(
+            "spatial cull: calls=%u candidates=%u eligible=%u overlaps=%u max=%u",
+            stats.calls, stats.candidates, stats.eligible, stats.overlaps, stats.maximum);
+    stats = {};
+}
 
 #pragma pack(push, 1)
 struct MeshVertex {
@@ -141,6 +172,8 @@ int __fastcall sub_57BBF0(
     const __m128 pz = _mm_set1_ps(z);
     const __m128 queryRadius = _mm_set1_ps(radius);
     uint32_t result = 0;
+    uint32_t eligibleTotal = 0;
+    uint32_t overlapTotal = 0;
 
     for (int32_t i = begin; i < end; i += 4) {
         const int32_t remaining = end - i;
@@ -158,6 +191,9 @@ int __fastcall sub_57BBF0(
             }
         }
         if (eligible != 0) {
+            static constexpr uint8_t bitCounts[16] = {
+                    0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4};
+            eligibleTotal += bitCounts[eligible & 0xF];
             const __m128 dx = _mm_sub_ps(px, _mm_set_ps(
                     items[3]->center.x, items[2]->center.x,
                     items[1]->center.x, items[0]->center.x));
@@ -176,6 +212,7 @@ int __fastcall sub_57BBF0(
             const uint32_t overlaps = static_cast<uint32_t>(_mm_movemask_ps(
                     _mm_sub_ps(distanceSquared, _mm_mul_ps(radiusSum, radiusSum))))
                     & eligible;
+            overlapTotal += bitCounts[overlaps & 0xF];
             for (int lane = 0; lane < laneCount; ++lane) {
                 if ((overlaps & (1u << lane)) != 0) {
                     result |= resultBit << lane;
@@ -184,6 +221,7 @@ int __fastcall sub_57BBF0(
         }
         resultBit <<= 4;
     }
+    recordSpatialCull(static_cast<uint32_t>(end - begin), eligibleTotal, overlapTotal);
     return static_cast<int>(result);
 }
 

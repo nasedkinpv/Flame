@@ -412,6 +412,9 @@ struct FrameSnapshot {
     uint32_t tickMicroseconds = 0;
     uint32_t prepareMicroseconds = 0;
     uint32_t drawMicroseconds = 0;
+    uint32_t producerDrawCopyMicroseconds = 0;
+    uint32_t producerTextureMicroseconds = 0;
+    uint32_t producerOverlayMicroseconds = 0;
     std::vector<uint8_t> bytes;
 };
 
@@ -478,13 +481,19 @@ public:
             next.width = slot->width;
             next.height = slot->height;
             next.sceneMicroseconds =
-                    (slot->reserved[0] & 0xFFFFu) * DK2M_TIMING_QUANTUM_US;
+                    (slot->game_timings[0] & 0xFFFFu) * DK2M_TIMING_QUANTUM_US;
             next.tickMicroseconds =
-                    (slot->reserved[0] >> 16) * DK2M_TIMING_QUANTUM_US;
+                    (slot->game_timings[0] >> 16) * DK2M_TIMING_QUANTUM_US;
             next.prepareMicroseconds =
-                    (slot->reserved[1] & 0xFFFFu) * DK2M_TIMING_QUANTUM_US;
+                    (slot->game_timings[1] & 0xFFFFu) * DK2M_TIMING_QUANTUM_US;
             next.drawMicroseconds =
-                    (slot->reserved[1] >> 16) * DK2M_TIMING_QUANTUM_US;
+                    (slot->game_timings[1] >> 16) * DK2M_TIMING_QUANTUM_US;
+            next.producerDrawCopyMicroseconds =
+                    (slot->producer_timings[0] & 0xFFFFu) * DK2M_TIMING_QUANTUM_US;
+            next.producerTextureMicroseconds =
+                    (slot->producer_timings[0] >> 16) * DK2M_TIMING_QUANTUM_US;
+            next.producerOverlayMicroseconds =
+                    (slot->producer_timings[1] & 0xFFFFu) * DK2M_TIMING_QUANTUM_US;
             next.bytes.resize(byteCount);
             std::memcpy(next.bytes.data(), static_cast<uint8_t *>(mapping_) + DK2M_SLOT_OFFSET(slotIndex), byteCount);
             const uint32_t sequenceAfter = __atomic_load_n(&slot->sequence, __ATOMIC_ACQUIRE);
@@ -529,6 +538,9 @@ struct FrameMetrics {
     uint32_t indices = 0;
     uint32_t textureUpdates = 0;
     uint32_t textureBytes = 0;
+    uint32_t producerDrawCopyUs = 0;
+    uint32_t producerTextureUs = 0;
+    uint32_t producerOverlayUs = 0;
     uint32_t encodeUs = 0;
     uint32_t drawableWaitUs = 0;
     uint32_t gpuWaitUs = 0;
@@ -579,6 +591,13 @@ public:
               total(&FrameMetrics::fvf1Draws), total(&FrameMetrics::fvf2Draws),
               total(&FrameMetrics::missingTextures), total(&FrameMetrics::bindingOverflows),
               total(&FrameMetrics::invalidDraws));
+        NSLog(@"PERF producer us p50/p95/p99: draw-copy=%u/%u/%u texture=%u/%u/%u "
+               "overlay=%u/%u/%u",
+              p(&FrameMetrics::producerDrawCopyUs, 50), p(&FrameMetrics::producerDrawCopyUs, 95),
+              p(&FrameMetrics::producerDrawCopyUs, 99), p(&FrameMetrics::producerTextureUs, 50),
+              p(&FrameMetrics::producerTextureUs, 95), p(&FrameMetrics::producerTextureUs, 99),
+              p(&FrameMetrics::producerOverlayUs, 50), p(&FrameMetrics::producerOverlayUs, 95),
+              p(&FrameMetrics::producerOverlayUs, 99));
         count_ = 0;
     }
 
@@ -1410,6 +1429,9 @@ static void *renderWorker(void *context) {
             metrics.tickUs = snapshot->tickMicroseconds;
             metrics.prepareUs = snapshot->prepareMicroseconds;
             metrics.drawUs = snapshot->drawMicroseconds;
+            metrics.producerDrawCopyUs = snapshot->producerDrawCopyMicroseconds;
+            metrics.producerTextureUs = snapshot->producerTextureMicroseconds;
+            metrics.producerOverlayUs = snapshot->producerOverlayMicroseconds;
             metrics.bridgeBytes = static_cast<uint32_t>(snapshot->bytes.size());
             metrics.commands = snapshot->commandCount;
             _commandViews.clear();

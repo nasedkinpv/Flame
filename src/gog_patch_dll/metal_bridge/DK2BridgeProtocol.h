@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 6u
+#define DK2M_VERSION 7u
 #define DK2M_TIMING_QUANTUM_US 8u
 #define DK2M_SLOT_COUNT 3u
 // A 1600x1200 High-Res frame can introduce 9-12 MiB of 128x128 surfaces while
@@ -44,7 +44,8 @@ typedef struct DK2MFrameSlot {
     uint32_t command_count;
     uint32_t width;
     uint32_t height;
-    uint32_t reserved[2];
+    uint32_t game_timings[2];
+    uint32_t producer_timings[2];
 } DK2MFrameSlot;
 
 typedef struct DK2MInputEvent {
@@ -172,10 +173,10 @@ typedef struct DK2MTextureStageStateCommand {
 #define DK2M_SLOT_OFFSET(slot) ((uint32_t)(sizeof(DK2MFileHeader) + (slot) * DK2M_SLOT_CAPACITY))
 
 #if defined(__cplusplus)
-static_assert(sizeof(DK2MFrameSlot) == 32, "bridge slot layout changed");
+static_assert(sizeof(DK2MFrameSlot) == 40, "bridge slot layout changed");
 static_assert(sizeof(DK2MInputEvent) == 8, "bridge input event layout changed");
 static_assert(sizeof(DK2MInputState) == 112, "bridge input state layout changed");
-static_assert(sizeof(DK2MFileHeader) == 256, "bridge header layout changed");
+static_assert(sizeof(DK2MFileHeader) == 280, "bridge header layout changed");
 static_assert(sizeof(DK2MCommandHeader) == 8, "bridge command layout changed");
 static_assert(sizeof(DK2MClearCommand) == 24, "bridge clear layout changed");
 static_assert(sizeof(DK2MVertex1C) == 28, "DK2 Vertex1C layout changed");

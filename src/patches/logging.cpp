@@ -19,6 +19,7 @@ void patch::log::dbg(const char *format, ...) {
     char msg[1024];
     vsnprintf(msg, sizeof(msg), format, args);
     printf("[d] %s\n", msg);
+    fflush(stdout);
     va_end(args);
 }
 
@@ -95,6 +96,7 @@ void patch::log::err(const char *format, ...) {
     char msg[1024];
     vsnprintf(msg, sizeof(msg), format, args);
     printf("[err] %s\n", msg);
+    fflush(stdout);
     va_end(args);
 }
 
@@ -109,4 +111,3 @@ void patch::log::v_weanetr(const char *format, va_list args) {
     vsnprintf(msg, sizeof(msg), format, args);
     printf("[weanetr] %s", msg);
 }
-

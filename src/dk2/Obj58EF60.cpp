@@ -54,6 +54,11 @@ void storeVec3(float *output, __m128 value) {
 float *__fastcall sampleHotCallsite(
         dk2::Obj58EF60 *self, void *,
         float x, float y, float z, float *output) {
+    static uint32_t calls = 0;
+    if (++calls == 65536) {
+        patch::log::dbg("spatial sampler: 65536 accelerated calls completed");
+        calls = 0;
+    }
     return self->sub_58F030(x, y, z, output);
 }
 

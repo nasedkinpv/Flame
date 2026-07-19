@@ -6,6 +6,7 @@
 #include <d3d.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>
@@ -14,6 +15,14 @@
 
 namespace gog::metal_bridge {
 namespace {
+
+using PhaseClock = std::chrono::steady_clock;
+
+uint32_t phaseMicroseconds(PhaseClock::time_point started) {
+    const auto value = std::chrono::duration_cast<std::chrono::microseconds>(
+        PhaseClock::now() - started).count();
+    return value > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(std::max<int64_t>(0, value));
+}
 
 struct TextureCache {
     uint32_t width = 0;
@@ -70,6 +79,9 @@ public:
         overlayWhite_ = !overlayWhite_;
         used_ = 0;
         commandCount_ = 0;
+        drawCopyMicroseconds_ = 0;
+        textureMicroseconds_ = 0;
+        overlayMicroseconds_ = 0;
         active_ = true;
 
         DK2MClearCommand clear = {};
@@ -182,7 +194,9 @@ public:
 
     void finish() {
         if (!active_) return;
+        const auto overlayStarted = PhaseClock::now();
         emitOverlay();
+        addOverlayTiming(phaseMicroseconds(overlayStarted));
         ++frame_;
         if (frame_ == 0) ++frame_;
         slot_->frame_number = frame_;
@@ -191,10 +205,13 @@ public:
         slot_->width = width_;
         slot_->height = height_;
         const uint32_t sceneMicroseconds = elapsedMicroseconds(sceneStarted_, timerTicks());
-        slot_->reserved[0] = packMicroseconds(sceneMicroseconds) |
-                             (packMicroseconds(gameTickMicroseconds_) << 16);
-        slot_->reserved[1] = packMicroseconds(prepareMicroseconds_) |
-                             (packMicroseconds(drawMicroseconds_) << 16);
+        slot_->game_timings[0] = packMicroseconds(sceneMicroseconds) |
+                                 (packMicroseconds(gameTickMicroseconds_) << 16);
+        slot_->game_timings[1] = packMicroseconds(prepareMicroseconds_) |
+                                 (packMicroseconds(drawMicroseconds_) << 16);
+        slot_->producer_timings[0] = packMicroseconds(drawCopyMicroseconds_) |
+                                     (packMicroseconds(textureMicroseconds_) << 16);
+        slot_->producer_timings[1] = packMicroseconds(overlayMicroseconds_);
         header_->width = width_;
         header_->height = height_;
         header_->producer_pid = GetCurrentProcessId();
@@ -230,6 +247,18 @@ public:
 
     void pollInput() {
         if (ensureMapped()) processInput();
+    }
+
+    void addDrawCopyTiming(uint32_t microseconds) {
+        addTiming(drawCopyMicroseconds_, microseconds);
+    }
+
+    void addTextureTiming(uint32_t microseconds) {
+        addTiming(textureMicroseconds_, microseconds);
+    }
+
+    void addOverlayTiming(uint32_t microseconds) {
+        addTiming(overlayMicroseconds_, microseconds);
     }
 
 private:
@@ -507,6 +536,10 @@ private:
         return quantized > UINT16_MAX ? UINT16_MAX : quantized;
     }
 
+    static void addTiming(uint32_t &total, uint32_t value) {
+        total = value > UINT32_MAX - total ? UINT32_MAX : total + value;
+    }
+
     void emitTexture(DWORD stage, DWORD textureId) {
         if (textureId) {
             auto found = textures_.find(textureId);
@@ -749,6 +782,9 @@ private:
     uint32_t gameTickMicroseconds_ = 0;
     uint32_t prepareMicroseconds_ = 0;
     uint32_t drawMicroseconds_ = 0;
+    uint32_t drawCopyMicroseconds_ = 0;
+    uint32_t textureMicroseconds_ = 0;
+    uint32_t overlayMicroseconds_ = 0;
     uint32_t boundTextures_[3] = {};
     uint32_t lastConsumerSession_ = 0;
     uint32_t lastConsumerFrame_ = 0;
@@ -805,19 +841,27 @@ DWORD overlayClearColor() {
 
 void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
                  const WORD *indices, DWORD indexCount, DWORD flags) {
+    const auto started = PhaseClock::now();
     producer.draw(fvf, vertices, vertexCount, indices, indexCount, flags);
+    producer.addDrawCopyTiming(phaseMicroseconds(started));
 }
 
 void captureOverlay(IDirectDrawSurface4 *surface) {
+    const auto started = PhaseClock::now();
     producer.overlay(surface);
+    producer.addOverlayTiming(phaseMicroseconds(started));
 }
 
 void setTexture(DWORD stage, DWORD textureId, IDirectDrawSurface4 *surface) {
+    const auto started = PhaseClock::now();
     producer.texture(stage, textureId, surface);
+    producer.addTextureTiming(phaseMicroseconds(started));
 }
 
 void textureDirty(IDirectDrawSurface4 *surface, const DDSURFACEDESC2 *lockedDesc) {
+    const auto started = PhaseClock::now();
     producer.textureDirty(surface, lockedDesc);
+    producer.addTextureTiming(phaseMicroseconds(started));
 }
 
 void setRenderState(DWORD state, DWORD value) {
