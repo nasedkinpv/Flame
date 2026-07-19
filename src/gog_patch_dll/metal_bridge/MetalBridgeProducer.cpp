@@ -760,11 +760,6 @@ private:
 
     static bool captureNativeCursor(IDirectDrawSurface4 *source, DWORD width, DWORD height,
                                     DWORD colorKey, CursorSnapshot &cursor) {
-        DDSURFACEDESC2 info = {};
-        info.dwSize = sizeof(info);
-        if (FAILED(source->GetSurfaceDesc(&info))) return false;
-        width = std::min(width, info.dwWidth);
-        height = std::min(height, info.dwHeight);
         if (!width || !height) return false;
 
         RECT rect = {0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
