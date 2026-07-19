@@ -66,8 +66,6 @@ void emitVertex(RenderFun fun, uint32_t index, dk2::Vec3f *vectors, dk2::Uv2f *u
         dk2::renderFun_sub_58B2A0(index, vectors, uvs);
     } else if (fun == reinterpret_cast<RenderFun>(0x0058B370)) {
         dk2::renderFun_sub_58B370(index, vectors, uvs);
-    } else if (fun == reinterpret_cast<RenderFun>(0x0058B440)) {
-        dk2::renderFun_sub_58B440(index, vectors, uvs);
     } else {
         fun(index, vectors, uvs);
     }
