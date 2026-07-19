@@ -462,22 +462,42 @@ bool isGameFrame(StackFrame &frame) {
 void formatRawStackCandidates(std::stringstream &ss, LoadedModules &modules,
                               StackLimits &limits, const CONTEXT &ctx) {
     ss << std::endl << "raw stack code candidates:" << std::endl;
-    if (!limits.contains(ctx.Esp)) {
-        ss << "  invalid esp=" << fmtHex32(ctx.Esp) << std::endl;
+    ULONG_PTR scanStart = ctx.Esp;
+    const char *source = "esp";
+    if (!limits.contains(scanStart)) {
+        scanStart = ctx.Ebp;
+        source = "ebp fallback";
+    }
+    if (!limits.contains(scanStart)) {
+        const DWORD candidates[] = {ctx.Esi, ctx.Edi, ctx.Ebx, ctx.Eax, ctx.Ecx, ctx.Edx};
+        const char *names[] = {"esi fallback", "edi fallback", "ebx fallback",
+                               "eax fallback", "ecx fallback", "edx fallback"};
+        for (unsigned i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+            if (!limits.contains(candidates[i])) continue;
+            scanStart = candidates[i];
+            source = names[i];
+            break;
+        }
+    }
+    if (!limits.contains(scanStart)) {
+        ss << "  no register points into the stack (esp=" << fmtHex32(ctx.Esp)
+           << ", ebp=" << fmtHex32(ctx.Ebp) << ")" << std::endl;
         return;
     }
+    scanStart &= ~static_cast<ULONG_PTR>(sizeof(DWORD) - 1);
+    ss << "  scan from " << source << "=" << fmtHex32(scanStart) << std::endl;
 
     // A corrupted indirect call can leave EIP outside every module, which makes
     // the regular unwinder stop before it prints the caller.  Return addresses
     // still present on the stack are enough to identify that call site.
-    const ULONG_PTR scanEnd = std::min<ULONG_PTR>(limits.high, ctx.Esp + 0x1000);
+    const ULONG_PTR scanEnd = std::min<ULONG_PTR>(limits.high, scanStart + 0x2000);
     unsigned count = 0;
-    for (ULONG_PTR slot = ctx.Esp; slot + sizeof(DWORD) <= scanEnd; slot += sizeof(DWORD)) {
+    for (ULONG_PTR slot = scanStart; slot + sizeof(DWORD) <= scanEnd; slot += sizeof(DWORD)) {
         const DWORD candidate = *reinterpret_cast<const DWORD *>(slot);
         auto *module = modules.findByCodePtr(candidate);
         if (!module) continue;
 
-        ss << "  [esp+" << fmtHex(slot - ctx.Esp) << "] " << fmtHex32(candidate)
+        ss << "  [" << source << "+" << fmtHex(slot - scanStart) << "] " << fmtHex32(candidate)
            << " " << module->name << "+" << fmtHex(candidate - module->base);
         if (auto *symbol = module->find_export_le(candidate)) {
             ss << " " << symbol->name << "+" << fmtHex(candidate - symbol->addr);
