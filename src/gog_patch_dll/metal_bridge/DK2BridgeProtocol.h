@@ -6,7 +6,10 @@
 #define DK2M_MAGIC 0x4D324B44u
 #define DK2M_VERSION 4u
 #define DK2M_SLOT_COUNT 3u
-#define DK2M_SLOT_CAPACITY (4u * 1024u * 1024u)
+// A 1600x1200 High-Res frame can introduce 9-12 MiB of 128x128 surfaces while
+// menus are warming up. Four MiB starves later textures forever when earlier
+// surfaces are also animated, so leave room for a complete hydration frame.
+#define DK2M_SLOT_CAPACITY (16u * 1024u * 1024u)
 #define DK2M_NO_SLOT 0xFFFFFFFFu
 #define DK2M_FVF_VERTEX1C 0x144u
 #define DK2M_FVF_VERTEX2C 0x344u

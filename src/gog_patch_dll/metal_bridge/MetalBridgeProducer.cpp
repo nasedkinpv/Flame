@@ -108,7 +108,9 @@ public:
                 textures_.emplace(textureId, std::move(cache));
             } else if (found->second.dirty) {
                 TextureCache updated;
-                if (captureTexture(surface, updated)) found->second = std::move(updated);
+                if (captureTexture(surface, updated)) {
+                    updateTexture(found->second, std::move(updated));
+                }
             }
             if (surface) surfaceTextures_[reinterpret_cast<uintptr_t>(surface)] = textureId;
         }
@@ -124,7 +126,7 @@ public:
 
         TextureCache updated;
         if (lockedDesc && copyTexture(*lockedDesc, updated)) {
-            texture->second = std::move(updated);
+            updateTexture(texture->second, std::move(updated));
         } else {
             texture->second.dirty = true;
         }
@@ -370,6 +372,26 @@ private:
             }
         }
         return true;
+    }
+
+    static bool sameTexture(const TextureCache &left, const TextureCache &right) {
+        return left.width == right.width && left.height == right.height &&
+               left.rowPitch == right.rowPitch &&
+               left.pixels.size() == right.pixels.size() &&
+               (left.pixels.empty() ||
+                std::memcmp(left.pixels.data(), right.pixels.data(),
+                            left.pixels.size()) == 0);
+    }
+
+    static void updateTexture(TextureCache &current, TextureCache &&updated) {
+        if (sameTexture(current, updated)) {
+            // DK2 frequently locks and rewrites unchanged UI surfaces. Preserve
+            // their acknowledgement state so they do not consume the bridge's
+            // texture-upload budget every frame.
+            current.dirty = false;
+            return;
+        }
+        current = std::move(updated);
     }
 
     bool captureTexture(IDirectDrawSurface4 *surface, TextureCache &texture) {
