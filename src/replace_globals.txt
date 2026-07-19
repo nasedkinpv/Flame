@@ -165,6 +165,9 @@
 # retaining the original sign-bit boundary semantics.  The adjacent 575F10
 # projection implementation remains staged in CCamera.cpp for separate rollout.
 00575D70 int __cdecl Vec3f_static_sub_575D70(Vec3f *, float, uint32_t *)
+# Spatial sphere/light overlap query.  Four candidates are evaluated per SSE2
+# pass while retaining the original mask/range and raw sign-bit semantics.
+0057BBF0 int __thiscall sub_57BBF0(int32_t *, float, float, float, float, int)
 0057BF00 float *Obj57BCB0::sub_57BF00(float *, float *, float *)
 0057C190 float *Obj57BCB0::sub_57C190(float *, float *, float *)
 0057CEB0 void *__cdecl MyHeap_alloc(int)
