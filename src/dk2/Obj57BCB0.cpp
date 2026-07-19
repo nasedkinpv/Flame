@@ -2,6 +2,7 @@
 #include "dk2/math/directional_lighting.h"
 #include "dk2/utils/Mat3x3f.h"
 #include "dk2/utils/Vec3f.h"
+#include "patches/logging.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +21,26 @@ extern "C" int __fastcall sub_57BD70_fastcall(
 
 
 namespace {
+
+struct LightUsageProfile {
+    uint64_t lightEntries = 0;
+    uint32_t activeCalls = 0;
+    uint32_t calls = 0;
+
+    void add(uint32_t count, const char *name) {
+        lightEntries += count;
+        activeCalls += count != 0;
+        if (++calls != 65536) return;
+        patch::log::dbg(
+                "PERF %s lighting: calls=%u active=%u lights=%llu avg_x100=%llu",
+                name, calls, activeCalls, lightEntries,
+                lightEntries * 100u / calls);
+        *this = {};
+    }
+};
+
+LightUsageProfile g_staticLightProfile;
+LightUsageProfile g_directionalLightProfile;
 
 #pragma pack(push, 1)
 struct SceneLight {
@@ -205,6 +226,7 @@ int __fastcall sub_57BD70_fastcall(
 
 float *dk2::Obj57BCB0::sub_57BF00(
         float *accumulator, float *position, float *normal) {
+    g_staticLightProfile.add(count, "static");
     calculateLighting(*this, accumulator, position, normal);
     return accumulator;
 }
@@ -212,6 +234,7 @@ float *dk2::Obj57BCB0::sub_57BF00(
 
 float *dk2::Obj57BCB0::sub_57C190(
         float *accumulator, float *position, float *normal) {
+    g_directionalLightProfile.add(count, "directional");
     static_assert(sizeof(Obj57BCB0) == sizeof(lighting::DirectionalLightBuffer));
     const auto &lights = reinterpret_cast<const lighting::DirectionalLightBuffer &>(*this);
     lighting::accumulateDirectional(lights, accumulator, position, normal);

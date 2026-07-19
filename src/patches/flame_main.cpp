@@ -33,6 +33,7 @@
 
 namespace dk2 {
     bool installSpatialSamplerHotCallsite();
+    bool installCameraPhaseProfiler();
 }
 
 
@@ -137,6 +138,7 @@ void patch::flameInit(int argc, const char **argv) {
     patch::screen_resolution::init();
     if (GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", nullptr, 0) != 0) {
         dk2::installSpatialSamplerHotCallsite();
+        dk2::installCameraPhaseProfiler();
     }
 
 #if __has_include(<dk2_research.h>)
