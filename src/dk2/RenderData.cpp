@@ -3,6 +3,7 @@
 #include "dk2/SceneObject2E.h"
 #include "dk2/Uv2f_arr1024.h"
 #include "dk2/Vec3f_arr1024.h"
+#include "dk2/Vertex18.h"
 #include "dk2/Vertex1C.h"
 #include "dk2/VerticesData.h"
 #include "dk2/utils/Mat3x3f.h"
