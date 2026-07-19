@@ -78,8 +78,12 @@ public:
 
     void draw(DWORD fvf, const void *vertices, DWORD vertexCount,
               const WORD *indices, DWORD indexCount, DWORD flags) {
-        if (!active_ || fvf != DK2M_FVF_VERTEX1C || !vertices || !indices) return;
-        const uint64_t vertexBytes = static_cast<uint64_t>(vertexCount) * sizeof(DK2MVertex1C);
+        if (!active_ || !vertices || !indices) return;
+        uint32_t vertexSize;
+        if (fvf == DK2M_FVF_VERTEX1C) vertexSize = sizeof(DK2MVertex1C);
+        else if (fvf == DK2M_FVF_VERTEX2C) vertexSize = sizeof(DK2MVertex2C);
+        else return;
+        const uint64_t vertexBytes = static_cast<uint64_t>(vertexCount) * vertexSize;
         const uint64_t indexBytes = static_cast<uint64_t>(indexCount) * sizeof(WORD);
         const uint64_t commandBytes = sizeof(DK2MDrawIndexedCommand) + vertexBytes + indexBytes;
         if (commandBytes > UINT32_MAX || used_ + commandBytes > DK2M_SLOT_CAPACITY) return;

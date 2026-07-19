@@ -1349,12 +1349,16 @@ static void *renderWorker(void *context) {
                 } else if (header.type == DK2M_COMMAND_DRAW_INDEXED && header.size >= sizeof(DK2MDrawIndexedCommand)) {
                     DK2MDrawIndexedCommand draw;
                     std::memcpy(&draw, snapshot->bytes.data() + commandOffset, sizeof(draw));
-                    const size_t vertexBytes = static_cast<size_t>(draw.vertex_count) * sizeof(DK2MVertex1C);
+                    const size_t bridgeVertexSize = draw.fvf == DK2M_FVF_VERTEX1C
+                                                        ? sizeof(DK2MVertex1C)
+                                                        : draw.fvf == DK2M_FVF_VERTEX2C
+                                                              ? sizeof(DK2MVertex2C) : 0;
+                    const size_t vertexBytes = static_cast<size_t>(draw.vertex_count) * bridgeVertexSize;
                     const size_t indexBytes = static_cast<size_t>(draw.index_count) * sizeof(uint16_t);
                     const size_t expected = sizeof(draw) + vertexBytes + indexBytes;
                     const NSUInteger metalVertexBytes = static_cast<NSUInteger>(draw.vertex_count) * sizeof(MetalVertex);
                     indexOffset = (indexOffset + 3u) & ~3u;
-                    if (draw.fvf == DK2M_FVF_VERTEX1C && expected <= header.size &&
+                    if (bridgeVertexSize && expected <= header.size &&
                         vertexOffset + metalVertexBytes <= kVertexBufferSize &&
                         indexOffset + indexBytes <= kIndexBufferSize && snapshot->width && snapshot->height) {
                         const uint8_t *rawVertices = snapshot->bytes.data() + commandOffset + sizeof(draw);
@@ -1363,7 +1367,19 @@ static void *renderWorker(void *context) {
                             static_cast<uint8_t *>(_vertexBuffers[slot].contents) + vertexOffset);
                         for (uint32_t index = 0; index < draw.vertex_count; ++index) {
                             DK2MVertex1C vertex;
-                            std::memcpy(&vertex, rawVertices + index * sizeof(vertex), sizeof(vertex));
+                            if (draw.fvf == DK2M_FVF_VERTEX1C) {
+                                std::memcpy(&vertex, rawVertices + index * bridgeVertexSize, sizeof(vertex));
+                            } else {
+                                DK2MVertex2C vertex2;
+                                std::memcpy(&vertex2, rawVertices + index * bridgeVertexSize, sizeof(vertex2));
+                                vertex.x = vertex2.x;
+                                vertex.y = vertex2.y;
+                                vertex.z = vertex2.z;
+                                vertex.rhw = vertex2.rhw;
+                                vertex.diffuse = vertex2.diffuse;
+                                vertex.u = vertex2.tex_coord[0][0];
+                                vertex.v = vertex2.tex_coord[0][1];
+                            }
                             const float reciprocalW = std::abs(vertex.rhw) > 0.000001f ? vertex.rhw : 1.0f;
                             const float clipW = 1.0f / reciprocalW;
                             metalVertices[index].position[0] =

@@ -107,6 +107,15 @@ typedef struct DK2MVertex1C {
     float v;
 } DK2MVertex1C;
 
+typedef struct DK2MVertex2C {
+    float x;
+    float y;
+    float z;
+    float rhw;
+    uint32_t diffuse;
+    float tex_coord[3][2];
+} DK2MVertex2C;
+
 typedef struct DK2MDrawIndexedCommand {
     DK2MCommandHeader header;
     uint32_t fvf;
@@ -148,6 +157,7 @@ static_assert(sizeof(DK2MFileHeader) == 256, "bridge header layout changed");
 static_assert(sizeof(DK2MCommandHeader) == 8, "bridge command layout changed");
 static_assert(sizeof(DK2MClearCommand) == 24, "bridge clear layout changed");
 static_assert(sizeof(DK2MVertex1C) == 28, "DK2 Vertex1C layout changed");
+static_assert(sizeof(DK2MVertex2C) == 44, "DK2 Vertex2C layout changed");
 static_assert(sizeof(DK2MDrawIndexedCommand) == 24, "bridge draw layout changed");
 static_assert(sizeof(DK2MTextureUpdateCommand) == 28, "bridge texture update layout changed");
 static_assert(sizeof(DK2MSetTextureCommand) == 16, "bridge texture binding layout changed");
