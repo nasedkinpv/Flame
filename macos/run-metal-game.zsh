@@ -11,6 +11,7 @@ readonly GAME_DIR="${PREFIX}/drive_c/GOG Games/Dungeon Keeper 2"
 readonly BRIDGE_FILE="${PREFIX}/drive_c/dk2-metal/frame.bin"
 readonly LOG_DIR="${HOME}/Library/Logs/Dungeon Keeper II Metal"
 readonly LOG_FILE="${LOG_DIR}/game.log"
+readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-1}"
 
 fail() {
   print -u2 -- "error: $*"
@@ -47,7 +48,7 @@ initial_frame="$(bridge_frame)"
     MVK_CONFIG_LOG_LEVEL='0' \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
       -skip-launcher -game-res=1024x768 -Level=level1 \
-      -Q -NoMovies -DisableGamma -NoSound \
+      -Q -NoMovies -DisableGamma -NoSound -Shadows "${SHADOW_LEVEL}" \
       -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
       -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1
 ) >>"${LOG_FILE}" 2>&1 &

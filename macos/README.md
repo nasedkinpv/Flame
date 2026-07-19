@@ -13,6 +13,11 @@ Flame captures the game's Direct3D 3 command stream without asking WineD3D to re
 ./macos/run-metal-game.zsh
 ```
 
+The Metal launcher defaults to DK2 shadow level 1. It keeps cached character
+shadows while avoiding the original level-3 path that rebuilds animated shadow
+geometry every frame. Set `DK2_SHADOW_LEVEL=2` or `3` before launching to trade
+CPU time for the original dynamic-shadow modes.
+
 The script pins and verifies both downloads. It reads the owned GOG installation from `~/.wine` by default; use `DK2_SOURCE_PREFIX=/path/to/prefix` to select another source. The source installation is never modified.
 
 ## Isolation and data
