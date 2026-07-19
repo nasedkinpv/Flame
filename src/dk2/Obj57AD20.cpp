@@ -2,6 +2,7 @@
 
 #include "dk2/MyScaledSurface.h"
 #include "dk2/Obj57BCB0.h"
+#include "dk2/Obj58EF60.h"
 #include "dk2/SceneObject2E.h"
 #include "dk2/Uv2f.h"
 #include "dk2/utils/Vec3f.h"
@@ -53,14 +54,18 @@ using VertexFun = int (__cdecl *)(uint32_t, dk2::Vec3f *);
 using TriangleFun = int (__cdecl *)(uint32_t, uint32_t, uint32_t);
 using RenderFun = int (__cdecl *)(uint32_t, dk2::Vec3f *, dk2::Uv2f *);
 
-void transformVertex(VertexFun fun, uint32_t index, MeshVertex *vertex) {
+void transformPosition(VertexFun fun, uint32_t index, dk2::Vec3f *position) {
     if (fun == reinterpret_cast<VertexFun>(0x0058ACB0)) {
-        dk2::sub_58ACB0(index, &vertex->position);
+        dk2::sub_58ACB0(index, position);
     } else if (fun == reinterpret_cast<VertexFun>(0x0058AD10)) {
-        dk2::sub_58AD10(index, &vertex->position);
+        dk2::sub_58AD10(index, position);
     } else {
-        fun(index, &vertex->position);
+        fun(index, position);
     }
+}
+
+void transformVertex(VertexFun fun, uint32_t index, MeshVertex *vertex) {
+    transformPosition(fun, index, &vertex->position);
 }
 
 void emitTriangle(TriangleFun fun, uint32_t a, uint32_t b, uint32_t c) {
@@ -200,6 +205,74 @@ int *dk2::Obj57AD20::sub_57A9A0(
                 selectExtendedPath, a6, a7, scale);
     }
     return sub_57B6D0(entryIndex, scene, a4, lights, a6, a7, scale);
+}
+
+
+int *dk2::Obj57AD20::sub_57B0E0(
+        int entryIndex,
+        SceneObject2E *scene,
+        int a3,
+        uint32_t *lightData,
+        int vectorField,
+        int fieldOriginX,
+        int fieldOriginY,
+        float scale) {
+    auto &entry = reinterpret_cast<MeshEntry *>(f4)[entryIndex];
+    MyScaledSurface *surface = MyEntryBuf_MyScaledSurface_getByIdx(entry.surfaceIndex);
+    __renderFun_setSceneObject2E(scene, 1, nullptr, nullptr, scale, a3 == 0);
+
+    Vec3f ambient{
+            vec_14.x + g_vec_760A98.x + surface->vec.x,
+            vec_14.y + g_vec_760A98.y + surface->vec.y,
+            vec_14.z + g_vec_760A98.z + surface->vec.z};
+    if (*reinterpret_cast<const int *>(0x00760B8C) != 0) {
+        ambient = {255.0f, 0.0f, 0.0f};
+    }
+
+    Obj58EF60 sampler{
+            vectorField,
+            static_cast<float>(fieldOriginX - 1),
+            static_cast<float>(fieldOriginY - 1)};
+    Obj57BCB0 lights;
+    lights.count = 0;
+    lights.constructor(lightData, f2C);
+
+    const VertexFun vertexFun = g_fun_779398;
+    const TriangleFun triangleFun = __addTriangleFun;
+    const RenderFun renderFun = __renderFun;
+    const uint8_t *indices = entry.triangleIndices;
+    for (uint32_t triangle = 0; triangle < entry.triangleCount; ++triangle, indices += 3) {
+        const uint32_t a = indices[0];
+        const uint32_t b = indices[1];
+        const uint32_t c = indices[2];
+        MeshVertex *va = &entry.vertices[a];
+        MeshVertex *vb = &entry.vertices[b];
+        MeshVertex *vc = &entry.vertices[c];
+
+        if (g_idxFlags[a] == 0) {
+            Vec3f sampled;
+            sampler.sub_58F030(
+                    va->position.x, va->position.y, va->position.z, &sampled.x);
+            transformPosition(vertexFun, a, &sampled);
+        }
+        if (g_idxFlags[b] == 0) {
+            Vec3f sampled;
+            sampler.sub_58F030(
+                    vb->position.x, vb->position.y, vb->position.z, &sampled.x);
+            transformPosition(vertexFun, b, &sampled);
+        }
+        if (g_idxFlags[c] == 0) {
+            Vec3f sampled;
+            sampler.sub_58F030(
+                    vc->position.x, vc->position.y, vc->position.z, &sampled.x);
+            transformPosition(vertexFun, c, &sampled);
+        }
+        emitTriangle(triangleFun, a, b, c);
+        processVertex(a, va, ambient, lights, renderFun);
+        processVertex(b, vb, ambient, lights, renderFun);
+        processVertex(c, vc, ambient, lights, renderFun);
+    }
+    return applyIndxs_sub_58AC20();
 }
 
 
