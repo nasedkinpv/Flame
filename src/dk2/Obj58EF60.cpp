@@ -6,6 +6,11 @@
 #include <windows.h>
 
 
+namespace dk2 {
+    bool installSpatialSamplerHotCallsite();
+}
+
+
 namespace {
 
 int quantizeCell(float coordinate) {
