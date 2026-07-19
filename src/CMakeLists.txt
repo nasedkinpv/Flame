@@ -54,6 +54,7 @@ add_library(${TARGET} SHARED
         dk2/Obj58EF60.cpp
         dk2/CEngineAnimMesh.cpp
         dk2/CEngineDynamicMesh.cpp
+        dk2/Shadows.cpp
         dk2/MyComputerPlayer_drop_condition.cpp
         dk2/MyComputerPlayer_drop_condition.h
         dk2/computer_player_flags.cpp

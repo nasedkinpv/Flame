@@ -62,6 +62,11 @@
 # staged until it can be reached through a translated small dispatcher.
 #0058F030 float *Obj58EF60::sub_58F030(float, float, float, float *)
 
+# Bounds-safe 32x32 shadow coverage rasterizer.  The original assumes all
+# projected coordinates remain in range and corrupts adjacent globals at the
+# maximum shadow detail with the high-resolution camera.
+0058E080 int __cdecl shadows_process_58E080(int, int, int, int, int, int)
+
 # CBridge
 0043E0F0 MySurface *CBridge::loadPng(const char *)
 0043E320 void CBridge::sub_43E320(uint32_t, uint32_t, MyTerrainDataObj *, CEngineStaticMeshDataArrays *)
