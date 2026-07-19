@@ -10,6 +10,7 @@ namespace gog::metal_bridge {
 bool isEnabled();
 void pollInput();
 void beginFrame(DWORD width, DWORD height);
+DWORD overlayClearColor();
 void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
                  const WORD *indices, DWORD indexCount, DWORD flags);
 void captureOverlay(IDirectDrawSurface4 *surface);

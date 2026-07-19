@@ -1,5 +1,6 @@
 #include <metal_bridge/MetalBridgeProducer.h>
 #include <metal_bridge/DK2BridgeProtocol.h>
+#include <metal_bridge/OverlayUnmatte.h>
 #include <gog_globals.h>
 #include <patches/replace_mouse_dinput_to_user32.h>
 #include <d3d.h>
@@ -57,6 +58,7 @@ public:
 
         width_ = width;
         height_ = height;
+        overlayWhite_ = !overlayWhite_;
         used_ = 0;
         commandCount_ = 0;
         active_ = true;
@@ -204,13 +206,24 @@ public:
     void overlay(IDirectDrawSurface4 *surface) {
         TextureCache captured;
         if (!captureTexture(surface, captured)) return;
-        for (size_t offset = 0; offset < captured.pixels.size(); offset += 4) {
-            uint8_t *pixel = captured.pixels.data() + offset;
-            pixel[3] = pixel[0] == 0xFF && pixel[1] == 0x00 && pixel[2] == 0xFF
-                         ? 0x00 : 0xFF;
+        if (!previousOverlay_.pixels.empty() && previousOverlayWhite_ != overlayWhite_ &&
+            captured.width == previousOverlay_.width && captured.height == previousOverlay_.height &&
+            captured.rowPitch == previousOverlay_.rowPitch) {
+            TextureCache combined = captured;
+            const TextureCache &black = overlayWhite_ ? previousOverlay_ : captured;
+            const TextureCache &white = overlayWhite_ ? captured : previousOverlay_;
+            for (size_t offset = 0; offset < combined.pixels.size(); offset += 4) {
+                unmatteOverlayPixel(
+                    black.pixels.data() + offset, white.pixels.data() + offset,
+                    combined.pixels.data() + offset);
+            }
+            overlay_ = std::move(combined);
         }
-        overlay_ = std::move(captured);
+        previousOverlay_ = std::move(captured);
+        previousOverlayWhite_ = overlayWhite_;
     }
+
+    DWORD overlayClearColor() const { return overlayWhite_ ? 0x00FFFFFF : 0x00000000; }
 
     void pollInput() {
         if (ensureMapped()) processInput();
@@ -598,6 +611,9 @@ private:
     std::unordered_map<uint32_t, uint32_t> renderStates_;
     std::unordered_map<uint64_t, uint32_t> textureStageStates_;
     TextureCache overlay_;
+    TextureCache previousOverlay_;
+    bool overlayWhite_ = false;
+    bool previousOverlayWhite_ = false;
     bool active_ = false;
 };
 
@@ -616,6 +632,10 @@ void pollInput() {
 
 void beginFrame(DWORD width, DWORD height) {
     producer.begin(width, height);
+}
+
+DWORD overlayClearColor() {
+    return producer.overlayClearColor();
 }
 
 void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,

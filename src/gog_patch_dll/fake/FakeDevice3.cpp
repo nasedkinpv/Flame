@@ -222,7 +222,7 @@ HRESULT FakeDevice3::BeginScene(void) {
         if (FakeSurface::instance_cpy && FakeSurface::instance_cpy->orig()) {
             DDBLTFX fill = {};
             fill.dwSize = sizeof(fill);
-            fill.dwFillColor = 0x00FF00FF;
+            fill.dwFillColor = metal_bridge::overlayClearColor();
             FakeSurface::instance_cpy->orig()->Blt(
                 nullptr, nullptr, nullptr, DDBLT_COLORFILL | DDBLT_WAIT, &fill);
         }
