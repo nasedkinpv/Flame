@@ -23,6 +23,9 @@ void overlayDrawn(const RECT *rect);  // null = whole surface
 void overlayBltFast(IDirectDrawSurface4 *destination, DWORD x, DWORD y,
                     IDirectDrawSurface4 *source, const RECT *sourceRect,
                     DWORD flags);
+void overlayBlt(IDirectDrawSurface4 *destination, const RECT *destinationRect,
+                IDirectDrawSurface4 *source, const RECT *sourceRect,
+                DWORD flags);
 void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
                  const WORD *indices, DWORD indexCount, DWORD flags);
 void captureOverlay(IDirectDrawSurface4 *surface);

@@ -1202,6 +1202,19 @@ void overlayBltFast(IDirectDrawSurface4 *destination, DWORD x, DWORD y,
     producer.overlayBltFast(destination, x, y, source, sourceRect, flags);
 }
 
+void overlayBlt(IDirectDrawSurface4 *destination, const RECT *destinationRect,
+                IDirectDrawSurface4 *source, const RECT *sourceRect,
+                DWORD flags) {
+    const DWORD x = destinationRect ? static_cast<DWORD>(std::max<LONG>(0, destinationRect->left)) : 0;
+    const DWORD y = destinationRect ? static_cast<DWORD>(std::max<LONG>(0, destinationRect->top)) : 0;
+    // MyDdSurfaceEx_BltWait uses bit 0 for source colour-keying and passes it
+    // through to the DirectDraw wrapper.  Normalize it to BltFast's matching
+    // flag so both cursor paths share the capture implementation.
+    const DWORD captureFlags = (flags & 1) || (flags & DDBLT_KEYSRC)
+                                   ? DDBLTFAST_SRCCOLORKEY : 0;
+    producer.overlayBltFast(destination, x, y, source, sourceRect, captureFlags);
+}
+
 void captureOverlay(IDirectDrawSurface4 *surface) {
     const auto started = PhaseClock::now();
     producer.overlay(surface);

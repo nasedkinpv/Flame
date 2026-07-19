@@ -245,7 +245,12 @@ HRESULT FakeSurface::AddOverlayDirtyRect(LPRECT) {
 
 HRESULT FakeSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE2 srcSurf_, LPRECT srcRect, DWORD flags, LPDDBLTFX bitblt) {
     auto *srcSurf = (FakeSurface *) srcSurf_;
-    if (this == FakeSurface::instance_cpy) metal_bridge::overlayDrawn(dstRect);
+    if (this == FakeSurface::instance_cpy) {
+        if (srcSurf && f88_orig_surf)
+            metal_bridge::overlayBlt(f88_orig_surf, dstRect,
+                                     srcSurf->f88_orig_surf, srcRect, flags);
+        metal_bridge::overlayDrawn(dstRect);
+    }
     HRESULT hr;
     if (!orig::pIDirectDrawSurface4_640x480 || !this->f84_isModSurf || !srcSurf) {
         IDirectDrawSurface4 *src = nullptr;
