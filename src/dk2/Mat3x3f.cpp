@@ -1,6 +1,7 @@
 #include "dk2/utils/Mat3x3f.h"
 #include "dk2/utils/Vec3f.h"
 
+#include <cmath>
 #include <emmintrin.h>
 
 
@@ -114,4 +115,33 @@ dk2::Mat3x3f *dk2::Mat3x3f::sub_594F30(Mat3x3f *output) {
     storeRow(result.m[2], row2);
     *output = result;
     return output;
+}
+
+
+// 0041C580: build an axis rotation matrix. The original uses x87 fsin/fcos,
+// which Rosetta emulates via slow helpers anyway; sinf/cosf may differ in the
+// last ulp from fsin/fcos, which only feeds rendering transforms here.
+int dk2::Mat3x3f::init_rotationMat(int axis, float angle) {
+    const float c = cosf(angle);
+    const float s = sinf(angle);
+    switch (axis) {
+    case 0:
+        m[0][0] = 1.0f; m[0][1] = 0.0f; m[0][2] = 0.0f;
+        m[1][0] = 0.0f; m[1][1] = c;    m[1][2] = -s;
+        m[2][0] = 0.0f; m[2][1] = s;    m[2][2] = c;
+        break;
+    case 1:
+        m[0][0] = c;    m[0][1] = 0.0f; m[0][2] = s;
+        m[1][0] = 0.0f; m[1][1] = 1.0f; m[1][2] = 0.0f;
+        m[2][0] = -s;   m[2][1] = 0.0f; m[2][2] = c;
+        break;
+    case 2:
+        m[0][0] = c;    m[0][1] = -s;   m[0][2] = 0.0f;
+        m[1][0] = s;    m[1][1] = c;    m[1][2] = 0.0f;
+        m[2][0] = 0.0f; m[2][1] = 0.0f; m[2][2] = 1.0f;
+        break;
+    default:
+        break;  // the original leaves the matrix untouched
+    }
+    return 0;
 }
