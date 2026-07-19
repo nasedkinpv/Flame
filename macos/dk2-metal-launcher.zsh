@@ -67,6 +67,10 @@ env WINEPREFIX="${PREFIX}" "${WINESERVER}" -w >/dev/null 2>&1 || true
 sync_flame_payload || exit 1
 /bin/mkdir -p "${BRIDGE_FILE:h}"
 initial_frame="$(bridge_frame)"
+game_mode_args=()
+if [[ -n "${DK2_LEVEL:-}" ]]; then
+  game_mode_args=(-LEVEL "${DK2_LEVEL}" -Q)
+fi
 (
   cd "${GAME_DIR}" || exit 1
   env -i \
@@ -78,6 +82,7 @@ initial_frame="$(bridge_frame)"
     MVK_CONFIG_LOG_LEVEL='0' \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
       -skip-launcher -game-res=1600x1200 \
+      "${game_mode_args[@]}" \
       -NoMovies -NoSound -Shadows 1 \
       -enablebumpmapping -enablebumpluminance -32biteverything -disablegamma \
       -gog:video:HighRes=true -gog:video:RealFullscreen=false -gog:video:Vwait=0 \

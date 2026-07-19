@@ -12,6 +12,7 @@ readonly BRIDGE_FILE="${PREFIX}/drive_c/dk2-metal/frame.bin"
 readonly LOG_DIR="${HOME}/Library/Logs/Dungeon Keeper II Metal"
 readonly LOG_FILE="${LOG_DIR}/game.log"
 readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-1}"
+readonly LEVEL="${DK2_LEVEL:-level1}"
 readonly IMPORTER="${SCRIPT_DIR}/import-original-game.zsh"
 
 fail() {
@@ -51,7 +52,7 @@ initial_frame="$(bridge_frame)"
     DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
     MVK_CONFIG_LOG_LEVEL='0' \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
-      -skip-launcher -game-res=1600x1200 -Level=level1 \
+      -skip-launcher -game-res=1600x1200 -LEVEL "${LEVEL}" \
       -Q -NoMovies -DisableGamma -NoSound -Shadows "${SHADOW_LEVEL}" \
       -gog:video:HighRes=true -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
       -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1
