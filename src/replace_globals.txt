@@ -189,6 +189,8 @@
 # Spatial sphere/light overlap query.  Four candidates are evaluated per SSE2
 # pass while retaining the original mask/range and raw sign-bit semantics.
 0057BBF0 int __fastcall sub_57BBF0(int32_t *, void *, float, float, float, float, int)
+0057BCB0 Obj57BCB0 *Obj57BCB0::constructor(uint32_t *, int)
+0057BD70 int __fastcall Obj57BCB0_buildDirectionalLights(Obj57BCB0 *, void *, int32_t *, int, Mat3x3f, Vec3f)
 0057BF00 float *Obj57BCB0::sub_57BF00(float *, float *, float *)
 0057C190 float *Obj57BCB0::sub_57C190(float *, float *, float *)
 0057CEB0 void *__cdecl MyHeap_alloc(int)

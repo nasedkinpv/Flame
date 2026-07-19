@@ -136,7 +136,7 @@ bool dk2::installSpatialSamplerHotCallsite() {
     // Replacing all seven references previously exposed an unrelated early
     // startup path in Wine.  The measured renderer hotspot is this one call in
     // Obj57AD20::constructor, so patch only that proven site.
-    constexpr uintptr_t callAddress = 0x0057AE49;
+    constexpr uintptr_t callAddress = 0x0057AE48;
     constexpr uintptr_t originalTarget = 0x0058F030;
     auto *call = reinterpret_cast<uint8_t *>(callAddress);
     if (call[0] != 0xE8) {
