@@ -173,6 +173,6 @@ void dk2::CEngineDynamicMesh::fun_582CE0(int mode, SceneObject2E *scene) {
     } else if (mode >= 1000) {
         reinterpret_cast<OriginalModeFun>(0x00582290)(this, mode - 1000, scene);
     } else {
-        reinterpret_cast<OriginalModeFun>(0x00581BE0)(this, mode, scene);
+        sub_581BE0(mode, scene);
     }
 }
