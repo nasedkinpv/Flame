@@ -989,6 +989,18 @@ bool inputLogEnabled() {
     id<MTL4ArgumentTable>
         _argumentTables[kFramesInFlight][kTextureArgumentTablesPerFrame];
     std::unique_ptr<BridgeReader> _bridge;
+    // Animated surfaces (torches, the heart) stream a new frame every game
+    // tick. After enough consecutive HD-lookup misses the id is flagged
+    // dynamic: no more content hashing, and updates rotate through a small
+    // texture ring so the CPU never writes into a texture a frame in flight
+    // still reads.
+    struct DynamicTexture {
+        uint32_t misses = 0;
+        uint8_t ringIndex = 0;
+        bool dynamic = false;
+        id<MTLTexture> ring[kFramesInFlight] = {};
+    };
+    std::unordered_map<uint32_t, DynamicTexture> _dynamicTextures;
     uint64_t _frame;
     uint64_t _appliedDrawableSize;
     uint32_t _lastBridgeFrame;
@@ -1282,11 +1294,56 @@ static void *renderWorker(void *context) {
                         textureUpdate.row_pitch >= textureUpdate.width * 4 &&
                         textureUpdate.data_size >= textureUpdate.row_pitch * textureUpdate.height) {
                         const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
-                        id<MTLTexture> hd = textureUpdate.texture_id == DK2M_OVERLAY_TEXTURE_ID
-                                                ? nil
-                                                : texhd::lookup(_device, pixels, textureUpdate.width,
-                                                                textureUpdate.height, textureUpdate.row_pitch);
-                        if (hd) {
+                        DynamicTexture &dyn = _dynamicTextures[textureUpdate.texture_id];
+                        id<MTLTexture> hd = nil;
+                        if (!dyn.dynamic && textureUpdate.texture_id != DK2M_OVERLAY_TEXTURE_ID) {
+                            hd = texhd::lookup(_device, pixels, textureUpdate.width,
+                                               textureUpdate.height, textureUpdate.row_pitch);
+                            if (hd) {
+                                dyn.misses = 0;
+                            } else if (++dyn.misses > 8) {
+                                dyn.dynamic = true;
+                                NSLog(@"texture id %u flagged dynamic: hashing and HD lookup off",
+                                      textureUpdate.texture_id);
+                            }
+                        }
+                        if (dyn.dynamic) {
+                            id<MTLTexture> current = dyn.ring[dyn.ringIndex];
+                            if (current && (current.width != textureUpdate.width ||
+                                            current.height != textureUpdate.height)) {
+                                for (auto &slot : dyn.ring) slot = nil;
+                                current = nil;
+                            }
+                            dyn.ringIndex = (uint8_t)((dyn.ringIndex + 1) % kFramesInFlight);
+                            id<MTLTexture> target = dyn.ring[dyn.ringIndex];
+                            if (!target) {
+                                MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+                                    texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                width:textureUpdate.width
+                                                               height:textureUpdate.height
+                                                            mipmapped:NO];
+                                descriptor.storageMode = MTLStorageModeShared;
+                                descriptor.usage = MTLTextureUsageShaderRead;
+                                target = [_device newTextureWithDescriptor:descriptor];
+                                if (target) {
+                                    target.label = [NSString
+                                            stringWithFormat:@"DK2 dynamic %u/%u",
+                                                             textureUpdate.texture_id, dyn.ringIndex];
+                                    dyn.ring[dyn.ringIndex] = target;
+                                    [_resources addAllocation:target];
+                                    residencyChanged = YES;
+                                }
+                            }
+                            if (target) {
+                                [target replaceRegion:MTLRegionMake2D(0, 0, textureUpdate.width,
+                                                                      textureUpdate.height)
+                                          mipmapLevel:0 withBytes:pixels
+                                          bytesPerRow:textureUpdate.row_pitch];
+                                _textures[key] = target;
+                                texdump::dump(pixels, textureUpdate.width, textureUpdate.height,
+                                              textureUpdate.row_pitch, textureUpdate.texture_id);
+                            }
+                        } else if (hd) {
                             if (_textures[key] != hd) {
                                 _textures[key] = hd;
                                 [_resources addAllocation:hd];
