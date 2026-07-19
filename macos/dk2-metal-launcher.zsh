@@ -3,7 +3,6 @@ set -u
 
 readonly CONTENTS="${0:A:h:h}"
 readonly RESOURCES="${CONTENTS}/Resources"
-readonly HOST="${CONTENTS}/MacOS/DK2Metal"
 readonly WINE="${RESOURCES}/wine/bin/wine"
 readonly WINESERVER="${RESOURCES}/wine/bin/wineserver"
 readonly IMPORTER="${RESOURCES}/import-original-game"
@@ -29,7 +28,7 @@ trap cleanup EXIT INT TERM HUP
 
 /bin/mkdir -p "${LOG_DIR}"
 : >| "${LOG_FILE}"
-if [[ ! -x "${HOST}" || ! -x "${WINE}" || ! -x "${WINESERVER}" ]]; then
+if [[ ! -x "${WINE}" || ! -x "${WINESERVER}" ]]; then
   show_error "The application bundle is incomplete. Download it again."
   exit 1
 fi
@@ -77,5 +76,4 @@ if [[ "$(bridge_frame)" == 0 || "$(bridge_frame)" == "${initial_frame}" ]]; then
   exit 1
 fi
 
-"${HOST}" "--bridge-file=${BRIDGE_FILE}"
-exit $?
+env WINEPREFIX="${PREFIX}" "${WINESERVER}" -w >>"${LOG_FILE}" 2>&1

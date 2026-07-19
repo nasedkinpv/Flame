@@ -7,7 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>Dungeon Keeper II</string>
 	<key>CFBundleExecutable</key>
-	<string>dk2-metal-launcher</string>
+	<string>DK2Metal</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.dungeonkeeperfx.dk2metal</string>
 	<key>CFBundleInfoDictionaryVersion</key>

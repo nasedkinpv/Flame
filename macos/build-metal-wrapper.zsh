@@ -56,17 +56,22 @@ trap '/bin/rm -rf -- "${stage_root}"' EXIT
 stage="${stage_root}/Dungeon Keeper II.app"
 /bin/mkdir -p "${stage}/Contents/MacOS" "${stage}/Contents/Resources/Flame/flame"
 /bin/cp "${SCRIPT_DIR}/MetalInfo.plist" "${stage}/Contents/Info.plist"
-/bin/cp "${SCRIPT_DIR}/dk2-metal-launcher.zsh" "${stage}/Contents/MacOS/dk2-metal-launcher"
 /bin/cp "${NATIVE_APP}/Contents/MacOS/DK2Metal" "${stage}/Contents/MacOS/DK2Metal"
 /bin/cp "${NATIVE_APP}/Contents/Resources/DK2Shaders.metallib" "${stage}/Contents/Resources/DK2Shaders.metallib"
+/bin/cp "${SCRIPT_DIR}/dk2-metal-launcher.zsh" "${stage}/Contents/Resources/dk2-game-runner"
 /bin/cp "${SCRIPT_DIR}/import-original-game.zsh" "${stage}/Contents/Resources/import-original-game"
 /bin/cp "${payload}/PATCH.dll" "${stage}/Contents/Resources/Flame/PATCH.dll"
 /bin/cp "${payload}/flame/Flame.dll" "${stage}/Contents/Resources/Flame/flame/Flame.dll"
 /bin/cp "${payload}/flame/DKII.dll" "${stage}/Contents/Resources/Flame/flame/DKII.dll"
 /usr/bin/ditto "${WINE_CACHE}" "${stage}/Contents/Resources/wine"
-/bin/chmod 755 "${stage}/Contents/MacOS/dk2-metal-launcher" \
-  "${stage}/Contents/MacOS/DK2Metal" "${stage}/Contents/Resources/import-original-game"
+/bin/chmod 755 "${stage}/Contents/MacOS/DK2Metal" \
+  "${stage}/Contents/Resources/dk2-game-runner" \
+  "${stage}/Contents/Resources/import-original-game"
 /usr/bin/plutil -lint "${stage}/Contents/Info.plist" >/dev/null
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${stage}/Contents/Info.plist")" == 'DK2Metal' ]] || \
+  fail "the app entry point must be the native Metal executable"
+/usr/bin/file "${stage}/Contents/MacOS/DK2Metal" | /usr/bin/grep -q 'Mach-O 64-bit executable arm64' || \
+  fail "the app entry point is not an arm64 Mach-O executable"
 if [[ "${SIGNING_IDENTITY}" == '-' ]]; then
   /usr/bin/codesign --force --deep --sign - --timestamp=none "${stage}" >/dev/null
 else

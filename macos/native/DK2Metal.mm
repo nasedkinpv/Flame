@@ -61,7 +61,7 @@ void fail(NSString *message) {
     NSLog(@"FATAL: %@", message);
     dispatch_async(dispatch_get_main_queue(), ^{
         NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = @"Dungeon Keeper II requires Metal 4";
+        alert.messageText = @"Dungeon Keeper II";
         alert.informativeText = message;
         [alert runModal];
         [NSApp terminate:nil];
@@ -1111,6 +1111,47 @@ static void *renderWorker(void *context) {
     NSWindow *_window;
     DK2MetalView *_view;
     DK2MetalRenderer *_renderer;
+    NSTask *_gameRunner;
+    BOOL _terminating;
+}
+
+- (void)startBundledGameRunner {
+    if (gBridgePath) return;
+    NSURL *runner = [NSBundle.mainBundle URLForResource:@"dk2-game-runner" withExtension:nil];
+    if (!runner) return;
+
+    NSError *error = nil;
+    NSURL *support = [NSFileManager.defaultManager URLForDirectory:NSApplicationSupportDirectory
+                                                          inDomain:NSUserDomainMask
+                                                 appropriateForURL:nil
+                                                            create:YES
+                                                             error:&error];
+    NSURL *bridgeDirectory = [[support URLByAppendingPathComponent:@"Dungeon Keeper II Metal"
+                                                        isDirectory:YES]
+        URLByAppendingPathComponent:@"prefix/drive_c/dk2-metal" isDirectory:YES];
+    if (!support || ![NSFileManager.defaultManager createDirectoryAtURL:bridgeDirectory
+                                            withIntermediateDirectories:YES
+                                                             attributes:nil
+                                                                  error:&error]) {
+        fail([NSString stringWithFormat:@"Unable to create application data: %@", error.localizedDescription]);
+        return;
+    }
+    gBridgePath = [[bridgeDirectory URLByAppendingPathComponent:@"frame.bin"] path];
+
+    _gameRunner = [[NSTask alloc] init];
+    _gameRunner.executableURL = runner;
+    _gameRunner.currentDirectoryURL = NSBundle.mainBundle.resourceURL;
+    __weak DK2AppDelegate *weakSelf = self;
+    _gameRunner.terminationHandler = ^(NSTask *task) {
+        (void)task;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            DK2AppDelegate *delegate = weakSelf;
+            if (delegate && !delegate->_terminating) [NSApp terminate:nil];
+        });
+    };
+    if (![_gameRunner launchAndReturnError:&error]) {
+        fail([NSString stringWithFormat:@"Unable to start the game: %@", error.localizedDescription]);
+    }
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
@@ -1139,6 +1180,8 @@ static void *renderWorker(void *context) {
     [NSApp activateIgnoringOtherApps:YES];
     [_view setInputActive:YES];
 
+    [self startBundledGameRunner];
+
     [_view layoutSubtreeIfNeeded];
     CAMetalLayer *layer = _view.metalLayer;
     const CGSize drawableSize = CGSizeMake(kDrawableWidth, kDrawableHeight);
@@ -1148,6 +1191,13 @@ static void *renderWorker(void *context) {
     _renderer = [[DK2MetalRenderer alloc] initWithLayer:layer];
     [_view publishCurrentInput];
     [_renderer start];
+}
+
+- (void)applicationWillTerminate:(NSNotification *)notification {
+    (void)notification;
+    _terminating = YES;
+    _gameRunner.terminationHandler = nil;
+    if (_gameRunner.running) [_gameRunner terminate];
 }
 
 - (void)windowDidBecomeKey:(NSNotification *)notification {
