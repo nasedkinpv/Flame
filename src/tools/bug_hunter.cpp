@@ -459,6 +459,38 @@ bool isGameFrame(StackFrame &frame) {
     return false;
 }
 
+void formatRawStackCandidates(std::stringstream &ss, LoadedModules &modules,
+                              StackLimits &limits, const CONTEXT &ctx) {
+    ss << std::endl << "raw stack code candidates:" << std::endl;
+    if (!limits.contains(ctx.Esp)) {
+        ss << "  invalid esp=" << fmtHex32(ctx.Esp) << std::endl;
+        return;
+    }
+
+    // A corrupted indirect call can leave EIP outside every module, which makes
+    // the regular unwinder stop before it prints the caller.  Return addresses
+    // still present on the stack are enough to identify that call site.
+    const ULONG_PTR scanEnd = std::min<ULONG_PTR>(limits.high, ctx.Esp + 0x1000);
+    unsigned count = 0;
+    for (ULONG_PTR slot = ctx.Esp; slot + sizeof(DWORD) <= scanEnd; slot += sizeof(DWORD)) {
+        const DWORD candidate = *reinterpret_cast<const DWORD *>(slot);
+        auto *module = modules.findByCodePtr(candidate);
+        if (!module) continue;
+
+        ss << "  [esp+" << fmtHex(slot - ctx.Esp) << "] " << fmtHex32(candidate)
+           << " " << module->name << "+" << fmtHex(candidate - module->base);
+        if (auto *symbol = module->find_export_le(candidate)) {
+            ss << " " << symbol->name << "+" << fmtHex(candidate - symbol->addr);
+        }
+        ss << std::endl;
+        if (++count == 128) {
+            ss << "  (truncated)" << std::endl;
+            break;
+        }
+    }
+    if (count == 0) ss << "  (none in first 4 KiB)" << std::endl;
+}
+
 LPTOP_LEVEL_EXCEPTION_FILTER g_prev = nullptr;
 LONG WINAPI TopLevelExceptionFilter(_In_ struct _EXCEPTION_POINTERS *ExceptionInfo) {
     std::vector<AppThread> states = collectAppThreadsExceptCurrent();
@@ -501,6 +533,7 @@ LONG WINAPI TopLevelExceptionFilter(_In_ struct _EXCEPTION_POINTERS *ExceptionIn
         if(err) {
             ss << "[StackWalker ERROR]: " << err.str() << std::endl;
         }
+        formatRawStackCandidates(ss, modules, limits, R);
     }
     for(auto &ts : states) {
         WalkerError err;
@@ -736,4 +769,3 @@ void bug_hunter::collectStackInfo() {
         os << text;
     }
 }
-

@@ -24,6 +24,22 @@ bridge_frame() {
 cleanup() {
   env WINEPREFIX="${PREFIX}" "${WINESERVER}" -k >/dev/null 2>&1 || true
 }
+
+sync_flame_payload() {
+  local payload="${RESOURCES}/Flame"
+  [[ -f "${payload}/PATCH.dll" &&
+     -f "${payload}/flame/Flame.dll" &&
+     -f "${payload}/flame/DKII.dll" ]] || {
+    show_error "The bundled Flame payload is incomplete. Download the app again."
+    return 1
+  }
+  /bin/mkdir -p "${GAME_DIR}/flame"
+  /bin/cp -p "${payload}/PATCH.dll" "${GAME_DIR}/PATCH.dll"
+  /bin/cp -p "${payload}/flame/Flame.dll" "${GAME_DIR}/Flame.dll"
+  /bin/cp -p "${payload}/flame/DKII.dll" "${GAME_DIR}/DKII.dll"
+  /bin/cp -p "${payload}/flame/Flame.dll" "${GAME_DIR}/flame/Flame.dll"
+  /bin/cp -p "${payload}/flame/DKII.dll" "${GAME_DIR}/flame/DKII.dll"
+}
 trap cleanup EXIT INT TERM HUP
 
 /bin/mkdir -p "${LOG_DIR}"
@@ -48,6 +64,7 @@ fi
 
 cleanup
 env WINEPREFIX="${PREFIX}" "${WINESERVER}" -w >/dev/null 2>&1 || true
+sync_flame_payload || exit 1
 /bin/mkdir -p "${BRIDGE_FILE:h}"
 initial_frame="$(bridge_frame)"
 (
@@ -60,7 +77,7 @@ initial_frame="$(bridge_frame)"
     DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
     MVK_CONFIG_LOG_LEVEL='0' \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
-      -skip-launcher -game-res=1600x1200 -Level=level1 \
+      -skip-launcher -game-res=1600x1200 \
       -Q -NoMovies -DisableGamma -NoSound -Shadows 1 \
       -gog:video:HighRes=true -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
       -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1
