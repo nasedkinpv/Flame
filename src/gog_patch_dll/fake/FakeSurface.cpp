@@ -292,6 +292,9 @@ HRESULT FakeSurface::BltFast(DWORD x, DWORD y, LPDIRECTDRAWSURFACE2 srcSurf_, LP
         gog_assert_failed("FakeSurface::BltFast:580");
         f88_orig_surf = nullptr;
     }
+    if (this == FakeSurface::instance_cpy && f88_orig_surf)
+        metal_bridge::overlayBltFast(this->f88_orig_surf, x, y,
+                                     f88_orig_surf, srcRect, type);
     hr = this->f88_orig_surf->BltFast(x, y, f88_orig_surf, srcRect, type);
     if (FAILED(hr)) return hr;
     if (this == FakeSurface::instance_cpy) {

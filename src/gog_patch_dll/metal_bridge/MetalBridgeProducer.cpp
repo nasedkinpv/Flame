@@ -2,6 +2,7 @@
 #include <metal_bridge/DK2BridgeProtocol.h>
 #include <metal_bridge/OverlayUnmatte.h>
 #include <gog_globals.h>
+#include <gog_debug.h>
 #include <patches/replace_mouse_dinput_to_user32.h>
 #include <d3d.h>
 
@@ -9,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -41,6 +43,16 @@ struct OverlayTileState {
     uint32_t version = 1;
     uint32_t sentVersion = 0;
     uint32_t acknowledgedVersion = 0;
+};
+
+struct CursorSnapshot {
+    RECT rect = {};
+    uint32_t width = 0;
+    uint32_t height = 0;
+    bool visible = false;
+    bool matteWhite = false;
+    std::vector<uint8_t> pixels;
+    std::vector<uint8_t> background;
 };
 
 class Producer {
@@ -76,7 +88,11 @@ public:
 
         width_ = width;
         height_ = height;
-        overlayWhite_ = !overlayWhite_;
+        {
+            std::lock_guard<std::mutex> lock(overlayMutex_);
+            frameThreadId_ = GetCurrentThreadId();
+            overlayWhite_ = !overlayWhite_;
+        }
         used_ = 0;
         commandCount_ = 0;
         drawCopyMicroseconds_ = 0;
@@ -230,11 +246,13 @@ public:
     }
 
     void overlayCleared() {
+        std::lock_guard<std::mutex> lock(overlayMutex_);
         drawnValid_ = false;
         clearedThisFrame_ = true;
     }
 
     void overlayDrawn(const RECT *rect) {
+        std::lock_guard<std::mutex> lock(overlayMutex_);
         if (!rect) {
             drawnFull_ = true;
             return;
@@ -251,20 +269,63 @@ public:
         }
     }
 
+    void overlayBltFast(IDirectDrawSurface4 *destination, DWORD x, DWORD y,
+                        IDirectDrawSurface4 *source, const RECT *sourceRect,
+                        DWORD flags) {
+        {
+            std::lock_guard<std::mutex> lock(overlayMutex_);
+            if (!frameThreadId_ || GetCurrentThreadId() == frameThreadId_) return;
+            if ((flags & DDBLTFAST_SRCCOLORKEY) == 0) {
+                // The cursor worker first restores the background, then draws
+                // the new colour-keyed icon.  Publishing hidden here also
+                // handles the game's explicit hide path.
+                cursor_.visible = false;
+                return;
+            }
+        }
+
+        CursorSnapshot captured;
+        if (!captureCursor(destination, x, y, source, sourceRect, captured)) {
+            std::lock_guard<std::mutex> lock(overlayMutex_);
+            if (!cursorCaptureFailureLogged_) {
+                gog_debug("Metal cursor: colour-keyed worker Blt detected but capture is unsupported");
+                cursorCaptureFailureLogged_ = true;
+            }
+            return;
+        }
+        std::lock_guard<std::mutex> lock(overlayMutex_);
+        captured.matteWhite = overlayWhite_;
+        if (!cursorCaptureLogged_) {
+            gog_debugf("Metal cursor: separated %ux%u sprite from temporal overlay",
+                       captured.width, captured.height);
+            cursorCaptureLogged_ = true;
+        }
+        cursor_ = std::move(captured);
+    }
+
     static RECT unionRect(const RECT &a, const RECT &b) {
         return {std::min(a.left, b.left), std::min(a.top, b.top),
                 std::max(a.right, b.right), std::max(a.bottom, b.bottom)};
     }
 
     void overlay(IDirectDrawSurface4 *surface) {
-        const int parity = overlayWhite_ ? 1 : 0;
+        int parity;
+        bool tracked;
+        RECT drawn;
+        bool haveDrawn;
+        CursorSnapshot cursor;
+        {
+            std::lock_guard<std::mutex> lock(overlayMutex_);
+            parity = overlayWhite_ ? 1 : 0;
+            tracked = clearedThisFrame_ && !drawnFull_;
+            clearedThisFrame_ = false;
+            drawnFull_ = false;
+            drawn = drawnValid_ ? drawnRect_ : RECT{0, 0, 0, 0};
+            haveDrawn = drawnValid_;
+            drawnValid_ = false;
+            cursor = cursor_;
+        }
         TextureCache &cache = parityCache_[parity];
-        const bool tracked = clearedThisFrame_ && !drawnFull_;
-        clearedThisFrame_ = false;
-        drawnFull_ = false;
-        const RECT drawn = drawnValid_ ? drawnRect_ : RECT{0, 0, 0, 0};
-        const bool haveDrawn = drawnValid_;
-        drawnValid_ = false;
 
         RECT refreshed;
         if (tracked && !cache.pixels.empty()) {
@@ -320,16 +381,20 @@ public:
             parityRefresh_[parity] = {0, 0, (LONG)cache.width, (LONG)cache.height};
         }
         refreshed = parityRefresh_[parity];
+        stripCursor(cache, cursor, parity != 0);
 
         TextureCache &other = parityCache_[1 - parity];
         if (!other.pixels.empty() && other.width == cache.width &&
             other.height == cache.height && other.rowPitch == cache.rowPitch) {
             const RECT process = unionRect(refreshed, parityRefresh_[1 - parity]);
-            updateOverlay(parityCache_[0], parityCache_[1], process);
+            updateOverlay(parityCache_[0], parityCache_[1], process, cursor);
         }
     }
 
-    DWORD overlayClearColor() const { return overlayWhite_ ? 0x00FFFFFF : 0x00000000; }
+    DWORD overlayClearColor() {
+        std::lock_guard<std::mutex> lock(overlayMutex_);
+        return overlayWhite_ ? 0x00FFFFFF : 0x00000000;
+    }
 
     void pollInput() {
         if (ensureMapped()) processInput();
@@ -552,7 +617,178 @@ private:
         current = std::move(updated);
     }
 
-    void updateOverlay(const TextureCache &black, const TextureCache &white, RECT process) {
+    static bool captureCursor(IDirectDrawSurface4 *destination, DWORD x, DWORD y,
+                              IDirectDrawSurface4 *source, const RECT *sourceRect,
+                              CursorSnapshot &cursor) {
+        if (!destination || !source) return false;
+        DDSURFACEDESC2 sourceInfo = {};
+        sourceInfo.dwSize = sizeof(sourceInfo);
+        DDSURFACEDESC2 destinationInfo = {};
+        destinationInfo.dwSize = sizeof(destinationInfo);
+        if (FAILED(source->GetSurfaceDesc(&sourceInfo)) ||
+            FAILED(destination->GetSurfaceDesc(&destinationInfo))) return false;
+
+        RECT src = sourceRect ? *sourceRect
+                              : RECT{0, 0, (LONG)sourceInfo.dwWidth, (LONG)sourceInfo.dwHeight};
+        src.left = std::clamp<LONG>(src.left, 0, (LONG)sourceInfo.dwWidth);
+        src.right = std::clamp<LONG>(src.right, 0, (LONG)sourceInfo.dwWidth);
+        src.top = std::clamp<LONG>(src.top, 0, (LONG)sourceInfo.dwHeight);
+        src.bottom = std::clamp<LONG>(src.bottom, 0, (LONG)sourceInfo.dwHeight);
+        if (src.right <= src.left || src.bottom <= src.top ||
+            x >= destinationInfo.dwWidth || y >= destinationInfo.dwHeight) return false;
+        uint32_t width = std::min<uint32_t>(src.right - src.left, destinationInfo.dwWidth - x);
+        uint32_t height = std::min<uint32_t>(src.bottom - src.top, destinationInfo.dwHeight - y);
+        src.right = src.left + width;
+        src.bottom = src.top + height;
+        RECT dst = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+
+        DDCOLORKEY key = {};
+        if (FAILED(source->GetColorKey(DDCKEY_SRCBLT, &key))) return false;
+        DDSURFACEDESC2 sourceLock = {};
+        sourceLock.dwSize = sizeof(sourceLock);
+        if (FAILED(source->Lock(&src, &sourceLock, DDLOCK_READONLY | DDLOCK_WAIT, nullptr)))
+            return false;
+        const bool source32 = sourceLock.lpSurface && sourceLock.lPitch >= 0 &&
+                              sourceLock.ddpfPixelFormat.dwRGBBitCount == 32 &&
+                              sourceLock.ddpfPixelFormat.dwBBitMask == 0x000000FF &&
+                              sourceLock.ddpfPixelFormat.dwGBitMask == 0x0000FF00 &&
+                              sourceLock.ddpfPixelFormat.dwRBitMask == 0x00FF0000;
+        if (!source32) {
+            source->Unlock(&src);
+            return false;
+        }
+        cursor.pixels.resize(static_cast<size_t>(width) * height * 4);
+        const uint32_t rgbMask = sourceLock.ddpfPixelFormat.dwRBitMask |
+                                 sourceLock.ddpfPixelFormat.dwGBitMask |
+                                 sourceLock.ddpfPixelFormat.dwBBitMask;
+        const uint32_t keyLow = key.dwColorSpaceLowValue & rgbMask;
+        const uint32_t keyHigh = key.dwColorSpaceHighValue & rgbMask;
+        for (uint32_t row = 0; row < height; ++row) {
+            const auto *srcPixels = reinterpret_cast<const uint32_t *>(
+                static_cast<const uint8_t *>(sourceLock.lpSurface) +
+                static_cast<size_t>(row) * sourceLock.lPitch);
+            auto *out = cursor.pixels.data() + static_cast<size_t>(row) * width * 4;
+            for (uint32_t column = 0; column < width; ++column) {
+                const uint32_t raw = srcPixels[column];
+                const uint32_t rgb = raw & rgbMask;
+                std::memcpy(out + column * 4, &raw, 3);
+                out[column * 4 + 3] = rgb >= keyLow && rgb <= keyHigh ? 0 : 0xFF;
+            }
+        }
+        source->Unlock(&src);
+
+        DDSURFACEDESC2 destinationLock = {};
+        destinationLock.dwSize = sizeof(destinationLock);
+        if (FAILED(destination->Lock(&dst, &destinationLock,
+                                     DDLOCK_READONLY | DDLOCK_WAIT, nullptr))) return false;
+        const bool destination32 = destinationLock.lpSurface && destinationLock.lPitch >= 0 &&
+                                   destinationLock.ddpfPixelFormat.dwRGBBitCount == 32;
+        if (!destination32) {
+            destination->Unlock(&dst);
+            return false;
+        }
+        cursor.background.resize(static_cast<size_t>(width) * height * 4);
+        for (uint32_t row = 0; row < height; ++row) {
+            uint8_t *out = cursor.background.data() + static_cast<size_t>(row) * width * 4;
+            std::memcpy(out, static_cast<const uint8_t *>(destinationLock.lpSurface) +
+                             static_cast<size_t>(row) * destinationLock.lPitch,
+                        static_cast<size_t>(width) * 4);
+            for (uint32_t column = 0; column < width; ++column) out[column * 4 + 3] = 0xFF;
+        }
+        destination->Unlock(&dst);
+        cursor.rect = dst;
+        cursor.width = width;
+        cursor.height = height;
+        cursor.visible = true;
+        return true;
+    }
+
+    static void stripCursor(TextureCache &surface, const CursorSnapshot &cursor,
+                            bool matteWhite) {
+        if (!cursor.visible || cursor.matteWhite != matteWhite || cursor.pixels.empty() ||
+            cursor.background.size() != cursor.pixels.size()) return;
+        const LONG left = std::clamp<LONG>(cursor.rect.left, 0, (LONG)surface.width);
+        const LONG top = std::clamp<LONG>(cursor.rect.top, 0, (LONG)surface.height);
+        const LONG right = std::clamp<LONG>(cursor.rect.right, left, (LONG)surface.width);
+        const LONG bottom = std::clamp<LONG>(cursor.rect.bottom, top, (LONG)surface.height);
+        for (LONG y = top; y < bottom; ++y) {
+            const uint32_t sourceY = (uint32_t)(y - cursor.rect.top);
+            for (LONG x = left; x < right; ++x) {
+                const uint32_t sourceX = (uint32_t)(x - cursor.rect.left);
+                const size_t cursorOffset = (static_cast<size_t>(sourceY) * cursor.width + sourceX) * 4;
+                if (cursor.pixels[cursorOffset + 3] == 0) continue;
+                uint8_t *pixel = surface.pixels.data() + static_cast<size_t>(y) * surface.rowPitch + x * 4;
+                if (std::memcmp(pixel, cursor.pixels.data() + cursorOffset, 3) == 0)
+                    std::memcpy(pixel, cursor.background.data() + cursorOffset, 4);
+            }
+        }
+    }
+
+    void markOverlayRect(const RECT &rect) {
+        if (!overlayTileColumns_ || !overlayTileRows_) return;
+        const uint32_t left = (uint32_t)std::clamp<LONG>(rect.left, 0, (LONG)overlay_.width);
+        const uint32_t right = (uint32_t)std::clamp<LONG>(rect.right, 0, (LONG)overlay_.width);
+        const uint32_t top = (uint32_t)std::clamp<LONG>(rect.top, 0, (LONG)overlay_.height);
+        const uint32_t bottom = (uint32_t)std::clamp<LONG>(rect.bottom, 0, (LONG)overlay_.height);
+        if (right <= left || bottom <= top) return;
+        const uint32_t firstTileX = left / kOverlayTileSize;
+        const uint32_t lastTileX = (right - 1) / kOverlayTileSize;
+        const uint32_t firstTileY = top / kOverlayTileSize;
+        const uint32_t lastTileY = (bottom - 1) / kOverlayTileSize;
+        for (uint32_t tileY = firstTileY; tileY <= lastTileY; ++tileY)
+            for (uint32_t tileX = firstTileX; tileX <= lastTileX; ++tileX)
+                overlayChanged_[static_cast<size_t>(tileY) * overlayTileColumns_ + tileX] = 1;
+    }
+
+    void restoreCompositedCursor() {
+        const uint32_t width = (uint32_t)std::max<LONG>(0,
+            compositedCursorRect_.right - compositedCursorRect_.left);
+        const uint32_t height = (uint32_t)std::max<LONG>(0,
+            compositedCursorRect_.bottom - compositedCursorRect_.top);
+        if (!width || !height || cursorUnderlay_.size() != static_cast<size_t>(width) * height * 4)
+            return;
+        for (uint32_t row = 0; row < height; ++row)
+            std::memcpy(overlay_.pixels.data() +
+                            static_cast<size_t>(compositedCursorRect_.top + row) * overlay_.rowPitch +
+                            compositedCursorRect_.left * 4,
+                        cursorUnderlay_.data() + static_cast<size_t>(row) * width * 4,
+                        static_cast<size_t>(width) * 4);
+        markOverlayRect(compositedCursorRect_);
+        compositedCursorRect_ = {};
+        cursorUnderlay_.clear();
+    }
+
+    void compositeCursor(const CursorSnapshot &cursor) {
+        if (!cursor.visible || cursor.pixels.empty()) return;
+        RECT clipped = {
+            std::clamp<LONG>(cursor.rect.left, 0, (LONG)overlay_.width),
+            std::clamp<LONG>(cursor.rect.top, 0, (LONG)overlay_.height),
+            std::clamp<LONG>(cursor.rect.right, 0, (LONG)overlay_.width),
+            std::clamp<LONG>(cursor.rect.bottom, 0, (LONG)overlay_.height)};
+        if (clipped.right <= clipped.left || clipped.bottom <= clipped.top) return;
+        const uint32_t width = clipped.right - clipped.left;
+        const uint32_t height = clipped.bottom - clipped.top;
+        cursorUnderlay_.resize(static_cast<size_t>(width) * height * 4);
+        for (uint32_t row = 0; row < height; ++row) {
+            uint8_t *destination = overlay_.pixels.data() +
+                                   static_cast<size_t>(clipped.top + row) * overlay_.rowPitch +
+                                   clipped.left * 4;
+            std::memcpy(cursorUnderlay_.data() + static_cast<size_t>(row) * width * 4,
+                        destination, static_cast<size_t>(width) * 4);
+            const uint32_t sourceY = clipped.top + row - cursor.rect.top;
+            for (uint32_t column = 0; column < width; ++column) {
+                const uint32_t sourceX = clipped.left + column - cursor.rect.left;
+                const uint8_t *source = cursor.pixels.data() +
+                    (static_cast<size_t>(sourceY) * cursor.width + sourceX) * 4;
+                if (source[3]) std::memcpy(destination + column * 4, source, 4);
+            }
+        }
+        compositedCursorRect_ = clipped;
+        markOverlayRect(clipped);
+    }
+
+    void updateOverlay(const TextureCache &black, const TextureCache &white, RECT process,
+                       const CursorSnapshot &cursor) {
         if (overlay_.width != black.width || overlay_.height != black.height ||
             overlay_.rowPitch != black.rowPitch) {
             overlay_.width = black.width;
@@ -568,27 +804,37 @@ private:
             process = {0, 0, (LONG)black.width, (LONG)black.height};
         }
 
+        const uint32_t xBegin = (uint32_t)std::clamp<LONG>(process.left, 0, (LONG)black.width);
+        const uint32_t xEnd = (uint32_t)std::clamp<LONG>(process.right, 0, (LONG)black.width);
         const uint32_t yBegin = (uint32_t)std::clamp<LONG>(process.top, 0, (LONG)black.height);
         const uint32_t yEnd = (uint32_t)std::clamp<LONG>(process.bottom, 0, (LONG)black.height);
         std::fill(overlayChanged_.begin(), overlayChanged_.end(), 0);
+        restoreCompositedCursor();
         for (uint32_t y = yBegin; y < yEnd; ++y) {
             const uint8_t *blackRow = black.pixels.data() + static_cast<size_t>(y) * black.rowPitch;
             const uint8_t *whiteRow = white.pixels.data() + static_cast<size_t>(y) * white.rowPitch;
             uint8_t *overlayRow = overlay_.pixels.data() + static_cast<size_t>(y) * overlay_.rowPitch;
-            unmatteOverlaySpan(blackRow, whiteRow, overlayLine_.data(), black.width);
+            unmatteOverlaySpan(blackRow + static_cast<size_t>(xBegin) * 4,
+                               whiteRow + static_cast<size_t>(xBegin) * 4,
+                               overlayLine_.data() + static_cast<size_t>(xBegin) * 4,
+                               xEnd - xBegin);
             const uint32_t tileY = y / kOverlayTileSize;
-            for (uint32_t tileX = 0; tileX < overlayTileColumns_; ++tileX) {
-                const uint32_t x = tileX * kOverlayTileSize;
-                const uint32_t width = std::min(kOverlayTileSize, black.width - x);
-                const size_t bytes = static_cast<size_t>(width) * 4;
-                if (std::memcmp(overlayRow + static_cast<size_t>(x) * 4,
-                                overlayLine_.data() + static_cast<size_t>(x) * 4,
+            const uint32_t firstTileX = xBegin / kOverlayTileSize;
+            const uint32_t endTileX = (xEnd + kOverlayTileSize - 1) / kOverlayTileSize;
+            for (uint32_t tileX = firstTileX; tileX < endTileX; ++tileX) {
+                const uint32_t tileLeft = tileX * kOverlayTileSize;
+                const uint32_t copyLeft = std::max(tileLeft, xBegin);
+                const uint32_t copyRight = std::min(tileLeft + kOverlayTileSize, xEnd);
+                const size_t bytes = static_cast<size_t>(copyRight - copyLeft) * 4;
+                if (std::memcmp(overlayRow + static_cast<size_t>(copyLeft) * 4,
+                                overlayLine_.data() + static_cast<size_t>(copyLeft) * 4,
                                 bytes) == 0) continue;
-                std::memcpy(overlayRow + static_cast<size_t>(x) * 4,
-                            overlayLine_.data() + static_cast<size_t>(x) * 4, bytes);
+                std::memcpy(overlayRow + static_cast<size_t>(copyLeft) * 4,
+                            overlayLine_.data() + static_cast<size_t>(copyLeft) * 4, bytes);
                 overlayChanged_[static_cast<size_t>(tileY) * overlayTileColumns_ + tileX] = 1;
             }
         }
+        compositeCursor(cursor);
         for (size_t tile = 0; tile < overlayTiles_.size(); ++tile) {
             if (!overlayChanged_[tile]) continue;
             if (++overlayTiles_[tile].version == 0) overlayTiles_[tile].version = 1;
@@ -893,6 +1139,13 @@ private:
     std::unordered_map<uint64_t, uint32_t> textureStageStates_;
     TextureCache overlay_;
     TextureCache parityCache_[2];
+    std::mutex overlayMutex_;
+    DWORD frameThreadId_ = 0;
+    CursorSnapshot cursor_;
+    bool cursorCaptureLogged_ = false;
+    bool cursorCaptureFailureLogged_ = false;
+    RECT compositedCursorRect_ = {};
+    std::vector<uint8_t> cursorUnderlay_;
     RECT parityDrawn_[2] = {};
     RECT parityRefresh_[2] = {};
     RECT drawnRect_ = {};
@@ -942,6 +1195,12 @@ void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
 void overlayCleared() { producer.overlayCleared(); }
 
 void overlayDrawn(const RECT *rect) { producer.overlayDrawn(rect); }
+
+void overlayBltFast(IDirectDrawSurface4 *destination, DWORD x, DWORD y,
+                    IDirectDrawSurface4 *source, const RECT *sourceRect,
+                    DWORD flags) {
+    producer.overlayBltFast(destination, x, y, source, sourceRect, flags);
+}
 
 void captureOverlay(IDirectDrawSurface4 *surface) {
     const auto started = PhaseClock::now();

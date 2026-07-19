@@ -17,6 +17,12 @@ DWORD overlayClearColor();
 // screen every frame
 void overlayCleared();
 void overlayDrawn(const RECT *rect);  // null = whole surface
+// DK2 draws its colour-keyed software cursor from a worker thread.  Capture it
+// separately so the two-frame black/white overlay reconstruction does not turn
+// cursor movement into translucent trails.
+void overlayBltFast(IDirectDrawSurface4 *destination, DWORD x, DWORD y,
+                    IDirectDrawSurface4 *source, const RECT *sourceRect,
+                    DWORD flags);
 void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
                  const WORD *indices, DWORD indexCount, DWORD flags);
 void captureOverlay(IDirectDrawSurface4 *surface);
