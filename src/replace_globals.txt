@@ -51,6 +51,9 @@
 0058B940 void __cdecl addTriangleToRender2(int, int, int)
 0058B9D0 void __cdecl addTriangleToRender1(int, int, int)
 
+# Spatial vector-field sampler (6x6x5 trilinear interpolation)
+0058F030 float *Obj58EF60::sub_58F030(float, float, float, float *)
+
 # CBridge
 0043E0F0 MySurface *CBridge::loadPng(const char *)
 0043E320 void CBridge::sub_43E320(uint32_t, uint32_t, MyTerrainDataObj *, CEngineStaticMeshDataArrays *)

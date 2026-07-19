@@ -51,6 +51,7 @@ add_library(${TARGET} SHARED
         dk2/RenderData.cpp
         dk2/Obj57BCB0.cpp
         dk2/Obj57AD20.cpp
+        dk2/Obj58EF60.cpp
         dk2/CEngineAnimMesh.cpp
         dk2/MyComputerPlayer_drop_condition.cpp
         dk2/MyComputerPlayer_drop_condition.h
