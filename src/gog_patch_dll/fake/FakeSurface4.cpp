@@ -2,6 +2,7 @@
 // Created by DiaLight on 20.01.2023.
 //
 #include <fake/FakeSurface4.h>
+#include <fake/FakeSurface.h>
 #include <gog_globals.h>
 #include <fake/FakeGammaControl.h>
 #include <fake/FakeTexture.h>
@@ -106,11 +107,31 @@ HRESULT FakeSurface4::BltFast(DWORD x, DWORD y, LPDIRECTDRAWSURFACE4 srcSurf_, L
     if (this->fC_isModSurf) gog_assert_failed("FakeSurface4::BltFast:265");
     IDirectDrawSurface4 *srcSurf_1 = nullptr;
     if (srcSurf) srcSurf_1 = srcSurf->f8_orig_surf;
+    const bool isOverlay = FakeSurface::instance_cpy &&
+                           this->f8_orig_surf == FakeSurface::instance_cpy->orig();
+    if (isOverlay && srcSurf_1)
+        metal_bridge::overlayBltFast(this->f8_orig_surf, x, y,
+                                     srcSurf_1, srcRect, a6);
     HRESULT hr;
     hr = this->f8_orig_surf->BltFast(x, y, srcSurf_1, srcRect, a6);
     if (FAILED(hr)) {
         gog_assert_failed_hr("FakeSurface4::BltFast:282", hr);
         return hr;
+    }
+    if (isOverlay) {
+        RECT destination;
+        if (srcRect) {
+            destination = {(LONG)x, (LONG)y,
+                           (LONG)x + srcRect->right - srcRect->left,
+                           (LONG)y + srcRect->bottom - srcRect->top};
+        } else if (srcSurf) {
+            destination = {(LONG)x, (LONG)y,
+                           (LONG)(x + srcSurf->f14_desc.dwWidth),
+                           (LONG)(y + srcSurf->f14_desc.dwHeight)};
+        } else {
+            destination = {};
+        }
+        metal_bridge::overlayDrawn(destination.right > destination.left ? &destination : nullptr);
     }
     metal_bridge::textureDirty(this->f8_orig_surf);
     if (!this->fC_isModSurf) return hr;
