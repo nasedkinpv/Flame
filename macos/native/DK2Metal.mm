@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <memory>
@@ -237,6 +238,67 @@ uint8_t dikForKeyCode(GCKeyCode code) {
     return 0;
 }
 
+// NSEvent uses the hardware-position virtual key codes from HIToolbox.  Keep
+// this as a fallback for machines where GameController doesn't publish the
+// built-in keyboard; only one path is active so a key never reaches DK2 twice.
+uint8_t dikForMacKeyCode(unsigned short code) {
+    switch (code) {
+    case 53: return 0x01; // Escape
+    case 18: return 0x02; case 19: return 0x03; case 20: return 0x04;
+    case 21: return 0x05; case 23: return 0x06; case 22: return 0x07;
+    case 26: return 0x08; case 28: return 0x09; case 25: return 0x0A;
+    case 29: return 0x0B; case 27: return 0x0C; case 24: return 0x0D;
+    case 51: return 0x0E; case 48: return 0x0F;
+    case 12: return 0x10; case 13: return 0x11; case 14: return 0x12;
+    case 15: return 0x13; case 17: return 0x14; case 16: return 0x15;
+    case 32: return 0x16; case 34: return 0x17; case 31: return 0x18;
+    case 35: return 0x19; case 33: return 0x1A; case 30: return 0x1B;
+    case 36: return 0x1C; case 59: return 0x1D;
+    case 0: return 0x1E; case 1: return 0x1F; case 2: return 0x20;
+    case 3: return 0x21; case 5: return 0x22; case 4: return 0x23;
+    case 38: return 0x24; case 40: return 0x25; case 37: return 0x26;
+    case 41: return 0x27; case 39: return 0x28; case 50: return 0x29;
+    case 56: return 0x2A; case 42: return 0x2B;
+    case 6: return 0x2C; case 7: return 0x2D; case 8: return 0x2E;
+    case 9: return 0x2F; case 11: return 0x30; case 45: return 0x31;
+    case 46: return 0x32; case 43: return 0x33; case 47: return 0x34;
+    case 44: return 0x35; case 60: return 0x36; case 67: return 0x37;
+    case 58: return 0x38; case 49: return 0x39; case 57: return 0x3A;
+    case 122: return 0x3B; case 120: return 0x3C; case 99: return 0x3D;
+    case 118: return 0x3E; case 96: return 0x3F; case 97: return 0x40;
+    case 98: return 0x41; case 100: return 0x42; case 101: return 0x43;
+    case 109: return 0x44; case 71: return 0x45;
+    case 89: return 0x47; case 91: return 0x48; case 92: return 0x49;
+    case 78: return 0x4A; case 86: return 0x4B; case 87: return 0x4C;
+    case 88: return 0x4D; case 69: return 0x4E; case 83: return 0x4F;
+    case 84: return 0x50; case 85: return 0x51; case 82: return 0x52;
+    case 65: return 0x53; case 103: return 0x57; case 111: return 0x58;
+    case 76: return 0x9C; case 62: return 0x9D; case 75: return 0xB5;
+    case 61: return 0xB8; case 115: return 0xC7; case 126: return 0xC8;
+    case 116: return 0xC9; case 123: return 0xCB; case 124: return 0xCD;
+    case 119: return 0xCF; case 125: return 0xD0; case 121: return 0xD1;
+    case 114: return 0xD2; case 117: return 0xD3;
+    case 55: return 0xDB; case 54: return 0xDC;
+    default: return 0;
+    }
+}
+
+NSEventModifierFlags modifierMaskForMacKeyCode(unsigned short code) {
+    switch (code) {
+    case 56: case 60: return NSEventModifierFlagShift;
+    case 59: case 62: return NSEventModifierFlagControl;
+    case 58: case 61: return NSEventModifierFlagOption;
+    case 54: case 55: return NSEventModifierFlagCommand;
+    case 57: return NSEventModifierFlagCapsLock;
+    default: return 0;
+    }
+}
+
+bool inputLogEnabled() {
+    static const bool enabled = std::getenv("DK2_METAL_INPUT_LOG") != nullptr;
+    return enabled;
+}
+
 } // namespace
 
 @interface DK2MetalView : NSView
@@ -317,6 +379,7 @@ uint8_t dikForKeyCode(GCKeyCode code) {
     if (wasPressed == pressed) return;
     if (pressed) *byte |= mask;
     else *byte &= static_cast<uint8_t>(~mask);
+    if (inputLogEnabled()) NSLog(@"Input key DIK 0x%02x %@", dik, pressed ? @"down" : @"up");
     [self appendInputEvent:DK2M_INPUT_EVENT_KEY code:dik value:pressed ? 1 : 0];
     [self publishCurrentInput];
 }
@@ -492,11 +555,28 @@ uint8_t dikForKeyCode(GCKeyCode code) {
     [self setButton:event.buttonNumber == 2 ? 2 : 3 pressed:NO doubleClick:NO];
 }
 
-- (void)keyDown:(NSEvent *)event { (void)event; }
-- (void)keyUp:(NSEvent *)event { (void)event; }
+- (void)keyDown:(NSEvent *)event {
+    if (!_keyboard) [self setKey:dikForMacKeyCode(event.keyCode) pressed:YES];
+}
+
+- (void)keyUp:(NSEvent *)event {
+    if (!_keyboard) [self setKey:dikForMacKeyCode(event.keyCode) pressed:NO];
+}
+
+- (void)flagsChanged:(NSEvent *)event {
+    if (_keyboard) return;
+    const NSEventModifierFlags mask = modifierMaskForMacKeyCode(event.keyCode);
+    if (mask != 0) [self setKey:dikForMacKeyCode(event.keyCode)
+                        pressed:(event.modifierFlags & mask) != 0];
+}
 
 - (BOOL)acceptsFirstResponder {
     return YES;
+}
+
+- (void)resetCursorRects {
+    [super resetCursorRects];
+    [self addCursorRect:_metalLayer.frame cursor:NSCursor.arrowCursor];
 }
 
 - (void)layout {
@@ -518,6 +598,7 @@ uint8_t dikForKeyCode(GCKeyCode code) {
     [CATransaction setDisableActions:YES];
     _metalLayer.frame = frame;
     [CATransaction commit];
+    [self.window invalidateCursorRectsForView:self];
     gRequestedDrawableSize.store(
         packSize(CGSizeMake(kDrawableWidth, kDrawableHeight)),
         std::memory_order_release);
@@ -1071,6 +1152,7 @@ static void *renderWorker(void *context) {
 
 - (void)windowDidBecomeKey:(NSNotification *)notification {
     (void)notification;
+    [_window makeFirstResponder:_view];
     [_view setInputActive:YES];
 }
 
