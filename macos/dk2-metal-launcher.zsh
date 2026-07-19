@@ -1,22 +1,20 @@
 #!/bin/zsh
-set -euo pipefail
+set -u
 
-readonly SCRIPT_DIR="${0:A:h}"
-readonly REPO_ROOT="${SCRIPT_DIR:h}"
-readonly APP_EXECUTABLE="${DK2_METAL_APP:-${SCRIPT_DIR}/native/build/Dungeon Keeper II.app/Contents/MacOS/DK2Metal}"
-readonly WINE="${DK2_WINE_BIN:-${REPO_ROOT}/.cache/wine-stable-11.0_1/Contents/Resources/wine/bin/wine}"
-readonly WINESERVER="${WINE:h}/wineserver"
-readonly PREFIX="${DK2_METAL_PREFIX:-${HOME}/Library/Application Support/Dungeon Keeper II Metal/prefix}"
+readonly CONTENTS="${0:A:h:h}"
+readonly RESOURCES="${CONTENTS}/Resources"
+readonly HOST="${CONTENTS}/MacOS/DK2Metal"
+readonly WINE="${RESOURCES}/wine/bin/wine"
+readonly WINESERVER="${RESOURCES}/wine/bin/wineserver"
+readonly IMPORTER="${RESOURCES}/import-original-game"
+readonly PREFIX="${HOME}/Library/Application Support/Dungeon Keeper II Metal/prefix"
 readonly GAME_DIR="${PREFIX}/drive_c/GOG Games/Dungeon Keeper 2"
 readonly BRIDGE_FILE="${PREFIX}/drive_c/dk2-metal/frame.bin"
 readonly LOG_DIR="${HOME}/Library/Logs/Dungeon Keeper II Metal"
 readonly LOG_FILE="${LOG_DIR}/game.log"
-readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-1}"
-readonly IMPORTER="${SCRIPT_DIR}/import-original-game.zsh"
 
-fail() {
-  print -u2 -- "error: $*"
-  exit 1
+show_error() {
+  /usr/bin/osascript -e "display alert \"Dungeon Keeper II\" message \"$1\" as critical" >/dev/null 2>&1 || true
 }
 
 bridge_frame() {
@@ -29,18 +27,30 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
-[[ -x "${APP_EXECUTABLE}" ]] || fail "build the Metal host with macos/build-metal-host.zsh"
-[[ -x "${WINE}" && -x "${WINESERVER}" ]] || fail "Wine 11 runtime is missing"
-if [[ ! -f "${GAME_DIR}/DKII-DX.exe" ]]; then
-  DK2_WINE_BIN="${WINE}" DK2_METAL_PREFIX="${PREFIX}" "${IMPORTER}"
+/bin/mkdir -p "${LOG_DIR}"
+: >| "${LOG_FILE}"
+if [[ ! -x "${HOST}" || ! -x "${WINE}" || ! -x "${WINESERVER}" ]]; then
+  show_error "The application bundle is incomplete. Download it again."
+  exit 1
 fi
-[[ -f "${GAME_DIR}/DKII-DX.exe" && -f "${GAME_DIR}/patch.dll" ]] || fail "isolated DK2 installation is missing"
 
-/bin/mkdir -p "${BRIDGE_FILE:h}" "${LOG_DIR}"
+if [[ ! -f "${GAME_DIR}/DKII-DX.exe" ]]; then
+  DK2_WINE_BIN="${WINE}" \
+  DK2_METAL_PREFIX="${PREFIX}" \
+  DK2_FLAME_PAYLOAD="${RESOURCES}/Flame" \
+  DK2_IMPORT_GUI=1 \
+    "${IMPORTER}" >>"${LOG_FILE}" 2>&1
+  import_status=$?
+  if (( import_status != 0 )); then
+    (( import_status == 2 )) || show_error "Import failed. See ${LOG_FILE}."
+    exit ${import_status}
+  fi
+fi
+
 cleanup
 env WINEPREFIX="${PREFIX}" "${WINESERVER}" -w >/dev/null 2>&1 || true
+/bin/mkdir -p "${BRIDGE_FILE:h}"
 initial_frame="$(bridge_frame)"
-
 (
   cd "${GAME_DIR}" || exit 1
   env -i \
@@ -52,7 +62,7 @@ initial_frame="$(bridge_frame)"
     MVK_CONFIG_LOG_LEVEL='0' \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
       -skip-launcher -game-res=1024x768 -Level=level1 \
-      -Q -NoMovies -DisableGamma -NoSound -Shadows "${SHADOW_LEVEL}" \
+      -Q -NoMovies -DisableGamma -NoSound -Shadows 1 \
       -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
       -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1
 ) >>"${LOG_FILE}" 2>&1 &
@@ -62,7 +72,10 @@ for attempt in {1..200}; do
   [[ "${current_frame}" != 0 && "${current_frame}" != "${initial_frame}" ]] && break
   /bin/sleep 0.05
 done
-[[ "$(bridge_frame)" != 0 && "$(bridge_frame)" != "${initial_frame}" ]] ||
-  fail "DK2 did not produce a Metal frame; see ${LOG_FILE}"
+if [[ "$(bridge_frame)" == 0 || "$(bridge_frame)" == "${initial_frame}" ]]; then
+  show_error "The game didn't produce a frame. See ${LOG_FILE}."
+  exit 1
+fi
 
-"${APP_EXECUTABLE}" "--bridge-file=${BRIDGE_FILE}"
+"${HOST}" "--bridge-file=${BRIDGE_FILE}"
+exit $?

@@ -13,12 +13,39 @@ Flame captures the game's Direct3D 3 command stream without asking WineD3D to re
 ./macos/run-metal-game.zsh
 ```
 
+To build the self-contained app that can be handed to another Mac user:
+
+```sh
+./macos/build-metal-wrapper.zsh
+open "dist/Dungeon Keeper II.app"
+```
+
+The resulting app contains the native Metal host, the pinned Wine runtime, and
+Flame, but no Dungeon Keeper 2 executable, WAD, media, or other game data.
+
+The game itself is never included. On the first run, a native folder picker
+asks for the user's original Dungeon Keeper 2 installation, validates the GOG
+1.7 executable and required WAD files, and copies it into the isolated prefix.
+The selected installation is read-only and remains untouched. To import from a
+known path without the picker, run:
+
+```sh
+./macos/import-original-game.zsh "/path/to/Dungeon Keeper 2"
+```
+
+The first public importer intentionally accepts an already installed original
+GOG copy. Automating the GOG offline installer is kept separate so the normal
+launch path does not depend on a particular third-party installer version.
+
 The Metal launcher defaults to DK2 shadow level 1. It keeps cached character
 shadows while avoiding the original level-3 path that rebuilds animated shadow
 geometry every frame. Set `DK2_SHADOW_LEVEL=2` or `3` before launching to trade
 CPU time for the original dynamic-shadow modes.
 
-The script pins and verifies both downloads. It reads the owned GOG installation from `~/.wine` by default; use `DK2_SOURCE_PREFIX=/path/to/prefix` to select another source. The source installation is never modified.
+The packaging script pins Wine 11 and verifies its SHA-256 checksum. Maintainer
+builds take the matching Release Flame payload from the CI cache; set
+`DK2_FLAME_PAYLOAD=/path/to/artifact` to select one explicitly. A Developer ID
+can be supplied with `DK2_CODESIGN_IDENTITY`; local builds use ad-hoc signing.
 
 ## Isolation and data
 
