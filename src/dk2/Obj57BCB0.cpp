@@ -1,4 +1,5 @@
 #include "dk2/Obj57BCB0.h"
+#include "dk2/math/directional_lighting.h"
 
 #include <cstdint>
 #include <cstring>
@@ -66,4 +67,13 @@ float *dk2::Obj57BCB0::sub_57BF00(
         float *accumulator, float *position, float *normal) {
     calculateLighting(*this, accumulator, position, normal);
     return accumulator;
+}
+
+
+float *dk2::Obj57BCB0::sub_57C190(
+        float *accumulator, float *position, float *normal) {
+    static_assert(sizeof(Obj57BCB0) == sizeof(lighting::DirectionalLightBuffer));
+    const auto &lights = reinterpret_cast<const lighting::DirectionalLightBuffer &>(*this);
+    lighting::accumulateDirectional(lights, accumulator, position, normal);
+    return accumulator;  // all original callers ignore EAX
 }

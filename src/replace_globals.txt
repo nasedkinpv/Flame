@@ -143,7 +143,7 @@
 # functions
 005278C0 int cmd_Game()
 00528080 int __cdecl cmd_dumpPlayer(int, int)
-00553690 int __cdecl widthToFontId(int, int)
+00553690 int __cdecl widthToFontId(uint32_t, uint32_t)
 0052BB30 void createPanelButtons(CWindow *, CButton *, ButtonCfg *, CDefaultPlayerInterface *)
 005391F0 void __cdecl changeGui(int, int, CFrontEndComponent *)
 00543840 int __cdecl __onMapSelected(CButton *, int, CFrontEndComponent *)

@@ -3,6 +3,8 @@
 //
 #include "screen_resolution.h"
 
+#include <algorithm>
+#include <dk2_functions.h>
 #include <dk2_globals.h>
 #include <iostream>
 #include <ostream>
@@ -109,3 +111,30 @@ void patch::screen_resolution::patchGameWindowResolution() {
     }
 }
 
+
+int __cdecl dk2::widthToFontId(uint32_t baseSize, uint32_t screenWidth) {
+    int adjustedSize = static_cast<int>(baseSize);
+    switch (screenWidth) {
+    case 400: adjustedSize -= baseSize <= 10 ? 2 : 4; break;
+    case 512: adjustedSize -= 2; break;
+    case 800: adjustedSize += 2; break;
+    case 1024: adjustedSize += 4; break;
+    case 1280: adjustedSize += 6; break;
+    case 1600: adjustedSize += 8; break;
+    default: break;
+    }
+    adjustedSize = std::min(adjustedSize, 24);
+
+    switch (adjustedSize) {
+    case 6: return 0x444;
+    case 8: return 0x445;
+    case 10: return 0x447;
+    case 14: return 0x449;
+    case 16: return 0x44A;
+    case 18: return 0x44B;
+    case 20: return 0x44C;
+    case 22: return 0x44D;
+    case 24: return 0x44E;
+    default: return 0x448;
+    }
+}
