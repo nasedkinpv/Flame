@@ -157,6 +157,27 @@ def isolated_blocks(width, height, channels, pixels):
     return 1 <= len(outliers) <= 6 and bool(rest) and rest[len(rest) // 2] < 10
 
 
+def fire_on_black(width, height, channels, pixels):
+    """Torch/heart cache pages: a 32x32 tile that is both mostly black and
+    carries a warm-pixel cluster (fire baked on black)."""
+    stride = width * channels
+    for by in range(0, height - 31, 32):
+        for bx in range(0, width - 31, 32):
+            fire = black = 0
+            for y in range(by, by + 32):
+                o = y * stride + bx * channels
+                for _ in range(32):
+                    r, g, b = pixels[o + 2], pixels[o + 1], pixels[o]
+                    if r > 150 and g > 60 and b < 110 and r > b + 80:
+                        fire += 1
+                    if r + g + b < 75:
+                        black += 1
+                    o += channels
+            if fire > 25 and black > 150:
+                return True
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dump", required=True, type=pathlib.Path)
@@ -196,6 +217,8 @@ def main():
                 reasons.append("grid-seam")
             if isolated_blocks(*png):
                 reasons.append("alien-block")
+            if fire_on_black(*png):
+                reasons.append("fire-collage")
         if reasons:
             flagged[digest] = reasons
 

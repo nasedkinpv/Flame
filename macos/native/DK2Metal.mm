@@ -155,6 +155,24 @@ bool looksLikeCollage(const uint8_t *pixels, uint32_t width, uint32_t height, ui
         }
     }
     if (colorkey > 8) return true;
+    // fire baked on a black tile (torch/heart pages): a 32x32 block that is
+    // both mostly black and carries a cluster of warm pixels. Four different
+    // tiles defeat the alien-block test and fire on black is not colorkey, so
+    // this needs its own signal.
+    for (uint32_t by = 0; by + 32 <= height; by += 32) {
+        for (uint32_t bx = 0; bx + 32 <= width; bx += 32) {
+            uint32_t fire = 0, black = 0;
+            for (uint32_t y = by; y < by + 32; ++y) {
+                const uint8_t *px = pixels + (size_t)y * pitch + (size_t)bx * 4;
+                for (uint32_t x = 0; x < 32; ++x, px += 4) {
+                    const int b = px[0], g = px[1], r = px[2];
+                    if (r > 150 && g > 60 && b < 110 && r > b + 80) ++fire;
+                    if (r + g + b < 75) ++black;
+                }
+            }
+            if (fire > 25 && black > 150) return true;
+        }
+    }
     const uint32_t n = cols * rows;
     float med[3];
     for (int c = 0; c < 3; ++c) {
