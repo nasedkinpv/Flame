@@ -412,6 +412,10 @@
 0057A9A0 int *Obj57AD20::sub_57A9A0(int, SceneObject2E *, uint32_t *, int, int, int, int, float)
 
 # CEngineAnimMesh
+# Per-vertex animation decompression is shared by the visible mesh and its
+# high-detail shadow projection.  The SSE2 translation preserves the packed
+# 10:10:10 decode and interpolation order while removing the inner x87 loop.
+0057E5B0 Vec3f *CAnimMeshResource::sub_57E5B0(int, float, uint32_t, int, Vec3f *)
 # Route the hot animated-mesh path through its small virtual dispatcher. Direct
 # replacement of the large 005836A0 body is unsafe under Wine 11 WOW64 for the
 # same reason as Obj57AD20::sub_57B6D0 above.

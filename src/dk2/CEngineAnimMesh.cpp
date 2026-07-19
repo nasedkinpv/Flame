@@ -14,6 +14,7 @@
 #include "dk2_globals.h"
 
 #include <cstdint>
+#include <emmintrin.h>
 
 
 namespace {
@@ -118,7 +119,73 @@ void buildDirectionalLights(
     fun(&lights, first, second, matrix, position);
 }
 
+__m128 decodeAnimationPosition(
+        uint32_t packed, const dk2::CAnimMeshResource *resource) {
+    const int32_t x = static_cast<int32_t>(
+            (packed & 0x3FF00000u) - 0x20000000u);
+    const int32_t y = static_cast<int32_t>(
+            (packed & 0x000FFC00u) - 0x00080000u);
+    const int32_t z = static_cast<int32_t>(
+            (packed & 0x000003FFu) - 0x00000200u);
+    const __m128 coordinates = _mm_cvtepi32_ps(_mm_set_epi32(0, z, y, x));
+    const __m128 scale = _mm_set_ps(
+            0.0f, resource->scale_mini,
+            resource->scale_micro, resource->scale_nano);
+    return _mm_mul_ps(coordinates, scale);
+}
+
+void storeAnimationPosition(dk2::Vec3f *output, __m128 value) {
+    _mm_storel_pi(reinterpret_cast<__m64 *>(output), value);
+    _mm_store_ss(&output->z,
+                 _mm_shuffle_ps(value, value, _MM_SHUFFLE(2, 2, 2, 2)));
+}
+
 }  // namespace
+
+
+dk2::Vec3f *dk2::CAnimMeshResource::sub_57E5B0(
+        int animation,
+        float frame,
+        uint32_t frameIndex,
+        int vertexIndex,
+        Vec3f *output) {
+    // The original stores a 10:10:10 signed position at two adjacent entries
+    // and interpolates between them. Keep the exact integer addressing and
+    // one-rounding-per-operation float order, but decode all three axes in one
+    // SSE2 lane group instead of six x87 fild/fmul sequences.
+    const SprsAnimHeader &entry = buf[animation];
+    const uint32_t vertexKey = static_cast<uint16_t>(
+            entry.AnimVertEx_base[vertexIndex].index);
+    const uint32_t frameBlock = frameIndex >> 7;
+    const uint32_t tableIndex = indexCount * frameBlock + vertexKey;
+    const uint8_t frameOffset = static_cast<const uint8_t *>(
+            static_cast<const void *>(triangles_base + frameCount * vertexKey))[
+                    frameIndex];
+    const uint32_t coordinateIndex =
+            static_cast<const uint32_t *>(
+                    static_cast<const void *>(itab_base))[tableIndex] +
+            frameOffset;
+
+    const __m128 first = decodeAnimationPosition(
+            static_cast<uint32_t>(geomCoordinates_base[coordinateIndex]), this);
+    const __m128 second = decodeAnimationPosition(
+            static_cast<uint32_t>(geomCoordinates_base[coordinateIndex + 1]), this);
+
+    const uint32_t blockStart = frameBlock << 7;
+    const uint32_t firstFrame = blockStart +
+            static_cast<uint8_t>(geomFrame_base[coordinateIndex]);
+    const uint32_t frameSpan =
+            blockStart + static_cast<uint8_t>(geomFrame_base[coordinateIndex + 1]) -
+            firstFrame;
+    const float reciprocal =
+            reinterpret_cast<const float *>(0x007810A0)[frameSpan];
+    const float factor = (frame - static_cast<float>(firstFrame)) * reciprocal;
+    const __m128 result = _mm_add_ps(
+            first,
+            _mm_mul_ps(_mm_sub_ps(second, first), _mm_set1_ps(factor)));
+    storeAnimationPosition(output, result);
+    return output;
+}
 
 
 void dk2::CEngineAnimMesh::sub_5836A0(int animation, SceneObject2E *scene) {
