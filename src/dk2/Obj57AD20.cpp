@@ -8,6 +8,7 @@
 #include "dk2_functions.h"
 #include "dk2_globals.h"
 
+#include <cstddef>
 #include <cstdint>
 
 
@@ -15,10 +16,10 @@ namespace {
 
 #pragma pack(push, 1)
 struct MeshVertex {
-    dk2::Vec3f color;
+    dk2::Vec3f position;
     uint32_t packedUv;
     dk2::Vec3f normal;
-    dk2::Vec3f position;
+    dk2::Vec3f color;
 };
 
 struct MeshEntry {
@@ -32,6 +33,8 @@ struct MeshEntry {
 #pragma pack(pop)
 
 static_assert(sizeof(MeshVertex) == 0x28);
+static_assert(offsetof(MeshVertex, position) == 0x00);
+static_assert(offsetof(MeshVertex, color) == 0x1C);
 static_assert(sizeof(MeshEntry) == 0x14);
 
 using VertexFun = int (__cdecl *)(uint32_t, dk2::Vec3f *);
@@ -40,11 +43,11 @@ using RenderFun = int (__cdecl *)(uint32_t, dk2::Vec3f *, dk2::Uv2f *);
 
 void transformVertex(VertexFun fun, uint32_t index, MeshVertex *vertex) {
     if (fun == reinterpret_cast<VertexFun>(0x0058ACB0)) {
-        dk2::sub_58ACB0(index, &vertex->color);
+        dk2::sub_58ACB0(index, &vertex->position);
     } else if (fun == reinterpret_cast<VertexFun>(0x0058AD10)) {
-        dk2::sub_58AD10(index, &vertex->color);
+        dk2::sub_58AD10(index, &vertex->position);
     } else {
-        fun(index, &vertex->color);
+        fun(index, &vertex->position);
     }
 }
 
@@ -69,24 +72,24 @@ void emitVertex(RenderFun fun, uint32_t index, dk2::Vec3f *vectors, dk2::Uv2f *u
 void processVertex(
         uint32_t index,
         MeshVertex *vertex,
-        const dk2::Vec3f &origin,
+        const dk2::Vec3f &ambient,
         dk2::Obj57BCB0 &lights,
         RenderFun renderFun) {
     if (!(dk2::g_idxFlags[index] & 2)) {
         return;
     }
 
-    dk2::Vec3f position{
-            origin.x + vertex->position.x,
-            origin.y + vertex->position.y,
-            origin.z + vertex->position.z};
-    lights.sub_57BF00(&vertex->color.x, &position.x, &vertex->normal.x);
+    dk2::Vec3f color{
+            ambient.x + vertex->color.x,
+            ambient.y + vertex->color.y,
+            ambient.z + vertex->color.z};
+    lights.sub_57BF00(&color.x, &vertex->position.x, &vertex->normal.x);
 
     const float uvScale = *reinterpret_cast<const float *>(0x0066FB58);
     const dk2::Uv2f uv{
             static_cast<float>(vertex->packedUv & 0xFFFF) * uvScale,
             static_cast<float>(vertex->packedUv >> 16) * uvScale};
-    dk2::Vec3f vectors[2]{position, position};
+    dk2::Vec3f vectors[2]{color, color};
     dk2::Uv2f uvs[2]{uv, uv};
     emitVertex(renderFun, index, vectors, uvs);
 }
@@ -124,7 +127,7 @@ int *dk2::Obj57AD20::sub_57B6D0(
     MyScaledSurface *surface = MyEntryBuf_MyScaledSurface_getByIdx(entry.surfaceIndex);
     __renderFun_setSceneObject2E(scene, 1, nullptr, nullptr, scale, a3 == 0);
 
-    const Vec3f origin{
+    const Vec3f ambient{
             vec_14.x + g_vec_760A98.x + surface->vec.x,
             vec_14.y + g_vec_760A98.y + surface->vec.y,
             vec_14.z + g_vec_760A98.z + surface->vec.z};
@@ -148,9 +151,9 @@ int *dk2::Obj57AD20::sub_57B6D0(
         if (g_idxFlags[b] == 0) transformVertex(vertexFun, b, vb);
         if (g_idxFlags[c] == 0) transformVertex(vertexFun, c, vc);
         emitTriangle(triangleFun, a, b, c);
-        processVertex(a, va, origin, lights, renderFun);
-        processVertex(b, vb, origin, lights, renderFun);
-        processVertex(c, vc, origin, lights, renderFun);
+        processVertex(a, va, ambient, lights, renderFun);
+        processVertex(b, vb, ambient, lights, renderFun);
+        processVertex(c, vc, ambient, lights, renderFun);
     }
     return applyIndxs_sub_58AC20();
 }
