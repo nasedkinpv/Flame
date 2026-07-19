@@ -385,3 +385,53 @@ int __cdecl dk2::adjustAndAddToRender_sub_58BB60(Idx3b *triangle) {
     }
     return 0;
 }
+
+
+// 0059F2F0: corner slide helper - applies (+-fa, fb) to x/z and/or y/z
+// depending on four neighbour flags; fa is scaled by *(float *)00670700 when
+// both blocks run, and the second block sees fb = 0 if the first block ran.
+int __cdecl dk2::sub_59F2F0(float *v, float fa, float fb, int d4, int d5, int d6, int d7) {
+    if ((d7 | d5) != (d6 | d4)) {
+        if ((d7 | d6) != (d5 | d4)) fa *= *reinterpret_cast<const float *>(0x00670700);
+        if (d6 | d4) {
+            v[2] += fb;
+            v[0] += -fa;
+        } else {
+            v[0] += fa;
+            v[2] += fb;
+        }
+        fb = 0.0f;
+    }
+    if ((d7 | d6) != (d5 | d4)) {
+        if (d5 | d4) {
+            v[2] += fb;
+            v[1] += -fa;
+        } else {
+            v[1] += fa;
+            v[2] += fb;
+        }
+    }
+    return 0;  // eax is the vec pointer in the original; no caller reads it
+}
+
+
+// 0059C2A0: convert two Vec3i map positions (plus the CRenderInfo int16
+// offsets at +0x51/+0x53/+0x55) into scaled Vec3f world positions.
+// x/y scale at 006704D0, z scale at 00670504; values stay far below 2^24,
+// so double intermediates reproduce the x87 fild+fmul single rounding.
+dk2::Vec3f *__cdecl dk2::static_CRenderInfo_sub_59C2A0(
+        CRenderInfo *info, Vec3i *a, Vec3i *b, Vec3f *outA, Vec3f *outB) {
+    const auto *off = reinterpret_cast<const int16_t *>(
+            reinterpret_cast<const char *>(info) + 0x51);
+    const double kxy = *reinterpret_cast<const float *>(0x006704D0);
+    const double kz = *reinterpret_cast<const float *>(0x00670504);
+    const int ax = a->x + off[0], ay = a->y + off[1], az = a->z + off[2];
+    const int bx = b->x + off[0], by = b->y + off[1], bz = b->z + off[2];
+    outB->x = (float) (bx * kxy);
+    outB->y = (float) (by * kxy);
+    outB->z = (float) (bz * kz);
+    outA->x = (float) (ax * kxy);
+    outA->y = (float) (ay * kxy);
+    outA->z = (float) (az * kz);
+    return outA;
+}

@@ -62001,10 +62001,12 @@ global: va=0059ED80,name=ProceduralMesh_cpp_59ED80,size=1383
 global: va=0059F2F0,name=sub_59F2F0,size=199
   type: kind=function,declspec=cdecl
     ret: kind=int,size=4,signed=True
+    arg: kind=ptr
+      type: kind=float,size=4
+    arg: kind=float,size=4
+    arg: kind=float,size=4
     arg: kind=int,size=4,signed=True
-    arg: kind=float,size=4
-    arg: kind=float,size=4
-    arg: kind=int,size=8,signed=True
+    arg: kind=int,size=4,signed=True
     arg: kind=int,size=4,signed=True
     arg: kind=int,size=4,signed=True
 global: va=0059F3C0,name=sub_59F3C0,size=231

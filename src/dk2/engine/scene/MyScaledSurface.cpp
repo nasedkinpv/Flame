@@ -10,6 +10,9 @@
 #include "dk2_functions.h"
 #include "dk2_globals.h"
 
+#include <cstdint>
+#include <cstring>
+
 
 dk2::MyScaledSurface *dk2::MyScaledSurface::constructor(MyDblNamedSurface *surfdn_, int idx) {
     MySurfaceWrapper surfw;
@@ -99,3 +102,21 @@ dk2::MyScaledSurface *dk2::MyScaledSurface::constructor(MyDblNamedSurface *surfd
 }
 
 
+
+
+// 00581B80: pick a scaled-surface handle by fractional row position.
+// fraction -> integer via the float mantissa trick (magic constants at
+// 0066FC38/0066FC3C/0066FC40), clamped to [0, prob_height).
+dk2::MyCESurfHandle *dk2::MyScaledSurface::sub_581B80(int component, float frac, int column) {
+    const int n = (int) this->prob_height;
+    const float encoded = (float) n * frac
+                        - *reinterpret_cast<const float *>(0x0066FC38)
+                        - *reinterpret_cast<const float *>(0x0066FC3C)
+                        - *reinterpret_cast<const float *>(0x0066FC40);
+    uint32_t bits;
+    memcpy(&bits, &encoded, sizeof(bits));
+    int idx = (int) (bits & 0x7FFFFF) - 0x400000;
+    if (idx < 0) idx = 0;
+    if (idx >= n) idx = n - 1;
+    return reinterpret_cast<MyCESurfHandle **>(this->scaledSurfArr)[component + 4 * (n * column + idx)];
+}

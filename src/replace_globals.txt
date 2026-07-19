@@ -33,6 +33,9 @@
 0041C580 int Mat3x3f::init_rotationMat(int, float)
 0059E700 float *__cdecl sub_59E700(float *, float, float, int, int)
 0059EC90 int __cdecl sub_59EC90(float *, float, float, int, int)
+0059F2F0 int __cdecl sub_59F2F0(float *, float, float, int, int, int, int)
+0059C2A0 Vec3f *__cdecl static_CRenderInfo_sub_59C2A0(CRenderInfo *, Vec3i *, Vec3i *, Vec3f *, Vec3f *)
+00581B80 MyCESurfHandle *MyScaledSurface::sub_581B80(int, float, int)
 
 # RenderData transform wrappers
 0058AC20 int *applyIndxs_sub_58AC20()
