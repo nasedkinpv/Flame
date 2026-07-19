@@ -14,6 +14,58 @@
 #include "dk2/SceneObject2E.h"
 #include "dk2/MyCESurfHandle.h"
 #include "dk2/engine/primitive/CEnginePrimitiveBase.h"
+#include "patches/logging.h"
+
+
+namespace {
+
+uint64_t sceneProfileTicks() {
+    LARGE_INTEGER value;
+    QueryPerformanceCounter(&value);
+    return static_cast<uint64_t>(value.QuadPart);
+}
+
+uint64_t sceneProfileMicroseconds(uint64_t ticks) {
+    static uint64_t frequency = [] {
+        LARGE_INTEGER value;
+        QueryPerformanceFrequency(&value);
+        return static_cast<uint64_t>(value.QuadPart);
+    }();
+    return frequency ? ticks * 1000000u / frequency : 0;
+}
+
+struct SceneSplitProfile {
+    uint64_t sort = 0;
+    uint64_t group = 0;
+    uint64_t setup = 0;
+    uint64_t mesh = 0;
+    uint64_t submit = 0;
+    uint64_t total = 0;
+    uint64_t objects = 0;
+    uint64_t batches = 0;
+    uint64_t vertices = 0;
+    uint64_t triangles = 0;
+    uint32_t samples = 0;
+
+    void reset() { *this = {}; }
+
+    void report() const {
+        const uint64_t divisor = samples ? samples : 1;
+        patch::log::dbg(
+                "PERF draw3d avg us: total=%llu sort=%llu group=%llu setup=%llu "
+                "mesh=%llu submit=%llu; objects=%llu batches=%llu verts=%llu tris=%llu",
+                sceneProfileMicroseconds(total) / divisor,
+                sceneProfileMicroseconds(sort) / divisor,
+                sceneProfileMicroseconds(group) / divisor,
+                sceneProfileMicroseconds(setup) / divisor,
+                sceneProfileMicroseconds(mesh) / divisor,
+                sceneProfileMicroseconds(submit) / divisor,
+                objects / divisor, batches / divisor,
+                vertices / divisor, triangles / divisor);
+    }
+};
+
+}
 
 
 void __cdecl dk2::addObjectToDraw(ToDraw *obj30) {
@@ -175,7 +227,15 @@ namespace dk2 {
 }
 
 void dk2::draw3dScene() {
+    static uint32_t profileFrame = 0;
+    static SceneSplitProfile profile;
+    const uint32_t profilePhase = profileFrame++ % 300;
+    const bool measure = profilePhase < 30;
+    if (profilePhase == 0) profile.reset();
+    const uint64_t frameStarted = measure ? sceneProfileTicks() : 0;
+
     __probablySortSurfListX3_593F20();
+    const uint64_t sortFinished = measure ? sceneProfileTicks() : 0;
     int objectsToDraw_count_ = SceneObject2E_count;
     ToDraw *last_ = NULL;
     if (SceneObject2E_count >= ToDrawList_instance.maxCount) {
@@ -220,13 +280,36 @@ void dk2::draw3dScene() {
         obj30->totalTriangles += cur->lod__triangleCount;
         obj30->totalVertices += cur->numVertsEx;
     }
+    const uint64_t groupFinished = measure ? sceneProfileTicks() : 0;
     for (ToDraw *cur = last_; cur; cur = cur->prev_eos) {
+        const uint64_t setupStarted = measure ? sceneProfileTicks() : 0;
         addObjectToDraw(cur);
-        for (SceneObject2E *i = cur->pObj2E; i; i = i->next)
+        const uint64_t meshStarted = measure ? sceneProfileTicks() : 0;
+        for (SceneObject2E *i = cur->pObj2E; i; i = i->next) {
             i->mesh->v___addRenderObj((unsigned __int16) i->f2C_, i);
+        }
+        const uint64_t submitStarted = measure ? sceneProfileTicks() : 0;
         drawTexToSurfTriangles();
+        const uint64_t submitFinished = measure ? sceneProfileTicks() : 0;
         cur->holders[0]->ToDraw = NULL;
+        if (measure) {
+            profile.setup += meshStarted - setupStarted;
+            profile.mesh += submitStarted - meshStarted;
+            profile.submit += submitFinished - submitStarted;
+            ++profile.batches;
+            profile.vertices += cur->totalVertices;
+            profile.triangles += cur->totalTriangles;
+        }
     }
+    const uint64_t frameFinished = measure ? sceneProfileTicks() : 0;
+    if (measure) {
+        profile.sort += sortFinished - frameStarted;
+        profile.group += groupFinished - sortFinished;
+        profile.total += frameFinished - frameStarted;
+        profile.objects += objectsToDraw_count_;
+        ++profile.samples;
+    }
+    if (profilePhase == 29) profile.report();
     SceneObject2E_count = 0;
 }
 

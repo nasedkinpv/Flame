@@ -7,6 +7,48 @@
 #include "patches/big_resolution_fix/big_resolution_fix.h"
 #include "patches/logging.h"
 
+#include <chrono>
+
+
+namespace {
+
+using SceneClock = std::chrono::steady_clock;
+
+uint32_t sceneElapsedUs(SceneClock::time_point started, SceneClock::time_point finished) {
+    return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+            finished - started).count());
+}
+
+struct EngineSceneProfile {
+    uint64_t begin = 0;
+    uint64_t draw3d = 0;
+    uint64_t draw2d = 0;
+    uint64_t shadows = 0;
+    uint64_t finish = 0;
+    uint64_t total = 0;
+    uint32_t samples = 0;
+
+    void add(uint32_t beginUs, uint32_t draw3dUs, uint32_t draw2dUs,
+             uint32_t shadowsUs, uint32_t finishUs, uint32_t totalUs) {
+        begin += beginUs;
+        draw3d += draw3dUs;
+        draw2d += draw2dUs;
+        shadows += shadowsUs;
+        finish += finishUs;
+        total += totalUs;
+        if (++samples != 300) return;
+        patch::log::dbg(
+                "PERF engine scene avg us: total=%llu begin=%llu draw3d=%llu "
+                "draw2d=%llu shadows=%llu finish=%llu other=%llu",
+                total / samples, begin / samples, draw3d / samples,
+                draw2d / samples, shadows / samples, finish / samples,
+                (total - begin - draw3d - draw2d - shadows - finish) / samples);
+        *this = {};
+    }
+};
+
+}
+
 int dk2::configureFlagsAndTexturesCount() {
     DDCAPS caps;
     memset(&caps, 0, sizeof(caps));
@@ -69,6 +111,7 @@ int dk2::configureFlagsAndTexturesCount() {
 
 
 bool __cdecl dk2::engine_drawScene(char a1) {
+    const auto sceneStarted = SceneClock::now();
     g_unused765204 = 0;
     engine_setViewport(0, 0, g_sc_sceneWidth, g_sc_sceneHeight);
     if ((MyDirectDraw_instance.flags & 1) != 0) {
@@ -86,9 +129,12 @@ bool __cdecl dk2::engine_drawScene(char a1) {
     } else {
         MyDirectDraw_instance.d3d3_halDevice->BeginScene();
     }
+    const auto beginFinished = SceneClock::now();
     draw3dScene();
+    const auto draw3dFinished = SceneClock::now();
     draw_tex_to_buf();
     static_CEngine2DPrimitive_clearList();
+    const auto draw2dFinished = SceneClock::now();
     if (g_unk_6BDEB8 < 0) {
         g_shadows_dword_780E70 = 0;
     } else {
@@ -101,6 +147,7 @@ bool __cdecl dk2::engine_drawScene(char a1) {
                 g_camState.topBottom.y - 20.0
         );
     }
+    const auto shadowsFinished = SceneClock::now();
     if ((MyDirectDraw_instance.flags & 1) != 0) {
         DDSURFACEDESC2 surfDesc;
         surfDesc.dwSize = sizeof(DDSURFACEDESC2);
@@ -133,11 +180,21 @@ bool __cdecl dk2::engine_drawScene(char a1) {
     } else {
         MyDirectDraw_instance.d3d3_halDevice->EndScene();
     }
+    const auto finishFinished = SceneClock::now();
     g_unk_75CA88 = g_unk_765B10;
     NewObj571B3B_sub_576010();
 //    void* v1;
 //    ret_void_0args_0(v1);
     ++g_drawSceneCount_76520C;
+    const auto sceneFinished = SceneClock::now();
+    static EngineSceneProfile sceneProfile;
+    sceneProfile.add(
+            sceneElapsedUs(sceneStarted, beginFinished),
+            sceneElapsedUs(beginFinished, draw3dFinished),
+            sceneElapsedUs(draw3dFinished, draw2dFinished),
+            sceneElapsedUs(draw2dFinished, shadowsFinished),
+            sceneElapsedUs(shadowsFinished, finishFinished),
+            sceneElapsedUs(sceneStarted, sceneFinished));
     return g_sc_isCurDdSurfLost == 0;
 }
 

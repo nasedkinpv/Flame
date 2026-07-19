@@ -9,6 +9,7 @@
 #include "dk2/entities/CPlayer.h"
 #include "math/int_float.h"
 #include <metal_bridge/MetalBridgeProducer.h>
+#include "patches/logging.h"
 #include <chrono>
 
 namespace {
@@ -18,6 +19,28 @@ uint32_t elapsedMicroseconds(std::chrono::steady_clock::time_point started,
     return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
         finished - started).count());
 }
+
+struct PrepareSplitProfile {
+    uint64_t reinit = 0;
+    uint64_t camera = 0;
+    uint64_t player = 0;
+    uint64_t total = 0;
+    uint32_t samples = 0;
+
+    void add(uint32_t reinitUs, uint32_t cameraUs,
+             uint32_t playerUs, uint32_t totalUs) {
+        reinit += reinitUs;
+        camera += cameraUs;
+        player += playerUs;
+        total += totalUs;
+        if (++samples != 300) return;
+        patch::log::dbg(
+                "PERF prepare avg us: total=%llu reinit=%llu camera=%llu player=%llu other=%llu",
+                total / samples, reinit / samples, camera / samples, player / samples,
+                (total - reinit - camera - player) / samples);
+        *this = {};
+    }
+};
 
 }
 
@@ -314,10 +337,17 @@ int dk2::MyGameSession::tick(int a2_isNeedBlt) {
     uint32_t drawSceneMicroseconds = 0;
     if (this->pBridge) {
         const auto renderPrepareStarted = std::chrono::steady_clock::now();
+        auto reinitFinished = renderPrepareStarted;
+        auto cameraStarted = renderPrepareStarted;
+        auto cameraFinished = renderPrepareStarted;
+        auto playerStarted = renderPrepareStarted;
+        auto playerFinished = renderPrepareStarted;
         DWORD TimeMs = getTimeMs();
         CBridge *v39 = this->pBridge;
         DWORD f284_inMenu_ = TimeMs;
-        if (v39->v_f38_tryReinit3d()) {
+        const bool renderReady = v39->v_f38_tryReinit3d() != 0;
+        reinitFinished = std::chrono::steady_clock::now();
+        if (renderReady) {
             this->gameTick278_last = this->gameTick;
             CCommunicationInterface *v40 = this->pCommunication;
             if (v40) {
@@ -328,7 +358,10 @@ int dk2::MyGameSession::tick(int a2_isNeedBlt) {
             } else {
                 this->tickPercent256 = 0;
             }
+            cameraStarted = std::chrono::steady_clock::now();
             this->pBridge->v_f2C_maybe_cameraFun(&this->gameTick278_last);
+            cameraFinished = std::chrono::steady_clock::now();
+            playerStarted = cameraFinished;
             if (this->pPlayer) {
                 if (this->pBridge->v_f40_enableSmth()) {
                     this->pPlayer->v_fun_403FB0();
@@ -337,8 +370,15 @@ int dk2::MyGameSession::tick(int a2_isNeedBlt) {
                         return result;
                 }
             }
+            playerFinished = std::chrono::steady_clock::now();
             const auto drawSceneStarted = std::chrono::steady_clock::now();
             renderPrepareMicroseconds = elapsedMicroseconds(renderPrepareStarted, drawSceneStarted);
+            static PrepareSplitProfile prepareProfile;
+            prepareProfile.add(
+                    elapsedMicroseconds(renderPrepareStarted, reinitFinished),
+                    elapsedMicroseconds(cameraStarted, cameraFinished),
+                    elapsedMicroseconds(playerStarted, playerFinished),
+                    renderPrepareMicroseconds);
             int result = this->pBridge->v_f3C__drawScene();
             drawSceneMicroseconds = elapsedMicroseconds(
                 drawSceneStarted, std::chrono::steady_clock::now());
