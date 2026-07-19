@@ -232,7 +232,7 @@ dk2::MyCESurfHandle *dk2::MyCESurfHandle::paint(MySurface *surf, char computeCrc
     this->cesurf->v_unlockBuf((int) pixels);
     SurfaceHolder *holder = this->holder_parent;
     if (holder) {
-        if (MyDirectDraw_instance.f28_flags & 1) {
+        if (MyDirectDraw_instance.flags & 1) {
             holder->surf->paintSurf(this->cesurf, this->x8, this->y8);
         } else {
             // unlink this handle from the holder's list
