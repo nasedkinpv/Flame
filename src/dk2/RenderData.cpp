@@ -3,6 +3,8 @@
 #include "dk2/SceneObject2E.h"
 #include "dk2/Uv2f_arr1024.h"
 #include "dk2/Vec3f_arr1024.h"
+#include "dk2/Vertex1C.h"
+#include "dk2/VerticesData.h"
 #include "dk2/utils/Mat3x3f.h"
 #include "dk2/utils/Vec3f.h"
 #include "dk2_functions.h"
@@ -37,6 +39,54 @@ uint32_t floatBits(float value) {
 // the originals branch on the raw sign bit of a stored float (incl. -0.0),
 // not on an ordered compare — replicate exactly
 uint32_t signBit(float value) { return floatBits(value) >> 31; }
+
+uint32_t colourComponent(float value, bool useFogScale, int fogScale) {
+    const float firstBias = *reinterpret_cast<const float *>(0x0066FE78);
+    const float secondBias = *reinterpret_cast<const float *>(0x0066FE8C);
+    float encoded = value - firstBias;
+    encoded = encoded - secondBias;
+    uint32_t component = (floatBits(encoded) & 0x007FFFFF) - 0x00400000;
+    if (useFogScale) {
+        component = (component * static_cast<uint32_t>(fogScale)) >> 16;
+    }
+    return component > 0xFF ? 0xFF : component;
+}
+
+void writeVertex1C(
+        int stream,
+        int &textureStage,
+        const dk2::RenderData &render,
+        const dk2::Vec3f &colour,
+        const dk2::Uv2f *uvs,
+        bool useFogScale,
+        uint8_t textureCount) {
+    auto *vertex = reinterpret_cast<dk2::Vertex1C *>(
+            reinterpret_cast<uint8_t *>(dk2::g_vertices[stream].verticies1C_pos)
+            + dk2::g_flexibleVertex_size * render.vtxIdx);
+    vertex->x = render.xC;
+    vertex->y = render.y10;
+    vertex->z = render.z14;
+    vertex->rhv__colorWeight = render.f18;
+
+    const uint32_t red = colourComponent(colour.x, useFogScale, render.f24);
+    const uint32_t green = colourComponent(colour.y, useFogScale, render.f24);
+    const uint32_t blue = colourComponent(colour.z, useFogScale, render.f24);
+    const uint32_t alpha = *reinterpret_cast<const uint32_t *>(0x00779380);
+    vertex->diffuse = static_cast<int>((((red << 8) + green) << 8) + alpha + blue);
+
+    auto *outUv = reinterpret_cast<float *>(
+            reinterpret_cast<uint8_t *>(vertex) + 0x14);
+    const auto *uScale = reinterpret_cast<const float *>(0x00779368);
+    const auto *uOffset = reinterpret_cast<const float *>(0x0077F480);
+    const auto *vScale = reinterpret_cast<const float *>(0x0076F340);
+    const auto *vOffset = reinterpret_cast<const float *>(0x0077F3D8);
+    for (uint8_t texture = 0; texture < textureCount; ++texture, ++textureStage) {
+        outUv[texture * 2] = uScale[textureStage] * uvs[textureStage].u
+                           + uOffset[textureStage];
+        outUv[texture * 2 + 1] = vScale[textureStage] * uvs[textureStage].v
+                               + vOffset[textureStage];
+    }
+}
 
 // unnamed literal-pool floats at 0066FE28+idx*4, addressed via float_data2
 const float *litPool() { return reinterpret_cast<const float *>(&dk2::float_data2); }
@@ -267,6 +317,52 @@ uint8_t __cdecl dk2::renderFun_sub_58B2A0(int idx, Vec3f *vecs, Uv2f *uvs) {
     flags &= 0xFD;
     g_idxFlags[idx] = flags;
     return flags;
+}
+
+
+// 0058B370: cached attribute path for the alternative flexible-vertex format.
+// It mirrors 58B2A0 but delegates cache misses to the original 58B680 path.
+uint8_t __cdecl dk2::renderFun_sub_58B370(int idx, Vec3f *vecs, Uv2f *uvs) {
+    if (!(g_idxFlags[idx] & 4)) return (uint8_t) renderFun_sub_58B680(idx, vecs, uvs);
+    SceneObject2E *obj = g_pSceneObject2E;
+    for (int i = 0; i < obj->propsCount; ++i) g_vectors[i].arr[idx] = vecs[i];
+    for (int i = 0; i < obj->surfhCount; ++i) Uv2f_arr_instance[i].arr[idx] = uvs[i];
+    uint8_t flags = g_idxFlags[idx];
+    if (flags & 8) return (uint8_t) renderFun_sub_58B680(idx, vecs, uvs);
+    flags &= 0xFD;
+    g_idxFlags[idx] = flags;
+    return flags;
+}
+
+
+// 0058B440: emit D3DFVF_XYZRHW | D3DFVF_DIFFUSE vertices.  The original
+// converts each colour component with two x87 mantissa-bias operations and
+// transforms every UV with x87; MSVC's 32-bit SSE2 scalar operations preserve
+// the same single-precision rounding without the Rosetta x87 cost.
+char __cdecl dk2::renderFun_sub_58B440(int idx, Vec3f *vecs, Uv2f *uvs) {
+    const uint8_t oldFlags = g_idxFlags[idx];
+    g_idxFlags[idx] = oldFlags & 0xFD;
+    SceneObject2E *obj = g_pSceneObject2E;
+    const uint8_t streamCount = obj->propsCount;
+    const bool useFogScale = (oldFlags & 0x10) != 0;
+    const RenderData &render = RenderData_instance_arr[idx];
+    int textureStage = 0;
+    for (uint8_t stream = 0; stream < streamCount; ++stream) {
+        const uint8_t configuredTextures = static_cast<uint8_t>(
+                obj->numTextureSamplers_x2[stream]);
+        // The original always writes stage zero, then uses this field only to
+        // decide whether it must write additional stages.
+        const uint8_t textureCount = configuredTextures ? configuredTextures : 1;
+        writeVertex1C(
+                stream,
+                textureStage,
+                render,
+                vecs[stream],
+                uvs,
+                useFogScale,
+                textureCount);
+    }
+    return static_cast<char>(streamCount);
 }
 
 
