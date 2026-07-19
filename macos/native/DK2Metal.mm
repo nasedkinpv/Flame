@@ -24,8 +24,7 @@
 namespace {
 
 constexpr NSUInteger kFramesInFlight = 3;
-constexpr CGFloat kDrawableWidth = 2560.0;
-constexpr CGFloat kDrawableHeight = 1920.0;
+constexpr NSUInteger kSampleCount = 4;
 std::atomic<uint64_t> gRequestedDrawableSize{0};
 std::atomic<uint64_t> gRenderedFrames{0};
 std::atomic<uint64_t> gBridgeFramesRendered{0};
@@ -582,7 +581,7 @@ bool inputLogEnabled() {
 - (void)layout {
     [super layout];
     const CGRect bounds = self.bounds;
-    const CGFloat targetAspect = (CGFloat)kDrawableWidth / (CGFloat)kDrawableHeight;
+    const CGFloat targetAspect = 4.0 / 3.0;
     CGFloat width = CGRectGetWidth(bounds);
     CGFloat height = width / targetAspect;
     if (height > CGRectGetHeight(bounds)) {
@@ -597,10 +596,12 @@ bool inputLogEnabled() {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     _metalLayer.frame = frame;
+    _metalLayer.contentsScale = self.window.backingScaleFactor;
     [CATransaction commit];
     [self.window invalidateCursorRectsForView:self];
+    const NSSize backingSize = [self convertSizeToBacking:NSMakeSize(width, height)];
     gRequestedDrawableSize.store(
-        packSize(CGSizeMake(kDrawableWidth, kDrawableHeight)),
+        packSize(CGSizeMake(backingSize.width, backingSize.height)),
         std::memory_order_release);
 }
 
@@ -628,6 +629,7 @@ bool inputLogEnabled() {
     id<MTLDepthStencilState> _depthStates[9][2];
     id<MTLSamplerState> _sampler;
     id<MTLTexture> _whiteTexture;
+    id<MTLTexture> _multisampleColorTexture;
     id<MTLTexture> _depthTexture;
     NSMutableDictionary<NSNumber *, id<MTLTexture>> *_textures;
     id<MTLResidencySet> _resources;
@@ -680,6 +682,7 @@ bool inputLogEnabled() {
     pipelineDescriptor.fragmentFunction = fragmentFunction;
     pipelineDescriptor.colorAttachments[0].pixelFormat = _layer.pixelFormat;
     pipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+    pipelineDescriptor.rasterSampleCount = kSampleCount;
     pipelineDescriptor.colorAttachments[0].blendingEnabled = NO;
     _opaquePipeline = vertexFunction && fragmentFunction
                           ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error]
@@ -802,21 +805,36 @@ bool inputLogEnabled() {
     return self;
 }
 
-- (BOOL)ensureDepthTextureWidth:(NSUInteger)width height:(NSUInteger)height {
-    if (_depthTexture && _depthTexture.width == width && _depthTexture.height == height) return YES;
-    if (_depthTexture) {
+- (BOOL)ensureRenderTargetsWidth:(NSUInteger)width height:(NSUInteger)height {
+    if (_multisampleColorTexture && _depthTexture &&
+        _multisampleColorTexture.width == width && _multisampleColorTexture.height == height) return YES;
+    if (_multisampleColorTexture || _depthTexture) {
         if (_frame && ![_completed waitUntilSignaledValue:_frame timeoutMS:1000]) return NO;
-        [_resources removeAllocation:_depthTexture];
+        if (_multisampleColorTexture) [_resources removeAllocation:_multisampleColorTexture];
+        if (_depthTexture) [_resources removeAllocation:_depthTexture];
     }
-    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+    MTLTextureDescriptor *colorDescriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:_layer.pixelFormat
+                                    width:width height:height mipmapped:NO];
+    colorDescriptor.textureType = MTLTextureType2DMultisample;
+    colorDescriptor.sampleCount = kSampleCount;
+    colorDescriptor.storageMode = MTLStorageModePrivate;
+    colorDescriptor.usage = MTLTextureUsageRenderTarget;
+    _multisampleColorTexture = [_device newTextureWithDescriptor:colorDescriptor];
+
+    MTLTextureDescriptor *depthDescriptor = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
                                     width:width height:height mipmapped:NO];
-    descriptor.storageMode = MTLStorageModePrivate;
-    descriptor.usage = MTLTextureUsageRenderTarget;
-    _depthTexture = [_device newTextureWithDescriptor:descriptor];
-    if (!_depthTexture) return NO;
-    _depthTexture.label = @"DK2 depth buffer";
-    [_resources addAllocation:_depthTexture];
+    depthDescriptor.textureType = MTLTextureType2DMultisample;
+    depthDescriptor.sampleCount = kSampleCount;
+    depthDescriptor.storageMode = MTLStorageModePrivate;
+    depthDescriptor.usage = MTLTextureUsageRenderTarget;
+    _depthTexture = [_device newTextureWithDescriptor:depthDescriptor];
+    if (!_multisampleColorTexture || !_depthTexture) return NO;
+    _multisampleColorTexture.label = @"DK2 4x MSAA color";
+    _depthTexture.label = @"DK2 4x MSAA depth";
+    id<MTLAllocation> targets[] = {_multisampleColorTexture, _depthTexture};
+    [_resources addAllocations:targets count:2];
     [_resources commit];
     return YES;
 }
@@ -863,9 +881,9 @@ static void *renderWorker(void *context) {
                 return;
             }
         }
-        if (![self ensureDepthTextureWidth:update.drawable.texture.width
-                                     height:update.drawable.texture.height]) {
-            fail(@"Metal depth buffer creation failed.");
+        if (![self ensureRenderTargetsWidth:update.drawable.texture.width
+                                        height:update.drawable.texture.height]) {
+            fail(@"Metal multisample target creation failed.");
             link.paused = YES;
             return;
         }
@@ -929,9 +947,10 @@ static void *renderWorker(void *context) {
         if (residencyChanged) [_resources commit];
         MTL4RenderPassDescriptor *pass = [[MTL4RenderPassDescriptor alloc] init];
         MTLRenderPassColorAttachmentDescriptor *color = pass.colorAttachments[0];
-        color.texture = update.drawable.texture;
+        color.texture = _multisampleColorTexture;
+        color.resolveTexture = update.drawable.texture;
         color.loadAction = MTLLoadActionClear;
-        color.storeAction = MTLStoreActionStore;
+        color.storeAction = MTLStoreActionMultisampleResolve;
         color.clearColor = clearColor;
         MTLRenderPassDepthAttachmentDescriptor *depth = pass.depthAttachment;
         depth.texture = _depthTexture;
@@ -1184,7 +1203,8 @@ static void *renderWorker(void *context) {
 
     [_view layoutSubtreeIfNeeded];
     CAMetalLayer *layer = _view.metalLayer;
-    const CGSize drawableSize = CGSizeMake(kDrawableWidth, kDrawableHeight);
+    const uint64_t requestedSize = gRequestedDrawableSize.load(std::memory_order_acquire);
+    const CGSize drawableSize = requestedSize ? unpackSize(requestedSize) : CGSizeMake(2560, 1920);
     layer.drawableSize = drawableSize;
     gRequestedDrawableSize.store(packSize(drawableSize), std::memory_order_release);
 

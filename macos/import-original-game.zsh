@@ -120,8 +120,10 @@ trap - EXIT INT TERM HUP
 wine_reg_add 'HKCU\Software\Wine\Direct3D' VideoMemorySize REG_SZ 2048
 wine_reg_add 'HKCU\Software\Wine\DirectInput' MouseWarpOverride REG_SZ disable
 wine_reg_add 'HKCU\Software\Bullfrog Productions Ltd\Dungeon Keeper II\Configuration\Video' 'Res 1024*768 Enable' REG_DWORD 1
-wine_reg_add 'HKCU\Software\Bullfrog Productions Ltd\Dungeon Keeper II\Configuration\Video' 'Screen Width' REG_DWORD 1024
-wine_reg_add 'HKCU\Software\Bullfrog Productions Ltd\Dungeon Keeper II\Configuration\Video' 'Screen Height' REG_DWORD 768
+wine_reg_add 'HKCU\Software\Bullfrog Productions Ltd\Dungeon Keeper II\Configuration\Video' 'Res 1600*1200 Enable' REG_DWORD 1
+wine_reg_add 'HKCU\Software\Bullfrog Productions Ltd\Dungeon Keeper II\Configuration\Video' 'Screen Width' REG_DWORD 1600
+wine_reg_add 'HKCU\Software\Bullfrog Productions Ltd\Dungeon Keeper II\Configuration\Video' 'Screen Height' REG_DWORD 1200
+wine_reg_add 'HKCU\Software\Bullfrog Productions Ltd\Dungeon Keeper II\Configuration\Video' 'Screen Mode Type' REG_DWORD 6
 env WINEPREFIX="${PREFIX}" "${WINESERVER}" -k >/dev/null 2>&1 || true
 
 for link in "${PREFIX}/dosdevices/"*(N); do

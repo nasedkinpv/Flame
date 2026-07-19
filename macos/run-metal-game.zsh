@@ -51,13 +51,13 @@ initial_frame="$(bridge_frame)"
     DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
     MVK_CONFIG_LOG_LEVEL='0' \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
-      -skip-launcher -game-res=1024x768 -Level=level1 \
+      -skip-launcher -game-res=1600x1200 -Level=level1 \
       -Q -NoMovies -DisableGamma -NoSound -Shadows "${SHADOW_LEVEL}" \
-      -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
+      -gog:video:HighRes=true -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
       -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1
 ) >>"${LOG_FILE}" 2>&1 &
 
-for attempt in {1..200}; do
+for attempt in {1..600}; do
   current_frame="$(bridge_frame)"
   [[ "${current_frame}" != 0 && "${current_frame}" != "${initial_frame}" ]] && break
   /bin/sleep 0.05
