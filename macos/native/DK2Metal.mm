@@ -76,8 +76,54 @@ constexpr size_t kDynamicFramesLimit = 40;
 struct IdState {
     std::unordered_set<uint64_t> uniqueHashes;
     std::vector<NSString *> files;
+    std::vector<uint8_t> prev;  // tight-packed BGRA of the last update
+    uint32_t prevWidth = 0, prevHeight = 0;
     bool dynamic = false;
 };
+
+void writePng(NSString *file, NSMutableData *copy, uint32_t width, uint32_t height,
+              uint64_t hash, uint32_t textureId, const char *kind) {
+    // X8R8G8B8 sources carry zero alpha everywhere - make those opaque so the
+    // dump is viewable; textures that really use alpha are left untouched
+    auto *out = static_cast<uint8_t *>(copy.mutableBytes);
+    bool anyAlpha = false;
+    for (size_t i = 3; i < copy.length; i += 4) {
+        if (out[i]) { anyAlpha = true; break; }
+    }
+    if (!anyAlpha) {
+        for (size_t i = 3; i < copy.length; i += 4) out[i] = 0xFF;
+    }
+    std::string kindCopy = kind;
+    dispatch_async(writeQueue(), ^{
+        NSString *index = [directory() stringByAppendingPathComponent:@"index.csv"];
+        FILE *f = fopen(index.fileSystemRepresentation, "a");
+        if (f) {
+            fprintf(f, "%016llx,%u,%ux%u,%s\n", hash, textureId, width, height,
+                    kindCopy.c_str());
+            fclose(f);
+        }
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGDataProviderRef provider =
+                CGDataProviderCreateWithCFData((__bridge CFDataRef)copy);
+        CGImageRef image = CGImageCreate(
+                width, height, 8, 32, width * 4, space,
+                (CGBitmapInfo)kCGImageAlphaFirst | kCGBitmapByteOrder32Little,
+                provider, NULL, false, kCGRenderingIntentDefault);
+        if (image) {
+            CGImageDestinationRef destination = CGImageDestinationCreateWithURL(
+                    (__bridge CFURLRef)[NSURL fileURLWithPath:file],
+                    CFSTR("public.png"), 1, NULL);
+            if (destination) {
+                CGImageDestinationAddImage(destination, image, NULL);
+                CGImageDestinationFinalize(destination);
+                CFRelease(destination);
+            }
+            CGImageRelease(image);
+        }
+        CGDataProviderRelease(provider);
+        CGColorSpaceRelease(space);
+    });
+}
 
 // render thread only
 void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch,
@@ -86,8 +132,63 @@ void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch
     if (!dir) return;
     static std::unordered_map<uint32_t, IdState> perId;
     IdState &state = perId[textureId];
-    if (state.dynamic) return;
 
+    // diff against the previous content of this id: partial updates are
+    // sprite frames baked into a shared cache page - dump only the changed
+    // rect as its own asset instead of the combinatorial page
+    bool partial = false;
+    uint32_t bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+    const bool havePrev = state.prevWidth == width && state.prevHeight == height &&
+                          !state.prev.empty();
+    if (havePrev) {
+        bx0 = width; by0 = height;
+        for (uint32_t y = 0; y < height; ++y) {
+            const uint8_t *n = pixels + (size_t)y * pitch;
+            const uint8_t *p = state.prev.data() + (size_t)y * width * 4;
+            if (!std::memcmp(n, p, (size_t)width * 4)) continue;
+            uint32_t x = 0, e = width;
+            while (x < width && !std::memcmp(n + x * 4, p + x * 4, 4)) ++x;
+            while (e > x && !std::memcmp(n + (e - 1) * 4, p + (e - 1) * 4, 4)) --e;
+            bx0 = std::min(bx0, x); bx1 = std::max(bx1, e);
+            by0 = std::min(by0, y); by1 = y + 1;
+        }
+        if (bx0 >= bx1) {
+            return;  // no change at all
+        }
+        partial = (uint64_t)(bx1 - bx0) * (by1 - by0) * 2 < (uint64_t)width * height;
+    }
+    // remember current content (tight copy)
+    state.prev.resize((size_t)width * height * 4);
+    state.prevWidth = width; state.prevHeight = height;
+    for (uint32_t y = 0; y < height; ++y) {
+        std::memcpy(state.prev.data() + (size_t)y * width * 4,
+                    pixels + (size_t)y * pitch, (size_t)width * 4);
+    }
+
+    if (partial) {
+        // sprite frame: dump just the changed rect, dedup globally
+        const uint32_t sw = bx1 - bx0, sh = by1 - by0;
+        NSMutableData *copy = [NSMutableData dataWithLength:(NSUInteger)sw * sh * 4];
+        auto *out = static_cast<uint8_t *>(copy.mutableBytes);
+        for (uint32_t y = 0; y < sh; ++y) {
+            std::memcpy(out + (size_t)y * sw * 4,
+                        pixels + (size_t)(by0 + y) * pitch + bx0 * 4, (size_t)sw * 4);
+        }
+        const uint64_t hash = contentHash(out, sw, sh, sw * 4);
+        static std::unordered_set<uint64_t> seenSprites;
+        if (!seenSprites.insert(hash).second) return;
+        NSString *spriteDir = [dir stringByAppendingPathComponent:@"sprites"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:spriteDir
+                                  withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *file = [spriteDir stringByAppendingPathComponent:
+                [NSString stringWithFormat:@"%016llx_%ux%u_at_%u_%u.png",
+                                           hash, sw, sh, bx0, by0]];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:file]) return;
+        writePng(file, copy, sw, sh, hash, textureId, "sprite");
+        return;
+    }
+
+    if (state.dynamic) return;
     const uint64_t hash = contentHash(pixels, width, height, pitch);
     if (!state.uniqueHashes.insert(hash).second) return;
     NSString *file = [dir stringByAppendingPathComponent:
@@ -123,44 +224,7 @@ void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch
     for (uint32_t y = 0; y < height; ++y) {
         std::memcpy(out + (size_t)y * width * 4, pixels + (size_t)y * pitch, (size_t)width * 4);
     }
-    // X8R8G8B8 sources carry zero alpha everywhere - make those opaque so the
-    // dump is viewable; textures that really use alpha are left untouched
-    bool anyAlpha = false;
-    for (size_t i = 3; i < copy.length; i += 4) {
-        if (out[i]) { anyAlpha = true; break; }
-    }
-    if (!anyAlpha) {
-        for (size_t i = 3; i < copy.length; i += 4) out[i] = 0xFF;
-    }
-
-    dispatch_async(writeQueue(), ^{
-        NSString *index = [directory() stringByAppendingPathComponent:@"index.csv"];
-        FILE *f = fopen(index.fileSystemRepresentation, "a");
-        if (f) {
-            fprintf(f, "%016llx,%u,%ux%u\n", hash, textureId, width, height);
-            fclose(f);
-        }
-        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-        CGDataProviderRef provider =
-                CGDataProviderCreateWithCFData((__bridge CFDataRef)copy);
-        CGImageRef image = CGImageCreate(
-                width, height, 8, 32, width * 4, space,
-                (CGBitmapInfo)kCGImageAlphaFirst | kCGBitmapByteOrder32Little,
-                provider, NULL, false, kCGRenderingIntentDefault);
-        if (image) {
-            CGImageDestinationRef destination = CGImageDestinationCreateWithURL(
-                    (__bridge CFURLRef)[NSURL fileURLWithPath:file],
-                    CFSTR("public.png"), 1, NULL);
-            if (destination) {
-                CGImageDestinationAddImage(destination, image, NULL);
-                CGImageDestinationFinalize(destination);
-                CFRelease(destination);
-            }
-            CGImageRelease(image);
-        }
-        CGDataProviderRelease(provider);
-        CGColorSpaceRelease(space);
-    });
+    writePng(file, copy, width, height, hash, textureId, "page");
 }
 
 }  // namespace texdump

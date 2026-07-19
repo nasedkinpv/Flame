@@ -16,8 +16,17 @@ readonly BRIDGE_FILE="${PREFIX}/drive_c/dk2-metal/frame.bin"
 readonly LOG_DIR="${HOME}/Library/Logs/Dungeon Keeper II Metal"
 readonly LOG_FILE="${LOG_DIR}/game.log"
 readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-3}"
-readonly LEVEL="${DK2_LEVEL:-level1}"
 readonly IMPORTER="${SCRIPT_DIR}/import-original-game.zsh"
+
+if (( $# == 0 )); then
+  LEVEL="${DK2_LEVEL:-level1}"
+elif (( $# == 2 )) && [[ "$1" == '-LEVEL' ]]; then
+  LEVEL="$2"
+else
+  print -u2 -- "usage: ${0:t} [-LEVEL levelN]"
+  exit 2
+fi
+readonly LEVEL
 readonly DUMP_DIR="${DK2_TEXTURE_DUMP:-${HOME}/Library/Application Support/Dungeon Keeper 2 Flame/texture-dump}"
 
 fail() {
