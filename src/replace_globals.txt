@@ -52,7 +52,10 @@
 0058B9D0 void __cdecl addTriangleToRender1(int, int, int)
 
 # Spatial vector-field sampler (6x6x5 trilinear interpolation)
-0058F030 float *Obj58EF60::sub_58F030(float, float, float, float *)
+# The SSE2 implementation is oracle-verified, but redirecting this large entry
+# before the first frame traps Wine 11 WOW64 in its exception server.  Keep it
+# staged until it can be reached through a translated small dispatcher.
+#0058F030 float *Obj58EF60::sub_58F030(float, float, float, float *)
 
 # CBridge
 0043E0F0 MySurface *CBridge::loadPng(const char *)

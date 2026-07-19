@@ -24,6 +24,13 @@ internal static class FieldSamplerDiffTest {
     private static extern IntPtr VirtualAlloc(
         IntPtr address, UIntPtr size, uint allocationType, uint protect);
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr LoadLibraryEx(
+        string fileName, IntPtr file, uint flags);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true)]
+    private static extern IntPtr GetProcAddress(IntPtr module, string name);
+
     [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
     private delegate IntPtr OriginalSampler(
         IntPtr self, float x, float y, float z, IntPtr output);
@@ -182,8 +189,9 @@ internal static class FieldSamplerDiffTest {
 
     private static int Main(string[] args) {
         if (IntPtr.Size != 4) throw new InvalidOperationException("build with /platform:x86");
-        if (args.Length != 1) {
-            Console.Error.WriteLine("usage: field_sampler_difftest.exe path-to-DKII-DX.exe");
+        if (args.Length < 1 || args.Length > 2) {
+            Console.Error.WriteLine(
+                "usage: field_sampler_difftest.exe path-to-DKII-DX.exe [replacement-Flame.dll]");
             return 2;
         }
         byte[] image = File.ReadAllBytes(args[0]);
@@ -200,6 +208,17 @@ internal static class FieldSamplerDiffTest {
         Marshal.Copy(code, 0, executable, code.Length);
         OriginalSampler original = (OriginalSampler)Marshal.GetDelegateForFunctionPointer(
             executable, typeof(OriginalSampler));
+        OriginalSampler replacement = null;
+        if (args.Length == 2) {
+            const uint DontResolveDllReferences = 1;
+            IntPtr module = LoadLibraryEx(Path.GetFullPath(args[1]), IntPtr.Zero, DontResolveDllReferences);
+            if (module == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+            IntPtr entry = GetProcAddress(
+                module, "?sub_58F030@Obj58EF60@dk2@@QAEPAMMMMPAM@Z");
+            if (entry == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+            replacement = (OriginalSampler)Marshal.GetDelegateForFunctionPointer(
+                entry, typeof(OriginalSampler));
+        }
 
         Random random = new Random(0x58F030);
         float[][] blocks = new float[16][];
@@ -233,9 +252,12 @@ internal static class FieldSamplerDiffTest {
             WriteFloat(output, 8, 789.0f);
             IntPtr returned = original(self, x, y, z, output);
             if (returned != output) throw new Exception("original returned the wrong pointer");
+            float[] originalResult = {
+                ReadFloat(output, 0), ReadFloat(output, 4), ReadFloat(output, 8)
+            };
             float[] expected = Candidate(blocks, originX, originY, x, y, z);
             for (int channel = 0; channel < 3; ++channel) {
-                float actual = ReadFloat(output, channel * 4);
+                float actual = originalResult[channel];
                 if (!Close(actual, expected[channel])) {
                     Console.Error.WriteLine(
                         "mismatch at iteration {0}, channel {1}: original={2:R}, candidate={3:R}",
@@ -244,6 +266,22 @@ internal static class FieldSamplerDiffTest {
                         "origin=({0:R},{1:R}) input=({2:R},{3:R},{4:R})",
                         originX, originY, x, y, z);
                     return 1;
+                }
+            }
+            if (replacement != null) {
+                returned = replacement(self, x, y, z, output);
+                if (returned != output) throw new Exception("replacement returned the wrong pointer");
+                for (int channel = 0; channel < 3; ++channel) {
+                    float actual = ReadFloat(output, channel * 4);
+                    if (!Close(actual, originalResult[channel])) {
+                        Console.Error.WriteLine(
+                            "replacement mismatch at iteration {0}, channel {1}: original={2:R}, replacement={3:R}",
+                            iteration, channel, originalResult[channel], actual);
+                        Console.Error.WriteLine(
+                            "origin=({0:R},{1:R}) input=({2:R},{3:R},{4:R})",
+                            originX, originY, x, y, z);
+                        return 1;
+                    }
                 }
             }
         }
