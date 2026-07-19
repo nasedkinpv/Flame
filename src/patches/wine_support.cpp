@@ -5,7 +5,17 @@
 #include "wine_support.h"
 #include <Windows.h>
 #include "logging.h"
+#include "tools/flame_config.h"
 #include <string>
+
+
+flame_config::define_flame_option<bool> o_wine_main_thread_priority(
+    "flame:wine:main-thread-priority", flame_config::OG_Config,
+    "Raise the main game thread priority to HIGHEST.\n"
+    "Under Wine on macOS this maps to a higher QoS class, letting\n"
+    "the Game Mode scheduler boost reach the busiest thread",
+    true
+);
 
 
 struct RegKeyCxx {
@@ -121,6 +131,18 @@ void patch::wine_support::init() {
     RegKeyCxx wine;
     if(!wine.open_hkcu("SOFTWARE\\Wine")) return;
     patch::log::dbg("Wine detected!");
+
+    if (o_wine_main_thread_priority.get()) {
+        // this runs on the thread that becomes the game loop; Wine maps the
+        // priority to a macOS QoS class, so the Game Mode coalition boost
+        // finally covers the ~100%-busy thread instead of leaving it at
+        // default QoS
+        if (SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST)) {
+            patch::log::dbg("main thread priority raised to HIGHEST");
+        } else {
+            patch::log::dbg("SetThreadPriority failed: %08X", GetLastError());
+        }
+    }
 
     std::string foundVmem;
     if(RegKeyCxx d3d = wine.open_subkey("Direct3D")) {
