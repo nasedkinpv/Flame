@@ -137,7 +137,7 @@ void dk2::CEngineAnimMesh::sub_5836A0(int animation, SceneObject2E *scene) {
             f48_flags & 0x10000);
 
     Vec3f pivot;
-    f10_matrix.multiplyVec(&resource->pos, &pivot);
+    f10_matrix.multiplyVec(&pivot, &resource->pos);
     Obj57BCB0 lights;
     lights.count = 0;
     if (scene->drawFlags_x2[0] & 0x40) {

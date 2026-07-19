@@ -116,7 +116,7 @@ void dk2::CEngineDynamicMesh::sub_581BE0(int meshIndex, SceneObject2E *scene) {
             f38_vec.y + surface->vec.y,
             f38_vec.z + surface->vec.z};
     Vec3f pivot;
-    f10_mat.multiplyVec(&resource->pos, &pivot);
+    f10_mat.multiplyVec(&pivot, &resource->pos);
 
     Obj57BCB0 lights;
     lights.count = 0;
