@@ -165,6 +165,132 @@ void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch
 
 }  // namespace texdump
 
+// HD texture replacement: when <hash>.png exists in the HD directory
+// (DK2_TEXTURE_HD=/abs/path, or the default below), it is loaded once, given
+// a full CPU-built mip chain, and bound instead of the bridge texture. A
+// missing or deleted file silently falls back to the original pixels.
+namespace texhd {
+
+NSString *directory() {
+    static NSString *dir = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *env = std::getenv("DK2_TEXTURE_HD");
+        NSString *path = (env && *env)
+                ? @(env)
+                : [NSHomeDirectory() stringByAppendingPathComponent:
+                          @"Library/Application Support/Dungeon Keeper 2 Flame/textures-hd"];
+        BOOL isDir = NO;
+        if ([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDir] && isDir) {
+            dir = path;
+        }
+    });
+    return dir;
+}
+
+id<MTLTexture> createMipmapped(id<MTLDevice> device, const uint8_t *bgra,
+                               uint32_t width, uint32_t height, uint64_t hash) {
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                         width:width height:height mipmapped:YES];
+    descriptor.storageMode = MTLStorageModeShared;
+    descriptor.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+    if (!texture) return nil;
+    texture.label = [NSString stringWithFormat:@"DK2 HD %016llx", hash];
+    [texture replaceRegion:MTLRegionMake2D(0, 0, width, height)
+               mipmapLevel:0 withBytes:bgra bytesPerRow:(NSUInteger)width * 4];
+    // CPU box-filter mip chain
+    std::vector<uint8_t> level(bgra, bgra + (size_t)width * height * 4);
+    uint32_t w = width, h = height;
+    for (NSUInteger mip = 1; mip < texture.mipmapLevelCount; ++mip) {
+        const uint32_t nw = std::max(1u, w / 2), nh = std::max(1u, h / 2);
+        std::vector<uint8_t> next((size_t)nw * nh * 4);
+        for (uint32_t y = 0; y < nh; ++y) {
+            const uint32_t sy0 = std::min(y * 2, h - 1), sy1 = std::min(y * 2 + 1, h - 1);
+            for (uint32_t x = 0; x < nw; ++x) {
+                const uint32_t sx0 = std::min(x * 2, w - 1), sx1 = std::min(x * 2 + 1, w - 1);
+                for (int c = 0; c < 4; ++c) {
+                    const unsigned sum = level[((size_t)sy0 * w + sx0) * 4 + c]
+                                       + level[((size_t)sy0 * w + sx1) * 4 + c]
+                                       + level[((size_t)sy1 * w + sx0) * 4 + c]
+                                       + level[((size_t)sy1 * w + sx1) * 4 + c];
+                    next[((size_t)y * nw + x) * 4 + c] = (uint8_t)((sum + 2) / 4);
+                }
+            }
+        }
+        [texture replaceRegion:MTLRegionMake2D(0, 0, nw, nh)
+                   mipmapLevel:mip withBytes:next.data() bytesPerRow:(NSUInteger)nw * 4];
+        level = std::move(next);
+        w = nw; h = nh;
+    }
+    return texture;
+}
+
+id<MTLTexture> loadFile(id<MTLDevice> device, NSString *path, uint64_t hash) {
+    CGImageSourceRef source = CGImageSourceCreateWithURL(
+            (__bridge CFURLRef)[NSURL fileURLWithPath:path], NULL);
+    if (!source) return nil;
+    CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, NULL);
+    CFRelease(source);
+    if (!image) return nil;
+    const size_t width = CGImageGetWidth(image), height = CGImageGetHeight(image);
+    id<MTLTexture> texture = nil;
+    if (width && height && width <= 16384 && height <= 16384) {
+        std::vector<uint8_t> bgra(width * height * 4);
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGContextRef context = CGBitmapContextCreate(
+                bgra.data(), width, height, 8, width * 4, space,
+                (CGBitmapInfo)kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+        if (context) {
+            CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+            CGContextRelease(context);
+            // back to straight alpha - the game's blending expects it
+            for (size_t i = 0; i < bgra.size(); i += 4) {
+                const uint8_t a = bgra[i + 3];
+                if (a == 0 || a == 255) continue;
+                bgra[i] = (uint8_t)std::min(255u, bgra[i] * 255u / a);
+                bgra[i + 1] = (uint8_t)std::min(255u, bgra[i + 1] * 255u / a);
+                bgra[i + 2] = (uint8_t)std::min(255u, bgra[i + 2] * 255u / a);
+            }
+            texture = createMipmapped(device, bgra.data(),
+                                      (uint32_t)width, (uint32_t)height, hash);
+        }
+        CGColorSpaceRelease(space);
+    }
+    CGImageRelease(image);
+    return texture;
+}
+
+// render thread only; returns nil when no replacement exists
+id<MTLTexture> lookup(id<MTLDevice> device, const uint8_t *pixels,
+                      uint32_t width, uint32_t height, uint32_t pitch) {
+    NSString *dir = directory();
+    if (!dir) return nil;
+    static std::unordered_map<uint64_t, id<MTLTexture>> loaded;
+    static std::unordered_set<uint64_t> missing;
+    const uint64_t hash = texdump::contentHash(pixels, width, height, pitch);
+    auto found = loaded.find(hash);
+    if (found != loaded.end()) return found->second;
+    if (missing.count(hash)) return nil;
+    NSString *path = [dir stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"%016llx.png", hash]];
+    id<MTLTexture> texture = access(path.fileSystemRepresentation, R_OK) == 0
+            ? loadFile(device, path, hash)
+            : nil;
+    if (texture) {
+        loaded.emplace(hash, texture);
+        NSLog(@"texhd: %016llx replaced with %lux%lu",
+              hash, (unsigned long)texture.width, (unsigned long)texture.height);
+    } else {
+        if (missing.size() > 100000) missing.clear();  // dynamic frames grow this
+        missing.insert(hash);
+    }
+    return texture;
+}
+
+}  // namespace texhd
+
 namespace {
 
 constexpr NSUInteger kFramesInFlight = 3;
@@ -873,6 +999,10 @@ bool inputLogEnabled() {
     samplerDescriptor.magFilter = MTLSamplerMinMagFilterLinear;
     samplerDescriptor.sAddressMode = MTLSamplerAddressModeRepeat;
     samplerDescriptor.tAddressMode = MTLSamplerAddressModeRepeat;
+    // HD textures carry mip chains; originals have a single level, for which
+    // the mip filter and anisotropy are inert
+    samplerDescriptor.mipFilter = MTLSamplerMipFilterLinear;
+    samplerDescriptor.maxAnisotropy = 8;
     samplerDescriptor.supportArgumentBuffers = YES;
     _sampler = [_device newSamplerStateWithDescriptor:samplerDescriptor];
 
@@ -1077,6 +1207,16 @@ static void *renderWorker(void *context) {
                         textureUpdate.width && textureUpdate.height &&
                         textureUpdate.row_pitch >= textureUpdate.width * 4 &&
                         textureUpdate.data_size >= textureUpdate.row_pitch * textureUpdate.height) {
+                        const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
+                        id<MTLTexture> hd = texhd::lookup(_device, pixels, textureUpdate.width,
+                                                          textureUpdate.height, textureUpdate.row_pitch);
+                        if (hd) {
+                            if (_textures[key] != hd) {
+                                _textures[key] = hd;
+                                [_resources addAllocation:hd];
+                                residencyChanged = YES;
+                            }
+                        } else {
                         id<MTLTexture> texture = _textures[key];
                         if (!texture || texture.width != textureUpdate.width ||
                             texture.height != textureUpdate.height) {
@@ -1096,11 +1236,11 @@ static void *renderWorker(void *context) {
                             }
                         }
                         if (texture) {
-                            const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
                             [texture replaceRegion:MTLRegionMake2D(0, 0, textureUpdate.width, textureUpdate.height)
                                        mipmapLevel:0 withBytes:pixels bytesPerRow:textureUpdate.row_pitch];
                             texdump::dump(pixels, textureUpdate.width, textureUpdate.height,
                                           textureUpdate.row_pitch, textureUpdate.texture_id);
+                        }
                         }
                     }
                 }
