@@ -200,14 +200,19 @@ int *dk2::Obj57AD20::sub_57A9A0(
         int a7,
         float scale) {
     if (selectExtendedPath) {
-        return sub_57B0E0(
-                entryIndex, scene, a4, lights,
+        using OriginalExtendedFun = int *(__thiscall *)(
+                Obj57AD20 *, int, SceneObject2E *, int, uint32_t *,
+                int, int, int, float);
+        return reinterpret_cast<OriginalExtendedFun>(0x0057B0E0)(
+                this, entryIndex, scene, a4, lights,
                 selectExtendedPath, a6, a7, scale);
     }
     return sub_57B6D0(entryIndex, scene, a4, lights, a6, a7, scale);
 }
 
 
+// Staged until the extended spatial-mesh path has a frame-level differential
+// test.  sub_57A9A0 deliberately dispatches to the original entry for now.
 int *dk2::Obj57AD20::sub_57B0E0(
         int entryIndex,
         SceneObject2E *scene,
