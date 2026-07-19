@@ -41,6 +41,81 @@ uint32_t signBit(float value) { return floatBits(value) >> 31; }
 // unnamed literal-pool floats at 0066FE28+idx*4, addressed via float_data2
 const float *litPool() { return reinterpret_cast<const float *>(&dk2::float_data2); }
 
+uint32_t frustumOutcode(const dk2::Vec3f &v) {
+    return signBit(v.z + v.y)
+         | signBit(v.z - v.y) << 1
+         | signBit(v.x + v.z) << 2
+         | signBit(v.z - v.x) << 3;
+}
+
+int createClipVertex(int outside, int other, uint32_t plane) {
+    const dk2::Vec3f &a = dk2::RenderData_instance_arr[outside].vec;
+    const dk2::Vec3f &b = dk2::RenderData_instance_arr[other].vec;
+    float t;
+    switch (plane) {
+    case 4: t = (a.x + a.z) / (((a.x - b.x) + a.z) - b.z); break;
+    case 8: t = (a.z - a.x) / (((b.x - a.x) + a.z) - b.z); break;
+    case 1: t = (a.y + a.z) / (((a.y - b.y) + a.z) - b.z); break;
+    default: t = (a.z - a.y) / (((b.y - a.y) + a.z) - b.z); break;
+    }
+
+    const int idx = dk2::g_outIdx++;
+    dk2::RenderData &dst = dk2::RenderData_instance_arr[idx];
+    dst.vec.x = (b.x - a.x) * t + a.x;
+    dst.vec.y = (b.y - a.y) * t + a.y;
+    dst.vec.z = (b.z - a.z) * t + a.z;
+    switch (plane) {
+    case 4: dst.vec.z = -dst.vec.x; break;
+    case 8: dst.vec.z = dst.vec.x; break;
+    case 1: dst.vec.z = -dst.vec.y; break;
+    default: dst.vec.z = dst.vec.y; break;
+    }
+    uint32_t remainingPlanes;
+    switch (plane) {
+    case 4: remainingPlanes = 1 | 2 | 8; break;
+    case 8: remainingPlanes = 1 | 2; break;
+    case 1: remainingPlanes = 2; break;
+    default: remainingPlanes = 0; break;
+    }
+    dst._viewOffsets = (int) (frustumOutcode(dst.vec) & remainingPlanes);
+
+    dk2::SceneObject2E *obj = dk2::g_pSceneObject2E;
+    for (int i = 0; i < obj->propsCount; ++i) {
+        const dk2::Vec3f &va = dk2::g_vectors[i].arr[outside];
+        const dk2::Vec3f &vb = dk2::g_vectors[i].arr[other];
+        dk2::Vec3f &vd = dk2::g_vectors[i].arr[idx];
+        vd.x = (vb.x - va.x) * t + va.x;
+        vd.y = (vb.y - va.y) * t + va.y;
+        vd.z = (vb.z - va.z) * t + va.z;
+    }
+    for (int i = 0; i < obj->surfhCount; ++i) {
+        const dk2::Uv2f &ua = dk2::Uv2f_arr_instance[i].arr[outside];
+        const dk2::Uv2f &ub = dk2::Uv2f_arr_instance[i].arr[other];
+        dk2::Uv2f &ud = dk2::Uv2f_arr_instance[i].arr[idx];
+        ud.u = (ub.u - ua.u) * t + ua.u;
+        ud.v = (ub.v - ua.v) * t + ua.v;
+    }
+    return idx;
+}
+
+}
+
+
+int *dk2::applyIndxs_sub_58AC20() {
+    const bool perspectiveClip = reinterpret_cast<int *>(&g_bottom_77937C)[-1] != 0;
+    for (int i = 0; i < g_Idx3b_arr_count; ++i) {
+        if (perspectiveClip) {
+            adjustAndAddToRender_sub_58BB60(&g_Idx3b_arr_instance[i]);
+        } else {
+            adjustAndAddToRender_sub_58CC40(&g_Idx3b_arr_instance[i]);
+        }
+    }
+
+    const int vertexCount = g_outIdx;
+    std::memset(g_idxFlags, 0, vertexCount);
+    for (int i = 0; i < vertexCount; ++i) RenderData_instance_arr[i].vtxIdx = -1;
+    g_Idx3b_arr_count = 0;
+    return vertexCount > 0 ? &RenderData_instance_arr[vertexCount].vtxIdx : nullptr;
 }
 
 
@@ -62,6 +137,45 @@ int __cdecl dk2::sub_58AD70(int a1, float *v) {
     const float sy = (&g_zAdd3_7793A0)[-1];  // 0077939C
     Vec3f tmp{v[0] * sx, v[1] * sy, v[2]};
     return sub_58AF70(a1, &tmp.x);
+}
+
+
+// 0058ADC0: project an already view-space vertex. Unlike sub_58AF70 this is
+// used for vertices created by the clipper, so the outcode is always cleared.
+int __cdecl dk2::RenderData_addToArr(int idx, Vec3f *v) {
+    const float *fd2 = litPool();
+    RenderData &r = RenderData_instance_arr[idx];
+    g_idxFlags[idx] = 1;
+    r.vec = *v;
+
+    const float rz = fd2[7] / v->z;                                  // 0066FE44 / z
+    r.y10 = (&g_top_780938)[1] * rz * v->y
+          + reinterpret_cast<float *>(&g_renMode_77F928)[2];
+    r.xC = (&g_vec_77F4C0.x)[3] * rz * v->x + (&g_right_77F4EC)[1];
+
+    if (reinterpret_cast<int *>(&g_vecCol2)[0x50 / 4] & 8) {         // 0077F450
+        const double k80 = *reinterpret_cast<const double *>(fd2 + 22);
+        const float e8 = reinterpret_cast<const float *>(&__addTriangleFun)[1];
+        const float fog =
+                (e8 - (v->z - (float) ((fabsf(v->x) + fabsf(v->y)) * k80)))
+                * g_zAdd3Arr_77F4D8[2];
+        if (signBit(fog)) {
+            g_idxFlags[idx] |= 0x10;
+            r.f24 = 0;
+        } else if (signBit(fog - fd2[7])) {
+            g_idxFlags[idx] |= 0x10;
+            const float fv = fd2[21] - (fd2[20] - fog * fd2[24]);
+            r.f24 = (int) (floatBits(fv) & 0x7fffff) - 0x400000;
+        }
+    }
+
+    const float sel = fd2[5] - v->z;
+    r.z14 = signBit(sel) ? g_zAdd3_7793A0 - g_zMul3_77F934 * rz
+                         : g_zMul2_77F490 * v->z + g_zAdd2_77F4D0;
+    if (signBit(fd2[3] - r.z14)) r.z14 = fd2[3];
+    r.f18 = rz;
+    r._viewOffsets = 0;
+    return 0;
 }
 
 
@@ -214,4 +328,60 @@ void __cdecl dk2::addTriangleToRender1(int a, int b, int c) {
         g_lpwTrianglesIndices = reinterpret_cast<Idx3s *>(w + 3);
         DrawTriangleList_trianglesCount += 1;
     }
+}
+
+
+// 0058BB60: clip a partially visible triangle against the four perspective
+// planes, interpolate every active vertex/UV stream, then emit a triangle fan.
+int __cdecl dk2::adjustAndAddToRender_sub_58BB60(Idx3b *triangle) {
+    int polygon[32]{triangle->i, triangle->j, triangle->k};
+    int scratch[32];
+    int count = 3;
+    const uint32_t planes[] = {4, 8, 1, 2};
+    for (uint32_t plane : planes) {
+        int outCount = 0;
+        int previous = polygon[count - 1];
+        bool previousInside =
+                (RenderData_instance_arr[previous]._viewOffsets & plane) == 0;
+        for (int i = 0; i < count; ++i) {
+            const int current = polygon[i];
+            const bool currentInside =
+                    (RenderData_instance_arr[current]._viewOffsets & plane) == 0;
+            if (currentInside) {
+                if (!previousInside) scratch[outCount++] = createClipVertex(previous, current, plane);
+                scratch[outCount++] = current;
+            } else if (previousInside) {
+                scratch[outCount++] = createClipVertex(current, previous, plane);
+            }
+            previous = current;
+            previousInside = currentInside;
+        }
+        if (outCount < 3) return 0;
+        count = outCount;
+        std::memcpy(polygon, scratch, sizeof(int) * count);
+    }
+
+    for (int i = 0; i < count; ++i) {
+        RenderData &r = RenderData_instance_arr[polygon[i]];
+        RenderData_addToArr(polygon[i], &r.vec);
+    }
+    for (int i = 1; i + 1 < count; ++i) {
+        addTriangleToRender1(polygon[0], polygon[i], polygon[i + 1]);
+    }
+
+    SceneObject2E *obj = g_pSceneObject2E;
+    for (int i = 0; i < count; ++i) {
+        const int idx = polygon[i];
+        if (!(g_idxFlags[idx] & 2)) continue;
+        Vec3f vectors[4];
+        Uv2f uvs[4];
+        for (int j = 0; j < obj->propsCount; ++j) vectors[j] = g_vectors[j].arr[idx];
+        for (int j = 0; j < obj->surfhCount; ++j) uvs[j] = Uv2f_arr_instance[j].arr[idx];
+        if (__renderFun == reinterpret_cast<decltype(__renderFun)>(0x0058B2A0)) {
+            renderFun_sub_58B2A0(idx, vectors, uvs);
+        } else {
+            __renderFun(idx, vectors, uvs);
+        }
+    }
+    return 0;
 }
