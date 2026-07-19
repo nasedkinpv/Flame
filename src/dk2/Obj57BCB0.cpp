@@ -10,8 +10,10 @@
 
 
 namespace dk2 {
-int __fastcall Obj57BCB0_buildDirectionalLights(
-        Obj57BCB0 *, void *, int32_t *, int, Mat3x3f, Vec3f);
+int __thiscall sub_57BD70(
+        int *, uint32_t *, int,
+        float, int, int, int, int, int, int, int, int,
+        float, float, float);
 }
 
 
@@ -141,10 +143,22 @@ dk2::Obj57BCB0 *dk2::Obj57BCB0::constructor(uint32_t *opaqueCollection, int mask
 }
 
 
-int __fastcall dk2::Obj57BCB0_buildDirectionalLights(
-        Obj57BCB0 *self, void *,
-        int32_t *opaqueCollection, int mask,
-        Mat3x3f matrix, Vec3f position) {
+int __thiscall dk2::sub_57BD70(
+        int *selfRaw, uint32_t *opaqueCollectionRaw, int mask,
+        float m0, int m1, int m2, int m3, int m4,
+        int m5, int m6, int m7, int m8,
+        float x, float y, float z) {
+    auto *self = reinterpret_cast<Obj57BCB0 *>(selfRaw);
+    auto *opaqueCollection = reinterpret_cast<int32_t *>(opaqueCollectionRaw);
+    Mat3x3f matrix;
+    const uint32_t matrixBits[9] = {
+            lighting::floatBits(m0),
+            static_cast<uint32_t>(m1), static_cast<uint32_t>(m2),
+            static_cast<uint32_t>(m3), static_cast<uint32_t>(m4),
+            static_cast<uint32_t>(m5), static_cast<uint32_t>(m6),
+            static_cast<uint32_t>(m7), static_cast<uint32_t>(m8)};
+    std::memcpy(&matrix, matrixBits, sizeof(matrix));
+    const Vec3f position{x, y, z};
     const int32_t total = opaqueCollection[0] + opaqueCollection[1];
     const SceneLight *const *lights = sceneLights(opaqueCollection);
     const float multiplier = *reinterpret_cast<const float *>(0x0066FB74);
