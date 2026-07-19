@@ -6,6 +6,12 @@ It works with the Disk, Steam and GOG versions of the game.
 Warning: Saves and network sessions between Flame and non-Flame Dungeon Keeper 2 versions are [incompatible](https://github.com/DiaLight/Flame/issues/57).
 But you can use `-original-compatible` flag to disable some patches that breaks compatibility.
 
+## Native macOS edition
+
+This fork adds a self-contained Apple Silicon app that imports the user's original GOG 1.7 game into an isolated Wine prefix, then streams its Direct3D 3 command buffer to a native AppKit/Metal 4 renderer. It includes native windowing and input, Retina/high-resolution output, corrected lighting and translucent UI, optional HD texture replacement and dumping, and SSE2 rewrites of hot DK2 geometry and lighting paths.
+
+See [macos/README.md](macos/README.md) for the build, packaging, import and run instructions. No copyrighted game data is included.
+
 ## How to report a bug
 
 1) If you have any bugs in the game, please describe them in the discord channel: https://discord.gg/RvrQpCFUZc or in the GitHub issues.
