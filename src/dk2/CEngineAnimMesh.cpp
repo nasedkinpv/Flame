@@ -155,7 +155,7 @@ void dk2::CEngineAnimMesh::sub_5836A0(int animation, SceneObject2E *scene) {
             field_3C.z + surface->vec.z};
     const float frame = field_60;
     const uint32_t frameIndex = static_cast<uint32_t>(field_64);
-    const uint32_t lod = field_7C;
+    const uint32_t lod = static_cast<uint32_t>(field_78);
     const VertexFun vertexFun = g_fun_779398;
     const TriangleFun triangleFun = __addTriangleFun;
     const RenderFun renderFun = __renderFun;
