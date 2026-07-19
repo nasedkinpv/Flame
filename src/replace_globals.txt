@@ -376,6 +376,12 @@
 # never self-modified; patching 57B6D0 directly faults Wine 11's WOW64 engine.
 0057A9A0 int *Obj57AD20::sub_57A9A0(int, SceneObject2E *, uint32_t *, int, int, int, int, float)
 
+# CEngineAnimMesh
+# Route the hot animated-mesh path through its small virtual dispatcher. Direct
+# replacement of the large 005836A0 body is unsafe under Wine 11 WOW64 for the
+# same reason as Obj57AD20::sub_57B6D0 above.
+005848B0 void CEngineAnimMesh::fun_5848B0(int, SceneObject2E *)
+
 # MyScaledSurface
 0057C420 MyScaledSurface *MyScaledSurface::constructor(MyDblNamedSurface *, int)
 
