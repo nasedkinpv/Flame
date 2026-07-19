@@ -61,15 +61,61 @@ NSString *directory() {
     return dir;
 }
 
+dispatch_queue_t writeQueue() {
+    static dispatch_queue_t queue =
+            dispatch_queue_create("dk2.texture-dump", DISPATCH_QUEUE_SERIAL);
+    return queue;
+}
+
+// A texture id that keeps producing new unique frames is a dynamically
+// rendered surface (minimap, status panels), not an asset - stop dumping it
+// and move what it already produced into dynamic/. Cyclic animations
+// (torches) revisit the same hashes, so they stay below the limit.
+constexpr size_t kDynamicFramesLimit = 40;
+
+struct IdState {
+    std::unordered_set<uint64_t> uniqueHashes;
+    std::vector<NSString *> files;
+    bool dynamic = false;
+};
+
 // render thread only
-void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch) {
+void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch,
+          uint32_t textureId) {
     NSString *dir = directory();
     if (!dir) return;
-    static std::unordered_set<uint64_t> seen;
+    static std::unordered_map<uint32_t, IdState> perId;
+    IdState &state = perId[textureId];
+    if (state.dynamic) return;
+
     const uint64_t hash = contentHash(pixels, width, height, pitch);
-    if (!seen.insert(hash).second) return;
+    if (!state.uniqueHashes.insert(hash).second) return;
     NSString *file = [dir stringByAppendingPathComponent:
             [NSString stringWithFormat:@"%016llx_%ux%u.png", hash, width, height]];
+    state.files.push_back(file);
+
+    if (state.uniqueHashes.size() > kDynamicFramesLimit) {
+        state.dynamic = true;
+        NSString *dynamicDir = [dir stringByAppendingPathComponent:@"dynamic"];
+        std::vector<NSString *> files = std::move(state.files);
+        dispatch_async(writeQueue(), ^{
+            NSFileManager *fm = NSFileManager.defaultManager;
+            [fm createDirectoryAtPath:dynamicDir withIntermediateDirectories:YES
+                           attributes:nil error:nil];
+            for (NSString *path : files) {
+                [fm moveItemAtPath:path
+                            toPath:[dynamicDir stringByAppendingPathComponent:
+                                           path.lastPathComponent]
+                             error:nil];
+            }
+        });
+        NSLog(@"texdump: texture id %u flagged dynamic, %lu frames moved",
+              textureId, (unsigned long)files.size());
+        return;
+    }
+
+    static std::unordered_set<uint64_t> seen;
+    if (!seen.insert(hash).second) return;
     if ([[NSFileManager defaultManager] fileExistsAtPath:file]) return;
 
     NSMutableData *copy = [NSMutableData dataWithLength:(NSUInteger)width * height * 4];
@@ -87,9 +133,13 @@ void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch
         for (size_t i = 3; i < copy.length; i += 4) out[i] = 0xFF;
     }
 
-    static dispatch_queue_t queue =
-            dispatch_queue_create("dk2.texture-dump", DISPATCH_QUEUE_SERIAL);
-    dispatch_async(queue, ^{
+    dispatch_async(writeQueue(), ^{
+        NSString *index = [directory() stringByAppendingPathComponent:@"index.csv"];
+        FILE *f = fopen(index.fileSystemRepresentation, "a");
+        if (f) {
+            fprintf(f, "%016llx,%u,%ux%u\n", hash, textureId, width, height);
+            fclose(f);
+        }
         CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         CGDataProviderRef provider =
                 CGDataProviderCreateWithCFData((__bridge CFDataRef)copy);
@@ -263,7 +313,12 @@ struct MetalVertex {
 
 constexpr NSUInteger kVertexBufferSize = 2 * 1024 * 1024;
 constexpr NSUInteger kIndexBufferSize = 512 * 1024;
-constexpr NSUInteger kTextureBindingsPerFrame = 128;
+// Metal exposes at most 128 textures through one shader argument table. DK2's
+// High-Res menus use well over 160 distinct textures in a frame, so keep two
+// immutable-per-draw banks and switch tables when a draw references the other
+// bank. Slot zero in every bank is the untextured white fallback.
+constexpr NSUInteger kTextureBindingsPerArgumentTable = 128;
+constexpr NSUInteger kTextureArgumentTablesPerFrame = 2;
 constexpr uint32_t kD3DRenderStateZEnable = 7;
 constexpr uint32_t kD3DRenderStateZWriteEnable = 14;
 constexpr uint32_t kD3DRenderStateSourceBlend = 19;
@@ -731,7 +786,8 @@ bool inputLogEnabled() {
     id<MTL4CommandBuffer> _commandBuffers[kFramesInFlight];
     id<MTLBuffer> _vertexBuffers[kFramesInFlight];
     id<MTLBuffer> _indexBuffers[kFramesInFlight];
-    id<MTL4ArgumentTable> _argumentTables[kFramesInFlight];
+    id<MTL4ArgumentTable>
+        _argumentTables[kFramesInFlight][kTextureArgumentTablesPerFrame];
     std::unique_ptr<BridgeReader> _bridge;
     uint64_t _frame;
     uint64_t _appliedDrawableSize;
@@ -858,19 +914,30 @@ bool inputLogEnabled() {
         _vertexBuffers[index].label = [NSString stringWithFormat:@"DK2 vertices %lu", index];
         _indexBuffers[index].label = [NSString stringWithFormat:@"DK2 indices %lu", index];
 
-        MTL4ArgumentTableDescriptor *tableDescriptor = [[MTL4ArgumentTableDescriptor alloc] init];
-        tableDescriptor.maxBufferBindCount = 1;
-        tableDescriptor.maxTextureBindCount = kTextureBindingsPerFrame;
-        tableDescriptor.maxSamplerStateBindCount = 1;
-        tableDescriptor.initializeBindings = YES;
-        tableDescriptor.label = [NSString stringWithFormat:@"DK2 arguments %lu", index];
-        _argumentTables[index] = [_device newArgumentTableWithDescriptor:tableDescriptor error:&error];
-        if (!_vertexBuffers[index] || !_indexBuffers[index] || !_argumentTables[index]) {
+        if (!_vertexBuffers[index] || !_indexBuffers[index]) {
             fail(@"Metal dynamic frame buffer creation failed.");
             return nil;
         }
-        [_argumentTables[index] setTexture:_whiteTexture.gpuResourceID atIndex:0];
-        [_argumentTables[index] setSamplerState:_sampler.gpuResourceID atIndex:0];
+        for (NSUInteger bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) {
+            MTL4ArgumentTableDescriptor *tableDescriptor =
+                [[MTL4ArgumentTableDescriptor alloc] init];
+            tableDescriptor.maxBufferBindCount = 1;
+            tableDescriptor.maxTextureBindCount = kTextureBindingsPerArgumentTable;
+            tableDescriptor.maxSamplerStateBindCount = 1;
+            tableDescriptor.initializeBindings = YES;
+            tableDescriptor.label = [NSString
+                stringWithFormat:@"DK2 arguments %lu/%lu", index, bank];
+            _argumentTables[index][bank] =
+                [_device newArgumentTableWithDescriptor:tableDescriptor error:&error];
+            if (!_argumentTables[index][bank]) {
+                fail(@"Metal dynamic argument table creation failed.");
+                return nil;
+            }
+            [_argumentTables[index][bank]
+                setTexture:_whiteTexture.gpuResourceID atIndex:0];
+            [_argumentTables[index][bank]
+                setSamplerState:_sampler.gpuResourceID atIndex:0];
+        }
     }
 
     id<MTLAllocation> allocations[kFramesInFlight * 2 + 1];
@@ -1033,7 +1100,7 @@ static void *renderWorker(void *context) {
                             [texture replaceRegion:MTLRegionMake2D(0, 0, textureUpdate.width, textureUpdate.height)
                                        mipmapLevel:0 withBytes:pixels bytesPerRow:textureUpdate.row_pitch];
                             texdump::dump(pixels, textureUpdate.width, textureUpdate.height,
-                                          textureUpdate.row_pitch);
+                                          textureUpdate.row_pitch, textureUpdate.texture_id);
                         }
                     }
                 }
@@ -1060,8 +1127,13 @@ static void *renderWorker(void *context) {
         if (snapshot) {
             NSUInteger vertexOffset = 0;
             NSUInteger indexOffset = 0;
-            uint32_t currentTextureBinding = 0;
-            uint32_t nextTextureBinding = 1;
+            struct TextureBinding {
+                uint16_t bank;
+                uint16_t slot;
+            };
+            TextureBinding currentTextureBinding = {0, 0};
+            TextureBinding nextTextureBinding = {0, 1};
+            uint32_t boundArgumentTableBank = 0;
             uint32_t zFunction = 4;
             BOOL zEnabled = YES;
             BOOL zWriteEnabled = YES;
@@ -1069,11 +1141,16 @@ static void *renderWorker(void *context) {
             uint32_t sourceBlend = 2;
             uint32_t destinationBlend = 1;
             uint32_t cullMode = 1;
-            std::unordered_map<uint32_t, uint32_t> textureBindings;
-            [_argumentTables[slot] setAddress:_vertexBuffers[slot].gpuAddress atIndex:0];
-            [_argumentTables[slot] setTexture:_whiteTexture.gpuResourceID atIndex:0];
-            [_argumentTables[slot] setSamplerState:_sampler.gpuResourceID atIndex:0];
-            [encoder setArgumentTable:_argumentTables[slot]
+            std::unordered_map<uint32_t, TextureBinding> textureBindings;
+            for (NSUInteger bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) {
+                [_argumentTables[slot][bank]
+                    setAddress:_vertexBuffers[slot].gpuAddress atIndex:0];
+                [_argumentTables[slot][bank]
+                    setTexture:_whiteTexture.gpuResourceID atIndex:0];
+                [_argumentTables[slot][bank]
+                    setSamplerState:_sampler.gpuResourceID atIndex:0];
+            }
+            [encoder setArgumentTable:_argumentTables[slot][boundArgumentTableBank]
                              atStages:MTLRenderStageVertex | MTLRenderStageFragment];
             size_t commandOffset = 0;
             while (commandOffset + sizeof(DK2MCommandHeader) <= snapshot->bytes.size()) {
@@ -1087,19 +1164,31 @@ static void *renderWorker(void *context) {
                         auto found = textureBindings.find(binding.texture_id);
                         if (found != textureBindings.end()) {
                             currentTextureBinding = found->second;
-                        } else if (nextTextureBinding < kTextureBindingsPerFrame) {
+                        } else if (nextTextureBinding.bank <
+                                   kTextureArgumentTablesPerFrame) {
                             id<MTLTexture> texture = _textures[@(binding.texture_id)];
                             if (texture) {
-                                currentTextureBinding = nextTextureBinding++;
+                                currentTextureBinding = nextTextureBinding;
                                 textureBindings.emplace(binding.texture_id, currentTextureBinding);
-                                [_argumentTables[slot] setTexture:texture.gpuResourceID
-                                                         atIndex:currentTextureBinding];
+                                [_argumentTables[slot][currentTextureBinding.bank]
+                                    setTexture:texture.gpuResourceID
+                                       atIndex:currentTextureBinding.slot];
+                                if (++nextTextureBinding.slot ==
+                                    kTextureBindingsPerArgumentTable) {
+                                    ++nextTextureBinding.bank;
+                                    nextTextureBinding.slot = 1;
+                                }
                             } else {
-                                currentTextureBinding = 0;
+                                currentTextureBinding = {0, 0};
                             }
+                        } else {
+                            // A missing binding must never inherit the previous
+                            // draw's texture. White preserves vertex colour and
+                            // makes capacity failures deterministic.
+                            currentTextureBinding = {0, 0};
                         }
                     } else if (binding.stage == 0) {
-                        currentTextureBinding = 0;
+                        currentTextureBinding = {0, 0};
                     }
                 } else if (header.type == DK2M_COMMAND_RENDER_STATE &&
                            header.size == sizeof(DK2MRenderStateCommand)) {
@@ -1149,7 +1238,7 @@ static void *renderWorker(void *context) {
                             metalVertices[index].color[3] = ((vertex.diffuse >> 24) & 0xFF) / 255.0f;
                             metalVertices[index].texCoord[0] = vertex.u;
                             metalVertices[index].texCoord[1] = vertex.v;
-                            metalVertices[index].textureIndex = currentTextureBinding;
+                            metalVertices[index].textureIndex = currentTextureBinding.slot;
                             metalVertices[index].padding = 0;
                         }
                         auto *metalIndices = reinterpret_cast<uint16_t *>(
@@ -1175,6 +1264,13 @@ static void *renderWorker(void *context) {
                         [encoder setCullMode:cullMode == 1 ? MTLCullModeNone : MTLCullModeBack];
                         [encoder setFrontFacingWinding:cullMode == 3 ? MTLWindingClockwise
                                                                     : MTLWindingCounterClockwise];
+                        if (boundArgumentTableBank != currentTextureBinding.bank) {
+                            boundArgumentTableBank = currentTextureBinding.bank;
+                            [encoder setArgumentTable:
+                                _argumentTables[slot][boundArgumentTableBank]
+                                             atStages:MTLRenderStageVertex |
+                                                      MTLRenderStageFragment];
+                        }
                         [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                             indexCount:draw.index_count
                                              indexType:MTLIndexTypeUInt16
