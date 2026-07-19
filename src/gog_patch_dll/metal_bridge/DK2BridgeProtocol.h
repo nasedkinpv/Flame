@@ -4,7 +4,8 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 5u
+#define DK2M_VERSION 6u
+#define DK2M_TIMING_QUANTUM_US 8u
 #define DK2M_SLOT_COUNT 3u
 // A 1600x1200 High-Res frame can introduce 9-12 MiB of 128x128 surfaces while
 // menus are warming up. Four MiB starves later textures forever when earlier

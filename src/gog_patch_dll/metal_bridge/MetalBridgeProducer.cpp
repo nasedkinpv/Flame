@@ -191,10 +191,10 @@ public:
         slot_->width = width_;
         slot_->height = height_;
         const uint32_t sceneMicroseconds = elapsedMicroseconds(sceneStarted_, timerTicks());
-        slot_->reserved[0] = clampMicroseconds(sceneMicroseconds) |
-                             (clampMicroseconds(gameTickMicroseconds_) << 16);
-        slot_->reserved[1] = clampMicroseconds(prepareMicroseconds_) |
-                             (clampMicroseconds(drawMicroseconds_) << 16);
+        slot_->reserved[0] = packMicroseconds(sceneMicroseconds) |
+                             (packMicroseconds(gameTickMicroseconds_) << 16);
+        slot_->reserved[1] = packMicroseconds(prepareMicroseconds_) |
+                             (packMicroseconds(drawMicroseconds_) << 16);
         header_->width = width_;
         header_->height = height_;
         header_->producer_pid = GetCurrentProcessId();
@@ -501,8 +501,10 @@ private:
         return value > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(value);
     }
 
-    static uint32_t clampMicroseconds(uint32_t value) {
-        return value > UINT16_MAX ? UINT16_MAX : value;
+    static uint32_t packMicroseconds(uint32_t value) {
+        const uint32_t quantized = (value + DK2M_TIMING_QUANTUM_US / 2) /
+                                   DK2M_TIMING_QUANTUM_US;
+        return quantized > UINT16_MAX ? UINT16_MAX : quantized;
     }
 
     void emitTexture(DWORD stage, DWORD textureId) {

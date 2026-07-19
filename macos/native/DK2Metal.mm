@@ -477,10 +477,14 @@ public:
             next.commandCount = slot->command_count;
             next.width = slot->width;
             next.height = slot->height;
-            next.sceneMicroseconds = slot->reserved[0] & 0xFFFFu;
-            next.tickMicroseconds = slot->reserved[0] >> 16;
-            next.prepareMicroseconds = slot->reserved[1] & 0xFFFFu;
-            next.drawMicroseconds = slot->reserved[1] >> 16;
+            next.sceneMicroseconds =
+                    (slot->reserved[0] & 0xFFFFu) * DK2M_TIMING_QUANTUM_US;
+            next.tickMicroseconds =
+                    (slot->reserved[0] >> 16) * DK2M_TIMING_QUANTUM_US;
+            next.prepareMicroseconds =
+                    (slot->reserved[1] & 0xFFFFu) * DK2M_TIMING_QUANTUM_US;
+            next.drawMicroseconds =
+                    (slot->reserved[1] >> 16) * DK2M_TIMING_QUANTUM_US;
             next.bytes.resize(byteCount);
             std::memcpy(next.bytes.data(), static_cast<uint8_t *>(mapping_) + DK2M_SLOT_OFFSET(slotIndex), byteCount);
             const uint32_t sequenceAfter = __atomic_load_n(&slot->sequence, __ATOMIC_ACQUIRE);

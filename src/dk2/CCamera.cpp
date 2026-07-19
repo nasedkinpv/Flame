@@ -8,26 +8,42 @@
 #include "patches/micro_patches.h"
 
 #include <emmintrin.h>
+#include <cstdint>
 #include <cstring>
 
 
 namespace {
 
+struct CullingPlanes {
+    __m128 x;
+    __m128 y;
+    __m128 z;
+    uint32_t frame = UINT32_MAX;
+};
+
+CullingPlanes &cullingPlanes() {
+    static CullingPlanes planes;
+    if (planes.frame == dk2::g_drawSceneCount_76520C) return planes;
+    planes.x = _mm_set_ps(
+            dk2::g_vec_760B28.x, dk2::g_vec_760B18.x,
+            dk2::g_vec_760B38.x, dk2::g_vec_760B70.x);
+    planes.y = _mm_set_ps(
+            dk2::g_vec_760B28.y, dk2::g_vec_760B18.y,
+            dk2::g_vec_760B38.y, dk2::g_vec_760B70.y);
+    planes.z = _mm_set_ps(
+            dk2::g_vec_760B28.z, dk2::g_vec_760B18.z,
+            dk2::g_vec_760B38.z, dk2::g_vec_760B70.z);
+    planes.frame = dk2::g_drawSceneCount_76520C;
+    return planes;
+}
+
 __m128 cullingPlaneDots(const dk2::Vec3f &point) {
     // Lane order is 760B70, 760B38, 760B18, 760B28.  The two pairs keep the
     // original x87 addition order so boundary decisions remain unchanged.
-    const __m128 planeX = _mm_set_ps(
-            dk2::g_vec_760B28.x, dk2::g_vec_760B18.x,
-            dk2::g_vec_760B38.x, dk2::g_vec_760B70.x);
-    const __m128 planeY = _mm_set_ps(
-            dk2::g_vec_760B28.y, dk2::g_vec_760B18.y,
-            dk2::g_vec_760B38.y, dk2::g_vec_760B70.y);
-    const __m128 planeZ = _mm_set_ps(
-            dk2::g_vec_760B28.z, dk2::g_vec_760B18.z,
-            dk2::g_vec_760B38.z, dk2::g_vec_760B70.z);
-    const __m128 productsX = _mm_mul_ps(_mm_set1_ps(point.x), planeX);
-    const __m128 productsY = _mm_mul_ps(_mm_set1_ps(point.y), planeY);
-    const __m128 productsZ = _mm_mul_ps(_mm_set1_ps(point.z), planeZ);
+    const CullingPlanes &planes = cullingPlanes();
+    const __m128 productsX = _mm_mul_ps(_mm_set1_ps(point.x), planes.x);
+    const __m128 productsY = _mm_mul_ps(_mm_set1_ps(point.y), planes.y);
+    const __m128 productsZ = _mm_mul_ps(_mm_set1_ps(point.z), planes.z);
     const __m128 upperLanes = _mm_castsi128_ps(
             _mm_set_epi32(-1, -1, 0, 0));
     const __m128 firstSum = _mm_or_ps(

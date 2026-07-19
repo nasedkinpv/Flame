@@ -182,8 +182,10 @@
 00575780 bool __cdecl engine_drawScene(char)
 # Per-mesh frustum culling.  Four side planes are evaluated in parallel while
 # retaining the original sign-bit boundary semantics.  The adjacent 575F10
-# projection implementation remains staged in CCamera.cpp for separate rollout.
+# projection implementation uses the same sign-bit boundary checks and now
+# covers the five active mesh callers too.
 00575D70 int __cdecl Vec3f_static_sub_575D70(Vec3f *, float, uint32_t *)
+00575F10 Vec3f *__cdecl Vec3f_static_sub_575F10(Vec3f *, float, Vec3f *, float *)
 # Spatial sphere/light overlap query.  Four candidates are evaluated per SSE2
 # pass while retaining the original mask/range and raw sign-bit semantics.
 0057BBF0 int __fastcall sub_57BBF0(int32_t *, void *, float, float, float, float, int)
