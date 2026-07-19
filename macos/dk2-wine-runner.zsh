@@ -42,7 +42,7 @@ env -i \
   MVK_CONFIG_LOG_LEVEL='0' \
   "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
     -skip-launcher -game-res=1600x1200 -LEVEL "${LEVEL}" \
-    -Q -NoMovies -DisableGamma -NoSound -Shadows "${SHADOW_LEVEL}" \
+    -Q -NoMovies -DisableGamma -Sound -Shadows "${SHADOW_LEVEL}" \
     -gog:video:HighRes=true -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
     -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1 >>"${LOG_FILE}" 2>&1
 
