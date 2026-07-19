@@ -13,7 +13,7 @@ readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-3}"
 readonly DUMP_DIR="${DK2_TEXTURE_DUMP:-${HOME}/Library/Application Support/Dungeon Keeper 2 Flame/texture-dump}"
 
 if (( $# == 0 )); then
-  LEVEL="${DK2_LEVEL:-level1}"
+  LEVEL=''
 elif (( $# == 2 )) && [[ "$1" == '-LEVEL' ]]; then
   LEVEL="$2"
 else

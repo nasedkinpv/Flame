@@ -13,7 +13,7 @@ readonly BRIDGE_FILE="${PREFIX}/drive_c/dk2-metal/frame.bin"
 readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-3}"
 
 if (( $# == 0 )); then
-  LEVEL="${DK2_LEVEL:-level1}"
+  LEVEL=''
 elif (( $# == 2 )) && [[ "$1" == '-LEVEL' ]]; then
   LEVEL="$2"
 else
