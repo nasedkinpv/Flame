@@ -19,6 +19,11 @@
 #include <windows.h>
 
 
+namespace dk2 {
+bool installRenderDispatchTargets();
+}
+
+
 namespace {
 
 // world transform: tmp = g_mat_77F3A8 * v + g_vec_77F4C0
