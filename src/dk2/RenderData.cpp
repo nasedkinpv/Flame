@@ -52,6 +52,28 @@ uint32_t colourComponent(float value, bool useFogScale, int fogScale) {
     return component > 0xFF ? 0xFF : component;
 }
 
+float roundedMultiply(float left, float right) {
+    return _mm_cvtss_f32(_mm_mul_ss(_mm_set_ss(left), _mm_set_ss(right)));
+}
+
+float roundedAdd(float left, float right) {
+    return _mm_cvtss_f32(_mm_add_ss(_mm_set_ss(left), _mm_set_ss(right)));
+}
+
+float roundedSubtract(float left, float right) {
+    return _mm_cvtss_f32(_mm_sub_ss(_mm_set_ss(left), _mm_set_ss(right)));
+}
+
+float subtractEncodingBias(float value) {
+    const float firstBias = *reinterpret_cast<const float *>(0x0066FE78);
+    const float secondBias = *reinterpret_cast<const float *>(0x0066FE8C);
+    return roundedSubtract(roundedSubtract(value, firstBias), secondBias);
+}
+
+uint32_t mantissaInteger(float value) {
+    return (floatBits(value) & 0x007FFFFF) - 0x00400000;
+}
+
 void writeVertex1C(
         int stream,
         int &textureStage,
@@ -80,12 +102,66 @@ void writeVertex1C(
     const auto *uOffset = reinterpret_cast<const float *>(0x0077F480);
     const auto *vScale = reinterpret_cast<const float *>(0x0076F340);
     const auto *vOffset = reinterpret_cast<const float *>(0x0077F3D8);
-    for (uint8_t texture = 0; texture < textureCount; ++texture, ++textureStage) {
-        outUv[texture * 2] = uScale[textureStage] * uvs[textureStage].u
-                           + uOffset[textureStage];
-        outUv[texture * 2 + 1] = vScale[textureStage] * uvs[textureStage].v
-                               + vOffset[textureStage];
+    // 58B440 increments EDX between the U and V instruction sequences, then
+    // addresses the V tables at base-4.  Spell the resulting stage mapping
+    // out explicitly: four distinct tables, one shared monotonically
+    // increasing stage index across all property streams.
+    for (uint8_t texture = 0; texture < textureCount; ++texture) {
+        const int stage = textureStage++;
+        outUv[texture * 2] = roundedAdd(
+                roundedMultiply(uScale[stage], uvs[stage].u), uOffset[stage]);
+        outUv[texture * 2 + 1] = roundedAdd(
+                roundedMultiply(vScale[stage], uvs[stage].v), vOffset[stage]);
     }
+}
+
+void writeVertex18(
+        int stream,
+        int stage,
+        const dk2::RenderData &render,
+        const dk2::Vec3f &colour,
+        const dk2::Uv2f *uvs,
+        bool useFogScale) {
+    dk2::Vertex18 *vertex =
+            &dk2::g_vertices[stream].vertices18hx2_pos[render.vtxIdx];
+    const uint32_t red = colourComponent(colour.x, useFogScale, render.f24);
+    const uint32_t green = colourComponent(colour.y, useFogScale, render.f24);
+    const uint32_t blue = colourComponent(colour.z, useFogScale, render.f24);
+
+    const auto *uScale = reinterpret_cast<const float *>(0x00779368);
+    const auto *uOffset = reinterpret_cast<const float *>(0x0077F480);
+    const auto *vScale = reinterpret_cast<const float *>(0x0076F340);
+    const auto *vOffset = reinterpret_cast<const float *>(0x0077F3D8);
+    const float xyScale = *reinterpret_cast<const float *>(0x0066FE94);
+    const float textureScale = *reinterpret_cast<const float *>(0x0066FE90);
+    const float depthScale = *reinterpret_cast<const float *>(0x0066FE98);
+
+    // Literal 58B7A4..58B8F6 x87 dataflow.  The original keeps U and V on the
+    // x87 stack while encoding X/Y/Z, then scales and encodes the two UVs.
+    const float xBiased = subtractEncodingBias(
+            roundedMultiply(render.xC, xyScale));
+    const float yBiased = subtractEncodingBias(
+            roundedMultiply(render.y10, xyScale));
+    const float zBiased = subtractEncodingBias(
+            roundedMultiply(render.z14, depthScale));
+    const float u = roundedAdd(
+            roundedMultiply(uScale[stage], uvs[stage].u), uOffset[stage]);
+    const float v = roundedAdd(
+            roundedMultiply(vScale[stage], uvs[stage].v), vOffset[stage]);
+    const float uBiased = subtractEncodingBias(
+            roundedMultiply(u, textureScale));
+    const float vBiased = subtractEncodingBias(
+            roundedMultiply(v, textureScale));
+
+    vertex->x = mantissaInteger(xBiased);
+    vertex->y = static_cast<int>(mantissaInteger(yBiased));
+    vertex->fc = static_cast<int>(mantissaInteger(zBiased));
+    if (dk2::g_mgsr_drawMode == 1) vertex->fc = -vertex->fc;
+    vertex->multi = static_cast<int>(
+            ((((red << 8) + green) << 8)
+             + *reinterpret_cast<const uint32_t *>(0x00779380)) + blue);
+    vertex->texX = static_cast<int>(mantissaInteger(uBiased));
+    vertex->texY = static_cast<int>(mantissaInteger(vBiased));
 }
 
 // unnamed literal-pool floats at 0066FE28+idx*4, addressed via float_data2
@@ -321,7 +397,8 @@ uint8_t __cdecl dk2::renderFun_sub_58B2A0(int idx, Vec3f *vecs, Uv2f *uvs) {
 
 
 // 0058B370: cached attribute path for the alternative flexible-vertex format.
-// It mirrors 58B2A0 but delegates cache misses to the original 58B680 path.
+// It mirrors 58B2A0 and keeps cache misses inside Flame's verified 58B680
+// translation, avoiding a Rosetta bounce through the original x87 body.
 uint8_t __cdecl dk2::renderFun_sub_58B370(int idx, Vec3f *vecs, Uv2f *uvs) {
     if (!(g_idxFlags[idx] & 4)) return (uint8_t) renderFun_sub_58B680(idx, vecs, uvs);
     SceneObject2E *obj = g_pSceneObject2E;
@@ -361,6 +438,24 @@ char __cdecl dk2::renderFun_sub_58B440(int idx, Vec3f *vecs, Uv2f *uvs) {
                 uvs,
                 useFogScale,
                 textureCount);
+    }
+    return static_cast<char>(streamCount);
+}
+
+
+// 0058B680: emit the legacy 24-byte software-rasterizer vertex format.  The
+// original interleaves screen, colour and texture x87 operations; writeVertex18
+// preserves that exact dataflow with individually rounded SSE2 operations.
+char __cdecl dk2::renderFun_sub_58B680(int idx, Vec3f *vecs, Uv2f *uvs) {
+    const uint8_t oldFlags = g_idxFlags[idx];
+    g_idxFlags[idx] = oldFlags & 0xFD;
+    SceneObject2E *obj = g_pSceneObject2E;
+    const uint8_t streamCount = obj->propsCount;
+    const bool useFogScale = (oldFlags & 0x10) != 0;
+    const RenderData &render = RenderData_instance_arr[idx];
+    for (uint8_t stream = 0; stream < streamCount; ++stream) {
+        writeVertex18(
+                stream, stream, render, vecs[stream], uvs, useFogScale);
     }
     return static_cast<char>(streamCount);
 }

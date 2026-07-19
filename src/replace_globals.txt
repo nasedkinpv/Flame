@@ -48,14 +48,12 @@
 0058AF70 int __cdecl sub_58AF70(int, float *)
 0058B190 int __cdecl sub_58B190(int, Vec3f *)
 0058B2A0 uint8_t __cdecl renderFun_sub_58B2A0(int, Vec3f *, Uv2f *)
-# Staged: the translated alternative-FVF cache path currently hides animated
-# and dynamic meshes.  Keep its implementation for differential work, but let
-# both original and translated callers reach the original entry for now.
-#0058B370 uint8_t __cdecl renderFun_sub_58B370(int, Vec3f *, Uv2f *)
-# Staged: the SIMD emitter is implemented, but a whole-function redirect here
-# stalls Wine 11 WOW64 after its first frame.  Keep cache misses on the original
-# entry until this path can be reached exclusively through translated callers.
-#0058B440 char __cdecl renderFun_sub_58B440(int, Vec3f *, Uv2f *)
+# Verified alternative-FVF cache path and its software-format fallback.
+0058B370 uint8_t __cdecl renderFun_sub_58B370(int, Vec3f *, Uv2f *)
+# Verified D3D FVF emitter.  UV stages retain the original four-table mapping
+# and the shared stage cursor across property streams.
+0058B440 char __cdecl renderFun_sub_58B440(int, Vec3f *, Uv2f *)
+0058B680 char __cdecl renderFun_sub_58B680(int, Vec3f *, Uv2f *)
 0058B940 void __cdecl addTriangleToRender2(int, int, int)
 0058B9D0 void __cdecl addTriangleToRender1(int, int, int)
 
