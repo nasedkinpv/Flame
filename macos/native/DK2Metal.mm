@@ -366,6 +366,7 @@ std::atomic<uint64_t> gRenderedFrames{0};
 std::atomic<uint64_t> gBridgeFramesRendered{0};
 uint64_t gSelfTestFrames = 0;
 NSString *gBridgePath = nil;
+NSString *gGameRunnerPath = nil;
 bool gBridgeRequired = false;
 std::atomic<DK2MFileHeader *> gInputHeader{nullptr};
 
@@ -1861,6 +1862,26 @@ static void *renderWorker(void *context) {
 }
 
 - (void)startBundledGameRunner {
+    if (gGameRunnerPath) {
+        // dev flow: spawn the provided wine runner as our child so the whole
+        // wine chain inherits the app's coalition and the Game Mode boost
+        _gameRunner = [[NSTask alloc] init];
+        _gameRunner.executableURL = [NSURL fileURLWithPath:gGameRunnerPath];
+        __weak DK2AppDelegate *weakSelf = self;
+        _gameRunner.terminationHandler = ^(NSTask *task) {
+            (void)task;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                DK2AppDelegate *delegate = weakSelf;
+                if (delegate && !delegate->_terminating) [NSApp terminate:nil];
+            });
+        };
+        NSError *runnerError = nil;
+        if (![_gameRunner launchAndReturnError:&runnerError]) {
+            fail([NSString stringWithFormat:@"Unable to start the game runner: %@",
+                                            runnerError.localizedDescription]);
+        }
+        return;
+    }
     if (gBridgePath) return;
     NSURL *runner = [NSBundle.mainBundle URLForResource:@"dk2-game-runner" withExtension:nil];
     if (!runner) return;
@@ -1994,6 +2015,18 @@ int main(int argc, const char *argv[]) {
                 gBridgePath = [argument substringFromIndex:14];
             } else if ([argument isEqualToString:@"--bridge-self-test"]) {
                 gBridgeRequired = true;
+            } else if ([argument hasPrefix:@"--game-runner="]) {
+                gGameRunnerPath = [argument substringFromIndex:14];
+            } else if ([argument hasPrefix:@"--runner-env="]) {
+                // K=V exported to the runner AND to this process, so the wine
+                // chain spawns inside the app's coalition (Game Mode boost)
+                // with the caller's configuration intact
+                NSString *pair = [argument substringFromIndex:13];
+                const NSRange eq = [pair rangeOfString:@"="];
+                if (eq.location != NSNotFound && eq.location > 0) {
+                    setenv([pair substringToIndex:eq.location].UTF8String,
+                           [pair substringFromIndex:eq.location + 1].UTF8String, 1);
+                }
             }
         }
 
