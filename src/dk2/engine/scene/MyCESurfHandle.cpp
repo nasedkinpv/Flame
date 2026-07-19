@@ -7,6 +7,12 @@
 #include "dk2/MyStringHashMap_entry.h"
 #include "dk2/CEngineSurface.h"
 #include "dk2/CEngineSurfaceScaler.h"
+#include "dk2/MySurface.h"
+#include "dk2/MySurfDesc.h"
+#include "dk2/SurfaceHolder.h"
+#include "dk2/MyDirectDraw.h"
+#include <cstdint>
+#include <cstring>
 #include "dk2_functions.h"
 #include "dk2_globals.h"
 
@@ -168,3 +174,78 @@ void dk2::MyCESurfHandle::loadPrescaled() {
     }
 }
 
+
+
+// 00590C30 MyCESurfHandle::paint
+// The hot part on animated surfaces (torches, dungeon heart) is the CRC-16
+// change-detector over the source pixels (init 0xFBEA, table g_crc_tab16,
+// state = (state >> 8) ^ tab[(state ^ byte) & 0xFF]). CRC is XOR-linear, so a
+// slicing-by-4 evaluation with tables derived from g_crc_tab16 is bit-exact
+// while consuming 4 bytes per step.
+namespace {
+
+uint32_t g_crcSliced[4][256];
+bool g_crcSlicedReady = false;
+
+void ensureCrcSliced() {
+    if (g_crcSlicedReady) return;
+    for (int i = 0; i < 256; ++i) g_crcSliced[0][i] = (uint32_t) dk2::g_crc_tab16[i];
+    for (int k = 1; k < 4; ++k) {
+        for (int i = 0; i < 256; ++i) {
+            const uint32_t prev = g_crcSliced[k - 1][i];
+            g_crcSliced[k][i] = (prev >> 8) ^ (uint32_t) dk2::g_crc_tab16[prev & 0xFF];
+        }
+    }
+    g_crcSlicedReady = true;
+}
+
+}
+
+dk2::MyCESurfHandle *dk2::MyCESurfHandle::paint(MySurface *surf, char computeCrc) {
+    if (!this->cesurf) this->create();
+    MySurfDesc desc;
+    memcpy(&desc, reinterpret_cast<const uint8_t *>(this->cesurf->fC_desc) + 0x2D, sizeof(desc));
+    if (computeCrc) {
+        ensureCrcSliced();
+        const uint8_t *row = static_cast<const uint8_t *>(surf->lpSurface);
+        const int bytesPerRow = (int) (surf->size.w * surf->desc.dwRGBBitCount) >> 3;
+        const int rows = surf->size.h;
+        uint32_t crc = 0xFBEA;
+        for (int i = 0; i < rows; ++i, row += surf->lPitch) {
+            const uint8_t *p = row;
+            int n = bytesPerRow;
+            for (; n >= 4; n -= 4, p += 4) {
+                crc = g_crcSliced[3][(crc ^ p[0]) & 0xFF]
+                    ^ g_crcSliced[2][((crc >> 8) ^ p[1]) & 0xFF]
+                    ^ g_crcSliced[1][p[2]]
+                    ^ g_crcSliced[0][p[3]];
+            }
+            for (; n > 0; --n, ++p) crc = (crc >> 8) ^ (uint32_t) g_crc_tab16[(crc ^ *p) & 0xFF];
+        }
+        if ((int) crc == this->crc16Hash) return this;  // unchanged - skip repaint
+        this->crc16Hash = (int) crc;
+    }
+    void *pixels = this->cesurf->v_lockBuf();
+    MySurface local;  // the original never destroys it either
+    local.constructor(&surf->size, &desc, pixels, 0);
+    MySurface_blend(&local, surf);
+    this->cesurf->v_unlockBuf((int) pixels);
+    SurfaceHolder *holder = this->holder_parent;
+    if (holder) {
+        if (MyDirectDraw_instance.f28_flags & 1) {
+            holder->surf->paintSurf(this->cesurf, this->x8, this->y8);
+        } else {
+            // unlink this handle from the holder's list
+            MyCESurfHandle *prev = nullptr;
+            for (MyCESurfHandle *cur = holder->surfh_first; cur; prev = cur, cur = cur->nextByHolder) {
+                if (cur != this) continue;
+                if (prev) prev->nextByHolder = cur->nextByHolder;
+                else holder->surfh_first = cur->nextByHolder;
+                this->nextByHolder = nullptr;
+                this->holder_parent = nullptr;
+                break;
+            }
+        }
+    }
+    return this;
+}

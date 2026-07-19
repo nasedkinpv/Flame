@@ -374,6 +374,7 @@
 005909E0 void CEngineDDSurface::destructor()
 
 # MyCESurfHandle
+00590C30 MyCESurfHandle *MyCESurfHandle::paint(MySurface *, char)
 00590EC0 void MyCESurfHandle::resolveSurface()
 005911E0 void MyCESurfHandle::loadPrescaled()
 
