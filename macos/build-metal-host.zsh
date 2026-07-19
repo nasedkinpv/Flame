@@ -29,6 +29,7 @@ readonly SIGNING_IDENTITY="${DK2_CODESIGN_IDENTITY:--}"
 
 /usr/bin/xcrun --sdk macosx clang++ \
   -std=c++20 \
+  -O3 \
   -fobjc-arc \
   -arch arm64 \
   -mmacosx-version-min=26.0 \
@@ -44,6 +45,7 @@ readonly SIGNING_IDENTITY="${DK2_CODESIGN_IDENTITY:--}"
 
 /usr/bin/xcrun --sdk macosx clang++ \
   -std=c++20 \
+  -O3 \
   -arch arm64 \
   -mmacosx-version-min=26.0 \
   -Wall -Wextra -Werror \

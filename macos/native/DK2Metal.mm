@@ -402,7 +402,7 @@ public:
             return snapshot_.frame == 0 ? nullptr : &snapshot_;
         }
         if (frame != snapshot_.frame) {
-            FrameSnapshot next;
+            FrameSnapshot &next = pending_;
             next.frame = frame;
             next.commandCount = slot->command_count;
             next.width = slot->width;
@@ -411,7 +411,7 @@ public:
             std::memcpy(next.bytes.data(), static_cast<uint8_t *>(mapping_) + DK2M_SLOT_OFFSET(slotIndex), byteCount);
             const uint32_t sequenceAfter = __atomic_load_n(&slot->sequence, __ATOMIC_ACQUIRE);
             if (sequenceBefore == sequenceAfter && (sequenceAfter & 1u) == 0) {
-                snapshot_ = std::move(next);
+                std::swap(snapshot_, next);
                 __atomic_store_n(&header_->consumer_frame, frame, __ATOMIC_RELEASE);
                 if (frame <= 2 || frame % 300 == 0) {
                     NSLog(@"Bridge accepted frame %u (%u commands, %u bytes)",
@@ -427,6 +427,7 @@ private:
     void *mapping_ = nullptr;
     DK2MFileHeader *header_ = nullptr;
     FrameSnapshot snapshot_;
+    FrameSnapshot pending_;
 };
 
 struct MetalVertex {
