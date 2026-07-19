@@ -64,8 +64,6 @@ void emitTriangle(TriangleFun fun, uint32_t a, uint32_t b, uint32_t c) {
 void emitVertex(RenderFun fun, uint32_t index, dk2::Vec3f *vectors, dk2::Uv2f *uvs) {
     if (fun == reinterpret_cast<RenderFun>(0x0058B2A0)) {
         dk2::renderFun_sub_58B2A0(index, vectors, uvs);
-    } else if (fun == reinterpret_cast<RenderFun>(0x0058B370)) {
-        dk2::renderFun_sub_58B370(index, vectors, uvs);
     } else {
         fun(index, vectors, uvs);
     }
