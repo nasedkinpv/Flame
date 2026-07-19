@@ -219,6 +219,13 @@ HRESULT FakeDevice3::EnumTextureFormats(LPD3DENUMPIXELFORMATSCALLBACK cb, LPVOID
 HRESULT FakeDevice3::BeginScene(void) {
     metal_bridge::beginFrame(g_dwWidth, g_dwHeight);
     if (metal_bridge::isEnabled()) {
+        if (FakeSurface::instance_cpy && FakeSurface::instance_cpy->orig()) {
+            DDBLTFX fill = {};
+            fill.dwSize = sizeof(fill);
+            fill.dwFillColor = 0x00FF00FF;
+            FakeSurface::instance_cpy->orig()->Blt(
+                nullptr, nullptr, nullptr, DDBLT_COLORFILL | DDBLT_WAIT, &fill);
+        }
         g_isFlip = false;
         g_isSceneDrawing = true;
         return DD_OK;

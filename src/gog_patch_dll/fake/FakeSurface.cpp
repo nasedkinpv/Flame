@@ -318,6 +318,8 @@ HRESULT FakeSurface::Flip(LPDIRECTDRAWSURFACE2 a2, DWORD flags) {
     if (a2 && a2 != FakeSurface::instance_cpy) gog_assert_failed("FakeSurface::Flip:608");
     if (gog::g_isSceneDrawing) gog_assert_failed("FakeSurface::Flip:609");
     if (metal_bridge::isEnabled()) {
+        if (FakeSurface::instance_cpy)
+            metal_bridge::captureOverlay(FakeSurface::instance_cpy->orig());
         gog::g_isFlip = true;
         return DD_OK;
     }

@@ -434,7 +434,15 @@ struct MetalVertex {
     float color[4];
     float texCoord[2];
     uint32_t textureIndex;
+    uint32_t colorOp;
+    uint32_t colorArg1;
+    uint32_t colorArg2;
+    uint32_t alphaOp;
+    uint32_t alphaArg1;
+    uint32_t alphaArg2;
+    uint32_t textureFactor;
     uint32_t padding;
+    uint32_t padding2;
 };
 
 constexpr NSUInteger kVertexBufferSize = 2 * 1024 * 1024;
@@ -452,7 +460,8 @@ constexpr uint32_t kD3DRenderStateDestinationBlend = 20;
 constexpr uint32_t kD3DRenderStateCullMode = 22;
 constexpr uint32_t kD3DRenderStateZFunc = 23;
 constexpr uint32_t kD3DRenderStateAlphaBlendEnable = 27;
-static_assert(sizeof(MetalVertex) == 48);
+constexpr uint32_t kD3DRenderStateTextureFactor = 60;
+static_assert(sizeof(MetalVertex) == 80);
 
 MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
     switch (d3dFunction) {
@@ -1208,8 +1217,10 @@ static void *renderWorker(void *context) {
                         textureUpdate.row_pitch >= textureUpdate.width * 4 &&
                         textureUpdate.data_size >= textureUpdate.row_pitch * textureUpdate.height) {
                         const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
-                        id<MTLTexture> hd = texhd::lookup(_device, pixels, textureUpdate.width,
-                                                          textureUpdate.height, textureUpdate.row_pitch);
+                        id<MTLTexture> hd = textureUpdate.texture_id == DK2M_OVERLAY_TEXTURE_ID
+                                                ? nil
+                                                : texhd::lookup(_device, pixels, textureUpdate.width,
+                                                                textureUpdate.height, textureUpdate.row_pitch);
                         if (hd) {
                             if (_textures[key] != hd) {
                                 _textures[key] = hd;
@@ -1281,6 +1292,8 @@ static void *renderWorker(void *context) {
             uint32_t sourceBlend = 2;
             uint32_t destinationBlend = 1;
             uint32_t cullMode = 1;
+            uint32_t textureFactor = 0xFFFFFFFFu;
+            uint32_t textureStage0[7] = {0, 4, 2, 0, 4, 2, 0};
             std::unordered_map<uint32_t, TextureBinding> textureBindings;
             for (NSUInteger bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) {
                 [_argumentTables[slot][bank]
@@ -1344,8 +1357,15 @@ static void *renderWorker(void *context) {
                         case kD3DRenderStateSourceBlend: sourceBlend = state.value; break;
                         case kD3DRenderStateDestinationBlend: destinationBlend = state.value; break;
                         case kD3DRenderStateAlphaBlendEnable: alphaBlendEnabled = state.value != 0; break;
+                        case kD3DRenderStateTextureFactor: textureFactor = state.value; break;
                         default: break;
                     }
+                } else if (header.type == DK2M_COMMAND_TEXTURE_STAGE_STATE &&
+                           header.size == sizeof(DK2MTextureStageStateCommand)) {
+                    DK2MTextureStageStateCommand state;
+                    std::memcpy(&state, snapshot->bytes.data() + commandOffset, sizeof(state));
+                    if (state.stage == 0 && state.state >= 1 && state.state <= 6)
+                        textureStage0[state.state] = state.value;
                 } else if (header.type == DK2M_COMMAND_DRAW_INDEXED && header.size >= sizeof(DK2MDrawIndexedCommand)) {
                     DK2MDrawIndexedCommand draw;
                     std::memcpy(&draw, snapshot->bytes.data() + commandOffset, sizeof(draw));
@@ -1395,7 +1415,15 @@ static void *renderWorker(void *context) {
                             metalVertices[index].texCoord[0] = vertex.u;
                             metalVertices[index].texCoord[1] = vertex.v;
                             metalVertices[index].textureIndex = currentTextureBinding.slot;
+                            metalVertices[index].colorOp = textureStage0[1];
+                            metalVertices[index].colorArg1 = textureStage0[2];
+                            metalVertices[index].colorArg2 = textureStage0[3];
+                            metalVertices[index].alphaOp = textureStage0[4];
+                            metalVertices[index].alphaArg1 = textureStage0[5];
+                            metalVertices[index].alphaArg2 = textureStage0[6];
+                            metalVertices[index].textureFactor = textureFactor;
                             metalVertices[index].padding = 0;
+                            metalVertices[index].padding2 = 0;
                         }
                         auto *metalIndices = reinterpret_cast<uint16_t *>(
                             static_cast<uint8_t *>(_indexBuffers[slot].contents) + indexOffset);

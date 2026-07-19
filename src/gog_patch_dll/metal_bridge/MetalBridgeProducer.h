@@ -12,6 +12,7 @@ void pollInput();
 void beginFrame(DWORD width, DWORD height);
 void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
                  const WORD *indices, DWORD indexCount, DWORD flags);
+void captureOverlay(IDirectDrawSurface4 *surface);
 void setTexture(DWORD stage, DWORD textureId, IDirectDrawSurface4 *surface);
 void textureDirty(IDirectDrawSurface4 *surface, const DDSURFACEDESC2 *lockedDesc = nullptr);
 void setRenderState(DWORD state, DWORD value);

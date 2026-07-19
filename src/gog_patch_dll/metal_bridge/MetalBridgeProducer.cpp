@@ -2,6 +2,7 @@
 #include <metal_bridge/DK2BridgeProtocol.h>
 #include <gog_globals.h>
 #include <patches/replace_mouse_dinput_to_user32.h>
+#include <d3d.h>
 
 #include <cstdint>
 #include <cstring>
@@ -170,6 +171,7 @@ public:
 
     void finish() {
         if (!active_) return;
+        emitOverlay();
         ++frame_;
         if (frame_ == 0) ++frame_;
         slot_->frame_number = frame_;
@@ -197,6 +199,17 @@ public:
             }
         }
         active_ = false;
+    }
+
+    void overlay(IDirectDrawSurface4 *surface) {
+        TextureCache captured;
+        if (!captureTexture(surface, captured)) return;
+        for (size_t offset = 0; offset < captured.pixels.size(); offset += 4) {
+            uint8_t *pixel = captured.pixels.data() + offset;
+            pixel[3] = pixel[0] == 0xFF && pixel[1] == 0x00 && pixel[2] == 0xFF
+                         ? 0x00 : 0xFF;
+        }
+        overlay_ = std::move(captured);
     }
 
     void pollInput() {
@@ -499,6 +512,51 @@ private:
         ++commandCount_;
     }
 
+    void emitOverlay() {
+        if (overlay_.pixels.empty()) return;
+        constexpr WORD indices[] = {0, 1, 2, 0, 2, 3};
+        const DK2MVertex1C vertices[] = {
+            {0.0f, 0.0f, 0.0f, 1.0f, 0xFFFFFFFFu, 0.0f, 0.0f},
+            {static_cast<float>(width_), 0.0f, 0.0f, 1.0f, 0xFFFFFFFFu, 1.0f, 0.0f},
+            {static_cast<float>(width_), static_cast<float>(height_), 0.0f, 1.0f,
+             0xFFFFFFFFu, 1.0f, 1.0f},
+            {0.0f, static_cast<float>(height_), 0.0f, 1.0f, 0xFFFFFFFFu, 0.0f, 1.0f},
+        };
+        const uint32_t textureBytes = static_cast<uint32_t>(overlay_.pixels.size());
+        const uint32_t updateBytes = sizeof(DK2MTextureUpdateCommand) + textureBytes;
+        const uint32_t drawBytes = sizeof(DK2MDrawIndexedCommand) + sizeof(vertices) + sizeof(indices);
+        constexpr uint32_t stateBytes =
+            sizeof(DK2MSetTextureCommand) + 6 * sizeof(DK2MRenderStateCommand) +
+            6 * sizeof(DK2MTextureStageStateCommand);
+        if (used_ + updateBytes + drawBytes + stateBytes > DK2M_SLOT_CAPACITY) return;
+
+        DK2MTextureUpdateCommand update = {};
+        update.header.type = DK2M_COMMAND_TEXTURE_UPDATE;
+        update.header.size = updateBytes;
+        update.texture_id = DK2M_OVERLAY_TEXTURE_ID;
+        update.width = overlay_.width;
+        update.height = overlay_.height;
+        update.row_pitch = overlay_.rowPitch;
+        update.data_size = textureBytes;
+        append(&update, sizeof(update));
+        append(overlay_.pixels.data(), textureBytes);
+        ++commandCount_;
+        emitTexture(0, DK2M_OVERLAY_TEXTURE_ID);
+        emitRenderState(D3DRENDERSTATE_ZENABLE, FALSE);
+        emitRenderState(D3DRENDERSTATE_ZWRITEENABLE, FALSE);
+        emitRenderState(D3DRENDERSTATE_ALPHABLENDENABLE, TRUE);
+        emitRenderState(D3DRENDERSTATE_SRCBLEND, D3DBLEND_SRCALPHA);
+        emitRenderState(D3DRENDERSTATE_DESTBLEND, D3DBLEND_INVSRCALPHA);
+        emitRenderState(D3DRENDERSTATE_CULLMODE, D3DCULL_NONE);
+        emitTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+        emitTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+        emitTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+        emitTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+        emitTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+        emitTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+        draw(DK2M_FVF_VERTEX1C, vertices, 4, indices, 6, 0);
+    }
+
     void append(const void *data, uint32_t size) {
         std::memcpy(static_cast<uint8_t *>(view_) + DK2M_SLOT_OFFSET(slotIndex_) + used_, data, size);
         used_ += size;
@@ -539,6 +597,7 @@ private:
     std::unordered_map<uintptr_t, uint32_t> surfaceTextures_;
     std::unordered_map<uint32_t, uint32_t> renderStates_;
     std::unordered_map<uint64_t, uint32_t> textureStageStates_;
+    TextureCache overlay_;
     bool active_ = false;
 };
 
@@ -562,6 +621,10 @@ void beginFrame(DWORD width, DWORD height) {
 void drawIndexed(DWORD fvf, const void *vertices, DWORD vertexCount,
                  const WORD *indices, DWORD indexCount, DWORD flags) {
     producer.draw(fvf, vertices, vertexCount, indices, indexCount, flags);
+}
+
+void captureOverlay(IDirectDrawSurface4 *surface) {
+    producer.overlay(surface);
 }
 
 void setTexture(DWORD stage, DWORD textureId, IDirectDrawSurface4 *surface) {

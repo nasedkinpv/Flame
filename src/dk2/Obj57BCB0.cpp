@@ -2,6 +2,7 @@
 #include "dk2/math/directional_lighting.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 
@@ -72,8 +73,30 @@ float *dk2::Obj57BCB0::sub_57BF00(
 
 float *dk2::Obj57BCB0::sub_57C190(
         float *accumulator, float *position, float *normal) {
+    static uint32_t calls = 0;
+    static uint32_t nonEmpty = 0;
+    static uint32_t changed = 0;
+    static int32_t maxLights = 0;
+    static float maxOutput = 0.0f;
+    const float before[3]{accumulator[0], accumulator[1], accumulator[2]};
     static_assert(sizeof(Obj57BCB0) == sizeof(lighting::DirectionalLightBuffer));
     const auto &lights = reinterpret_cast<const lighting::DirectionalLightBuffer &>(*this);
     lighting::accumulateDirectional(lights, accumulator, position, normal);
+    ++calls;
+    if (lights.count > 0) ++nonEmpty;
+    if (lights.count > maxLights) maxLights = lights.count;
+    if (before[0] != accumulator[0] || before[1] != accumulator[1] || before[2] != accumulator[2])
+        ++changed;
+    if (accumulator[0] > maxOutput) maxOutput = accumulator[0];
+    if (accumulator[1] > maxOutput) maxOutput = accumulator[1];
+    if (accumulator[2] > maxOutput) maxOutput = accumulator[2];
+    if ((calls & 4095u) == 0) {
+        std::fprintf(stderr, "[metal-light] calls=%u nonempty=%u changed=%u maxLights=%d maxOut=%.4f\n",
+                     calls, nonEmpty, changed, maxLights, maxOutput);
+        std::fflush(stderr);
+        calls = nonEmpty = changed = 0;
+        maxLights = 0;
+        maxOutput = 0.0f;
+    }
     return accumulator;  // all original callers ignore EAX
 }
