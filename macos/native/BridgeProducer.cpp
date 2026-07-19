@@ -66,6 +66,43 @@ int main(int argc, const char *argv[]) {
     clear.alpha = 1.0f;
     append(commands, clear);
 
+    constexpr uint32_t textureId = 1;
+    uint32_t pixels[16];
+    for (size_t index = 0; index < 16; ++index) pixels[index] = 0xFF304060u;
+    DK2MTextureUpdateCommand texture = {};
+    texture.header = {DK2M_COMMAND_TEXTURE_UPDATE, 0,
+                      static_cast<uint32_t>(sizeof(texture) + sizeof(pixels))};
+    texture.texture_id = textureId;
+    texture.width = 4;
+    texture.height = 4;
+    texture.row_pitch = 16;
+    texture.data_size = sizeof(pixels);
+    append(commands, texture);
+    appendBytes(commands, pixels, sizeof(pixels));
+
+    const uint32_t rectPixels[] = {
+        0xFFFFFFFFu, 0xFF202020u,
+        0xFF202020u, 0xFFFFFFFFu,
+    };
+    DK2MTextureUpdateRectCommand rect = {};
+    rect.header = {DK2M_COMMAND_TEXTURE_UPDATE_RECT, 0,
+                   static_cast<uint32_t>(sizeof(rect) + sizeof(rectPixels))};
+    rect.texture_id = textureId;
+    rect.x = 1;
+    rect.y = 1;
+    rect.width = 2;
+    rect.height = 2;
+    rect.row_pitch = 8;
+    rect.data_size = sizeof(rectPixels);
+    append(commands, rect);
+    appendBytes(commands, rectPixels, sizeof(rectPixels));
+
+    DK2MSetTextureCommand binding = {};
+    binding.header = {DK2M_COMMAND_SET_TEXTURE, 0, sizeof(binding)};
+    binding.stage = 0;
+    binding.texture_id = textureId;
+    append(commands, binding);
+
     const DK2MVertex1C vertices[] = {
         {130.0f, 100.0f, 0.5f, 1.0f, 0xFFE2B84Bu, 0.0f, 0.0f},
         {510.0f, 100.0f, 0.5f, 1.0f, 0xFFB06FE8u, 1.0f, 0.0f},
@@ -84,6 +121,18 @@ int main(int argc, const char *argv[]) {
     appendBytes(commands, vertices, sizeof(vertices));
     appendBytes(commands, indices, sizeof(indices));
 
+    const DK2MVertex2C vertices2[] = {
+        {210.0f, 160.0f, 0.25f, 1.0f, 0xFFFFFFFFu, {{0.0f, 0.0f}, {}, {}}},
+        {430.0f, 160.0f, 0.25f, 1.0f, 0xFFFFFFFFu, {{1.0f, 0.0f}, {}, {}}},
+        {430.0f, 320.0f, 0.25f, 1.0f, 0xFFFFFFFFu, {{1.0f, 1.0f}, {}, {}}},
+        {210.0f, 320.0f, 0.25f, 1.0f, 0xFFFFFFFFu, {{0.0f, 1.0f}, {}, {}}},
+    };
+    draw.header.size = sizeof(draw) + sizeof(vertices2) + sizeof(indices);
+    draw.fvf = DK2M_FVF_VERTEX2C;
+    append(commands, draw);
+    appendBytes(commands, vertices2, sizeof(vertices2));
+    appendBytes(commands, indices, sizeof(indices));
+
     const uint32_t previousSlot = __atomic_load_n(&header->latest_slot, __ATOMIC_ACQUIRE);
     const uint32_t slotIndex = previousSlot == DK2M_NO_SLOT ? 0 : (previousSlot + 1) % DK2M_SLOT_COUNT;
     DK2MFrameSlot *slot = &header->slots[slotIndex];
@@ -94,7 +143,7 @@ int main(int argc, const char *argv[]) {
     std::memcpy(static_cast<uint8_t *>(mapping) + DK2M_SLOT_OFFSET(slotIndex), commands.data(), commands.size());
     slot->frame_number = 1;
     slot->byte_count = static_cast<uint32_t>(commands.size());
-    slot->command_count = 2;
+    slot->command_count = 6;
     slot->width = width;
     slot->height = height;
     header->width = width;

@@ -1,6 +1,7 @@
 #include "gog_patch_dll/metal_bridge/OverlayUnmatte.h"
 
 #include <cassert>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 
@@ -35,5 +36,22 @@ int main() {
             }
         }
     }
+
+    std::array<uint8_t, 64> black = {}, white = {}, scalar = {}, span = {};
+    for (size_t pixel = 0; pixel < black.size() / 4; ++pixel) {
+        const auto &color = colors[pixel % (sizeof(colors) / sizeof(colors[0]))];
+        const uint8_t alpha = alphas[pixel % (sizeof(alphas) / sizeof(alphas[0]))];
+        for (int channel = 0; channel < 3; ++channel) {
+            black[pixel * 4 + channel] = composite(color[channel], alpha, 0);
+            white[pixel * 4 + channel] = composite(color[channel], alpha, 255);
+        }
+        black[pixel * 4 + 3] = white[pixel * 4 + 3] = 255;
+        gog::metal_bridge::unmatteOverlayPixel(
+            black.data() + pixel * 4, white.data() + pixel * 4,
+            scalar.data() + pixel * 4);
+    }
+    gog::metal_bridge::unmatteOverlaySpan(
+        black.data(), white.data(), span.data(), black.size() / 4);
+    assert(span == scalar);
     std::puts("OK: two-matte overlay recovery");
 }

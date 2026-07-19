@@ -1,10 +1,28 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct DK2MetalVertex {
-    float4 position;
-    float4 color;
-    float2 texCoord;
+struct DK2Vertex1C {
+    float x;
+    float y;
+    float z;
+    float rhw;
+    uint diffuse;
+    float u;
+    float v;
+};
+
+struct DK2Vertex2C {
+    float x;
+    float y;
+    float z;
+    float rhw;
+    uint diffuse;
+    float texCoord[3][2];
+};
+
+struct DK2DrawUniform {
+    float screenWidth;
+    float screenHeight;
     uint textureIndex;
     uint colorOp;
     uint colorArg1;
@@ -13,8 +31,6 @@ struct DK2MetalVertex {
     uint alphaArg1;
     uint alphaArg2;
     uint textureFactor;
-    uint padding;
-    uint padding2;
 };
 
 struct DK2RasterVertex {
@@ -31,21 +47,49 @@ struct DK2RasterVertex {
     uint textureFactor [[flat]];
 };
 
-vertex DK2RasterVertex dk2_vertex(device const DK2MetalVertex *vertices [[buffer(0)]],
-                                   uint vertexID [[vertex_id]]) {
+DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffuse,
+                                float2 texCoord, thread const DK2DrawUniform &draw) {
+    const float reciprocalW = abs(rhw) > 0.000001f ? rhw : 1.0f;
+    const float clipW = 1.0f / reciprocalW;
     DK2RasterVertex result;
-    result.position = vertices[vertexID].position;
-    result.color = vertices[vertexID].color;
-    result.texCoord = vertices[vertexID].texCoord;
-    result.textureIndex = vertices[vertexID].textureIndex;
-    result.colorOp = vertices[vertexID].colorOp;
-    result.colorArg1 = vertices[vertexID].colorArg1;
-    result.colorArg2 = vertices[vertexID].colorArg2;
-    result.alphaOp = vertices[vertexID].alphaOp;
-    result.alphaArg1 = vertices[vertexID].alphaArg1;
-    result.alphaArg2 = vertices[vertexID].alphaArg2;
-    result.textureFactor = vertices[vertexID].textureFactor;
+    result.position = float4((x * 2.0f / draw.screenWidth - 1.0f) * clipW,
+                             (1.0f - y * 2.0f / draw.screenHeight) * clipW,
+                             z * clipW, clipW);
+    result.color = float4(float((diffuse >> 16) & 0xFF),
+                          float((diffuse >> 8) & 0xFF),
+                          float(diffuse & 0xFF),
+                          float((diffuse >> 24) & 0xFF)) / 255.0f;
+    result.texCoord = texCoord;
+    result.textureIndex = draw.textureIndex;
+    result.colorOp = draw.colorOp;
+    result.colorArg1 = draw.colorArg1;
+    result.colorArg2 = draw.colorArg2;
+    result.alphaOp = draw.alphaOp;
+    result.alphaArg1 = draw.alphaArg1;
+    result.alphaArg2 = draw.alphaArg2;
+    result.textureFactor = draw.textureFactor;
     return result;
+}
+
+vertex DK2RasterVertex dk2_vertex_1c(device const DK2Vertex1C *vertices [[buffer(0)]],
+                                     device const DK2DrawUniform *draws [[buffer(1)]],
+                                     uint vertexID [[vertex_id]],
+                                     uint drawID [[instance_id]]) {
+    const DK2Vertex1C inputVertex = vertices[vertexID];
+    const DK2DrawUniform draw = draws[drawID];
+    return dk2_make_vertex(inputVertex.x, inputVertex.y, inputVertex.z, inputVertex.rhw,
+                           inputVertex.diffuse, float2(inputVertex.u, inputVertex.v), draw);
+}
+
+vertex DK2RasterVertex dk2_vertex_2c(device const DK2Vertex2C *vertices [[buffer(0)]],
+                                     device const DK2DrawUniform *draws [[buffer(1)]],
+                                     uint vertexID [[vertex_id]],
+                                     uint drawID [[instance_id]]) {
+    const DK2Vertex2C inputVertex = vertices[vertexID];
+    const DK2DrawUniform draw = draws[drawID];
+    return dk2_make_vertex(inputVertex.x, inputVertex.y, inputVertex.z, inputVertex.rhw,
+                           inputVertex.diffuse,
+                           float2(inputVertex.texCoord[0][0], inputVertex.texCoord[0][1]), draw);
 }
 
 float4 dk2_unpack_color(uint value) {

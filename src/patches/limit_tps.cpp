@@ -9,7 +9,25 @@
 
 namespace {
 
-    DWORD g_lastTime = 0;
+    LARGE_INTEGER g_frequency = {};
+    LONGLONG g_nextDeadline = 0;
+    LONGLONG g_fraction = 0;
+    int g_deadlineTps = 0;
+
+    void resetDeadline() {
+        g_nextDeadline = 0;
+        g_fraction = 0;
+        g_deadlineTps = 0;
+    }
+
+    void advanceDeadline(int tps) {
+        g_nextDeadline += g_frequency.QuadPart / tps;
+        g_fraction += g_frequency.QuadPart % tps;
+        if (g_fraction >= tps) {
+            g_nextDeadline += g_fraction / tps;
+            g_fraction %= tps;
+        }
+    }
 
 }
 
@@ -23,61 +41,39 @@ flame_config::define_flame_option<int> o_limitTps(
     60
 );
 
-flame_config::define_flame_option<int> o_test1(
-    "flame:experimental:test", flame_config::OG_Config,
-    "",
-    0
-);
-
 void patch::limit_tps::call() {
     int tps = *o_limitTps;
-    if (tps <= 0) return;
-    DWORD now = GetTickCount();
-    if(g_lastTime == 0) {
-        g_lastTime = now;
+    if (tps <= 0) {
+        resetDeadline();
         return;
     }
-    DWORD loopTime = now - g_lastTime;
-    int mspt = 1000 / tps;  // calc milliseconds per tick
-    int freeTime = mspt - loopTime;
-    if (freeTime > 0 && freeTime < 5000) {
-        // 60 tps == 16 ms loop time
-        // 30 tps == 33 ms loop time
-        int test = *o_test1;
-        switch (test) {
-            case 1: {
-                // SleepEx does not guarantee waking up thread in time
-                // dont sleep if it slightly longer than threshold
-                // because thread context swap can be longer than couple milliseconds
-                if (freeTime > 3) {  // bad solution, worth testing
-                    SleepEx(freeTime, FALSE);
-                }
-            } break;
-            case 2: {
-                WaitForSingleObjectEx(GetCurrentThread(), freeTime, TRUE);
-            } break;
-            case 3: {
-                WaitForSingleObject(GetCurrentThread(), freeTime);
-            } break;
-            case 4: {
-                SleepEx(freeTime, TRUE);
-            } break;
-            case 5: {
-                // DK2 working in single-threaded mode because sync issues
-                // Sleep does not calling sys calls as far as I know
-                // But it can be precise in waiting
-                // worst solution but worth testing
-                Sleep(freeTime);
-            } break;
-            default: {
-                SleepEx(freeTime, FALSE);
-            } break;
+    if (!g_frequency.QuadPart && !QueryPerformanceFrequency(&g_frequency)) return;
+
+    LARGE_INTEGER now = {};
+    QueryPerformanceCounter(&now);
+    if (!g_nextDeadline || g_deadlineTps != tps) {
+        g_nextDeadline = now.QuadPart;
+        g_fraction = 0;
+        g_deadlineTps = tps;
+        advanceDeadline(tps);
+    } else if (now.QuadPart >= g_nextDeadline) {
+        if (now.QuadPart - g_nextDeadline > g_frequency.QuadPart) {
+            g_nextDeadline = now.QuadPart;
+            g_fraction = 0;
         }
+        do advanceDeadline(tps); while (g_nextDeadline <= now.QuadPart);
+        return;  // A late frame must not be delayed to the following deadline.
     }
-    DWORD end = GetTickCount();
-    int waitTime = end - now;
-    if (waitTime > (mspt * 2)) {
-        printf("[warning] was waiting for too long %d ms. expected %d ms\n", waitTime, freeTime);
+
+    const LONGLONG target = g_nextDeadline;
+    for (;;) {
+        QueryPerformanceCounter(&now);
+        const LONGLONG remaining = target - now.QuadPart;
+        if (remaining <= 0) break;
+        const DWORD remainingMs = static_cast<DWORD>(
+            remaining * 1000 / g_frequency.QuadPart);
+        if (remainingMs > 1) SleepEx(remainingMs - 1, FALSE);
+        else SwitchToThread();
     }
-    g_lastTime = end;
+    advanceDeadline(tps);
 }

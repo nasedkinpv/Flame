@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 4u
+#define DK2M_VERSION 5u
 #define DK2M_SLOT_COUNT 3u
 // A 1600x1200 High-Res frame can introduce 9-12 MiB of 128x128 surfaces while
 // menus are warming up. Four MiB starves later textures forever when earlier
@@ -22,6 +22,7 @@ enum DK2MCommandType {
     DK2M_COMMAND_SET_TEXTURE = 4,
     DK2M_COMMAND_RENDER_STATE = 5,
     DK2M_COMMAND_TEXTURE_STAGE_STATE = 6,
+    DK2M_COMMAND_TEXTURE_UPDATE_RECT = 7,
 };
 
 enum DK2MInputFlags {
@@ -135,6 +136,17 @@ typedef struct DK2MTextureUpdateCommand {
     uint32_t data_size;
 } DK2MTextureUpdateCommand;
 
+typedef struct DK2MTextureUpdateRectCommand {
+    DK2MCommandHeader header;
+    uint32_t texture_id;
+    uint32_t x;
+    uint32_t y;
+    uint32_t width;
+    uint32_t height;
+    uint32_t row_pitch;
+    uint32_t data_size;
+} DK2MTextureUpdateRectCommand;
+
 typedef struct DK2MSetTextureCommand {
     DK2MCommandHeader header;
     uint32_t stage;
@@ -169,6 +181,8 @@ static_assert(sizeof(DK2MVertex1C) == 28, "DK2 Vertex1C layout changed");
 static_assert(sizeof(DK2MVertex2C) == 44, "DK2 Vertex2C layout changed");
 static_assert(sizeof(DK2MDrawIndexedCommand) == 24, "bridge draw layout changed");
 static_assert(sizeof(DK2MTextureUpdateCommand) == 28, "bridge texture update layout changed");
+static_assert(sizeof(DK2MTextureUpdateRectCommand) == 36,
+              "bridge texture rect update layout changed");
 static_assert(sizeof(DK2MSetTextureCommand) == 16, "bridge texture binding layout changed");
 static_assert(sizeof(DK2MRenderStateCommand) == 16, "bridge render state layout changed");
 static_assert(sizeof(DK2MTextureStageStateCommand) == 20,

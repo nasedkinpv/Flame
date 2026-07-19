@@ -5,6 +5,7 @@
 #include <patches/replace_mouse_dinput_to_user32.h>
 #include <d3d.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>
@@ -23,6 +24,14 @@ struct TextureCache {
     bool dirty = false;
     bool sentInCurrentFrame = false;
     std::vector<uint8_t> pixels;
+};
+
+constexpr uint32_t kOverlayTileSize = 32;
+
+struct OverlayTileState {
+    uint32_t version = 1;
+    uint32_t sentVersion = 0;
+    uint32_t acknowledgedVersion = 0;
 };
 
 class Producer {
@@ -204,22 +213,16 @@ public:
     }
 
     void overlay(IDirectDrawSurface4 *surface) {
-        TextureCache captured;
-        if (!captureTexture(surface, captured)) return;
+        if (!captureTexture(surface, overlayCapture_)) return;
         if (!previousOverlay_.pixels.empty() && previousOverlayWhite_ != overlayWhite_ &&
-            captured.width == previousOverlay_.width && captured.height == previousOverlay_.height &&
-            captured.rowPitch == previousOverlay_.rowPitch) {
-            TextureCache combined = captured;
-            const TextureCache &black = overlayWhite_ ? previousOverlay_ : captured;
-            const TextureCache &white = overlayWhite_ ? captured : previousOverlay_;
-            for (size_t offset = 0; offset < combined.pixels.size(); offset += 4) {
-                unmatteOverlayPixel(
-                    black.pixels.data() + offset, white.pixels.data() + offset,
-                    combined.pixels.data() + offset);
-            }
-            overlay_ = std::move(combined);
+            overlayCapture_.width == previousOverlay_.width &&
+            overlayCapture_.height == previousOverlay_.height &&
+            overlayCapture_.rowPitch == previousOverlay_.rowPitch) {
+            const TextureCache &black = overlayWhite_ ? previousOverlay_ : overlayCapture_;
+            const TextureCache &white = overlayWhite_ ? overlayCapture_ : previousOverlay_;
+            updateOverlay(black, white);
         }
-        previousOverlay_ = std::move(captured);
+        std::swap(previousOverlay_, overlayCapture_);
         previousOverlayWhite_ = overlayWhite_;
     }
 
@@ -434,6 +437,46 @@ private:
         current = std::move(updated);
     }
 
+    void updateOverlay(const TextureCache &black, const TextureCache &white) {
+        if (overlay_.width != black.width || overlay_.height != black.height ||
+            overlay_.rowPitch != black.rowPitch) {
+            overlay_.width = black.width;
+            overlay_.height = black.height;
+            overlay_.rowPitch = black.rowPitch;
+            overlay_.pixels.assign(static_cast<size_t>(black.rowPitch) * black.height, 0);
+            overlayTileColumns_ = (black.width + kOverlayTileSize - 1) / kOverlayTileSize;
+            overlayTileRows_ = (black.height + kOverlayTileSize - 1) / kOverlayTileSize;
+            overlayTiles_.assign(static_cast<size_t>(overlayTileColumns_) * overlayTileRows_, {});
+            overlayChanged_.resize(overlayTiles_.size());
+            overlayLine_.resize(black.rowPitch);
+            overlayForceFull_ = true;
+        }
+
+        std::fill(overlayChanged_.begin(), overlayChanged_.end(), 0);
+        for (uint32_t y = 0; y < black.height; ++y) {
+            const uint8_t *blackRow = black.pixels.data() + static_cast<size_t>(y) * black.rowPitch;
+            const uint8_t *whiteRow = white.pixels.data() + static_cast<size_t>(y) * white.rowPitch;
+            uint8_t *overlayRow = overlay_.pixels.data() + static_cast<size_t>(y) * overlay_.rowPitch;
+            unmatteOverlaySpan(blackRow, whiteRow, overlayLine_.data(), black.width);
+            const uint32_t tileY = y / kOverlayTileSize;
+            for (uint32_t tileX = 0; tileX < overlayTileColumns_; ++tileX) {
+                const uint32_t x = tileX * kOverlayTileSize;
+                const uint32_t width = std::min(kOverlayTileSize, black.width - x);
+                const size_t bytes = static_cast<size_t>(width) * 4;
+                if (std::memcmp(overlayRow + static_cast<size_t>(x) * 4,
+                                overlayLine_.data() + static_cast<size_t>(x) * 4,
+                                bytes) == 0) continue;
+                std::memcpy(overlayRow + static_cast<size_t>(x) * 4,
+                            overlayLine_.data() + static_cast<size_t>(x) * 4, bytes);
+                overlayChanged_[static_cast<size_t>(tileY) * overlayTileColumns_ + tileX] = 1;
+            }
+        }
+        for (size_t tile = 0; tile < overlayTiles_.size(); ++tile) {
+            if (!overlayChanged_[tile]) continue;
+            if (++overlayTiles_[tile].version == 0) overlayTiles_[tile].version = 1;
+        }
+    }
+
     bool captureTexture(IDirectDrawSurface4 *surface, TextureCache &texture) {
         if (!surface) return false;
         DDSURFACEDESC2 desc = {};
@@ -525,6 +568,93 @@ private:
         ++commandCount_;
     }
 
+    bool overlayTilePending(uint32_t tileX, uint32_t tileY) const {
+        const OverlayTileState &tile =
+            overlayTiles_[static_cast<size_t>(tileY) * overlayTileColumns_ + tileX];
+        return tile.version != tile.acknowledgedVersion;
+    }
+
+    uint64_t overlayRectBytes() const {
+        uint64_t bytes = 0;
+        for (uint32_t tileY = 0; tileY < overlayTileRows_; ++tileY) {
+            const uint32_t height = std::min(kOverlayTileSize,
+                                             overlay_.height - tileY * kOverlayTileSize);
+            for (uint32_t tileX = 0; tileX < overlayTileColumns_;) {
+                if (!overlayTilePending(tileX, tileY)) {
+                    ++tileX;
+                    continue;
+                }
+                const uint32_t first = tileX++;
+                while (tileX < overlayTileColumns_ && overlayTilePending(tileX, tileY)) ++tileX;
+                const uint32_t x = first * kOverlayTileSize;
+                const uint32_t width = std::min(overlay_.width, tileX * kOverlayTileSize) - x;
+                bytes += sizeof(DK2MTextureUpdateRectCommand) +
+                         static_cast<uint64_t>(width) * height * 4;
+            }
+        }
+        return bytes;
+    }
+
+    void markOverlaySent(uint32_t firstTileX, uint32_t lastTileX, uint32_t tileY) {
+        for (uint32_t tileX = firstTileX; tileX < lastTileX; ++tileX) {
+            OverlayTileState &tile =
+                overlayTiles_[static_cast<size_t>(tileY) * overlayTileColumns_ + tileX];
+            tile.sentVersion = tile.version;
+        }
+    }
+
+    void emitOverlayRects() {
+        for (uint32_t tileY = 0; tileY < overlayTileRows_; ++tileY) {
+            const uint32_t y = tileY * kOverlayTileSize;
+            const uint32_t height = std::min(kOverlayTileSize, overlay_.height - y);
+            for (uint32_t tileX = 0; tileX < overlayTileColumns_;) {
+                if (!overlayTilePending(tileX, tileY)) {
+                    ++tileX;
+                    continue;
+                }
+                const uint32_t first = tileX++;
+                while (tileX < overlayTileColumns_ && overlayTilePending(tileX, tileY)) ++tileX;
+                const uint32_t x = first * kOverlayTileSize;
+                const uint32_t width = std::min(overlay_.width, tileX * kOverlayTileSize) - x;
+                DK2MTextureUpdateRectCommand update = {};
+                update.header.type = DK2M_COMMAND_TEXTURE_UPDATE_RECT;
+                update.row_pitch = width * 4;
+                update.data_size = update.row_pitch * height;
+                update.header.size = sizeof(update) + update.data_size;
+                update.texture_id = DK2M_OVERLAY_TEXTURE_ID;
+                update.x = x;
+                update.y = y;
+                update.width = width;
+                update.height = height;
+                append(&update, sizeof(update));
+                for (uint32_t row = 0; row < height; ++row) {
+                    append(overlay_.pixels.data() +
+                               static_cast<size_t>(y + row) * overlay_.rowPitch +
+                               static_cast<size_t>(x) * 4,
+                           update.row_pitch);
+                }
+                ++commandCount_;
+                markOverlaySent(first, tileX, tileY);
+            }
+        }
+    }
+
+    void emitOverlayFull() {
+        DK2MTextureUpdateCommand update = {};
+        update.header.type = DK2M_COMMAND_TEXTURE_UPDATE;
+        update.header.size = sizeof(update) + static_cast<uint32_t>(overlay_.pixels.size());
+        update.texture_id = DK2M_OVERLAY_TEXTURE_ID;
+        update.width = overlay_.width;
+        update.height = overlay_.height;
+        update.row_pitch = overlay_.rowPitch;
+        update.data_size = static_cast<uint32_t>(overlay_.pixels.size());
+        append(&update, sizeof(update));
+        append(overlay_.pixels.data(), update.data_size);
+        ++commandCount_;
+        for (OverlayTileState &tile : overlayTiles_) tile.sentVersion = tile.version;
+        overlayForceFull_ = false;
+    }
+
     void emitOverlay() {
         if (overlay_.pixels.empty()) return;
         constexpr WORD indices[] = {0, 1, 2, 0, 2, 3};
@@ -535,25 +665,49 @@ private:
              0xFFFFFFFFu, 1.0f, 1.0f},
             {0.0f, static_cast<float>(height_), 0.0f, 1.0f, 0xFFFFFFFFu, 0.0f, 1.0f},
         };
-        const uint32_t textureBytes = static_cast<uint32_t>(overlay_.pixels.size());
-        const uint32_t updateBytes = sizeof(DK2MTextureUpdateCommand) + textureBytes;
         const uint32_t drawBytes = sizeof(DK2MDrawIndexedCommand) + sizeof(vertices) + sizeof(indices);
         constexpr uint32_t stateBytes =
             sizeof(DK2MSetTextureCommand) + 6 * sizeof(DK2MRenderStateCommand) +
             6 * sizeof(DK2MTextureStageStateCommand);
-        if (used_ + updateBytes + drawBytes + stateBytes > DK2M_SLOT_CAPACITY) return;
+        if (used_ + drawBytes + stateBytes > DK2M_SLOT_CAPACITY) return;
 
-        DK2MTextureUpdateCommand update = {};
-        update.header.type = DK2M_COMMAND_TEXTURE_UPDATE;
-        update.header.size = updateBytes;
-        update.texture_id = DK2M_OVERLAY_TEXTURE_ID;
-        update.width = overlay_.width;
-        update.height = overlay_.height;
-        update.row_pitch = overlay_.rowPitch;
-        update.data_size = textureBytes;
-        append(&update, sizeof(update));
-        append(overlay_.pixels.data(), textureBytes);
-        ++commandCount_;
+        const uint32_t consumerSession =
+            InterlockedCompareExchange(asLong(&header_->consumer_session), 0, 0);
+        if (consumerSession != overlayConsumerSession_) {
+            overlayConsumerSession_ = consumerSession;
+            overlayLastSentFrame_ = 0;
+            overlayForceFull_ = true;
+            for (OverlayTileState &tile : overlayTiles_) tile.acknowledgedVersion = 0;
+        }
+        const uint32_t consumerFrame =
+            InterlockedCompareExchange(asLong(&header_->consumer_frame), 0, 0);
+        if (overlayLastSentFrame_) {
+            if (consumerFrame == overlayLastSentFrame_) {
+                for (OverlayTileState &tile : overlayTiles_) {
+                    if (tile.sentVersion) tile.acknowledgedVersion = tile.sentVersion;
+                    tile.sentVersion = 0;
+                }
+                overlayLastSentFrame_ = 0;
+            } else if (static_cast<int32_t>(consumerFrame - overlayLastSentFrame_) > 0) {
+                // The consumer accepted a newer producer frame without seeing
+                // the one that carried this update. Keep the versions pending
+                // and allow one retry instead of chasing the consumer forever.
+                for (OverlayTileState &tile : overlayTiles_) tile.sentVersion = 0;
+                overlayLastSentFrame_ = 0;
+            }
+        }
+
+        const uint64_t fullBytes = sizeof(DK2MTextureUpdateCommand) + overlay_.pixels.size();
+        const uint64_t rectBytes = overlayRectBytes();
+        const uint64_t updateBytes = overlayForceFull_ || rectBytes >= fullBytes
+                                         ? fullBytes : rectBytes;
+        if (!overlayLastSentFrame_ && updateBytes &&
+            used_ + drawBytes + stateBytes + updateBytes <= DK2M_SLOT_CAPACITY) {
+            if (overlayForceFull_ || rectBytes >= fullBytes) emitOverlayFull();
+            else emitOverlayRects();
+            overlayLastSentFrame_ = frame_ + 1;
+            if (overlayLastSentFrame_ == 0) overlayLastSentFrame_ = 1;
+        }
         emitTexture(0, DK2M_OVERLAY_TEXTURE_ID);
         emitRenderState(D3DRENDERSTATE_ZENABLE, FALSE);
         emitRenderState(D3DRENDERSTATE_ZWRITEENABLE, FALSE);
@@ -612,6 +766,15 @@ private:
     std::unordered_map<uint64_t, uint32_t> textureStageStates_;
     TextureCache overlay_;
     TextureCache previousOverlay_;
+    TextureCache overlayCapture_;
+    std::vector<OverlayTileState> overlayTiles_;
+    std::vector<uint8_t> overlayChanged_;
+    std::vector<uint8_t> overlayLine_;
+    uint32_t overlayTileColumns_ = 0;
+    uint32_t overlayTileRows_ = 0;
+    uint32_t overlayConsumerSession_ = 0;
+    uint32_t overlayLastSentFrame_ = 0;
+    bool overlayForceFull_ = true;
     bool overlayWhite_ = false;
     bool previousOverlayWhite_ = false;
     bool active_ = false;

@@ -6,7 +6,9 @@
 #include "metal_bridge/DK2BridgeProtocol.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -406,6 +408,10 @@ struct FrameSnapshot {
     uint32_t commandCount = 0;
     uint32_t width = 0;
     uint32_t height = 0;
+    uint32_t sceneMicroseconds = 0;
+    uint32_t tickMicroseconds = 0;
+    uint32_t prepareMicroseconds = 0;
+    uint32_t drawMicroseconds = 0;
     std::vector<uint8_t> bytes;
 };
 
@@ -471,6 +477,10 @@ public:
             next.commandCount = slot->command_count;
             next.width = slot->width;
             next.height = slot->height;
+            next.sceneMicroseconds = slot->reserved[0] & 0xFFFFu;
+            next.tickMicroseconds = slot->reserved[0] >> 16;
+            next.prepareMicroseconds = slot->reserved[1] & 0xFFFFu;
+            next.drawMicroseconds = slot->reserved[1] >> 16;
             next.bytes.resize(byteCount);
             std::memcpy(next.bytes.data(), static_cast<uint8_t *>(mapping_) + DK2M_SLOT_OFFSET(slotIndex), byteCount);
             const uint32_t sequenceAfter = __atomic_load_n(&slot->sequence, __ATOMIC_ACQUIRE);
@@ -494,10 +504,121 @@ private:
     FrameSnapshot pending_;
 };
 
-struct MetalVertex {
-    float position[4];
-    float color[4];
-    float texCoord[2];
+using TelemetryClock = std::chrono::steady_clock;
+
+uint32_t elapsedMicroseconds(TelemetryClock::time_point start,
+                             TelemetryClock::time_point end) {
+    const auto value = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    return value > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(std::max<int64_t>(0, value));
+}
+
+struct FrameMetrics {
+    uint32_t intervalUs = 0;
+    uint32_t sceneUs = 0;
+    uint32_t tickUs = 0;
+    uint32_t prepareUs = 0;
+    uint32_t drawUs = 0;
+    uint32_t bridgeBytes = 0;
+    uint32_t commands = 0;
+    uint32_t drawCalls = 0;
+    uint32_t vertices = 0;
+    uint32_t indices = 0;
+    uint32_t textureUpdates = 0;
+    uint32_t textureBytes = 0;
+    uint32_t encodeUs = 0;
+    uint32_t drawableWaitUs = 0;
+    uint32_t gpuWaitUs = 0;
+    uint32_t gpuCompleteUs = 0;
+    uint32_t fvf1Draws = 0;
+    uint32_t fvf2Draws = 0;
+    uint32_t missingTextures = 0;
+    uint32_t bindingOverflows = 0;
+    uint32_t invalidDraws = 0;
+};
+
+class TelemetryWindow {
+public:
+    void add(const FrameMetrics &sample) {
+        samples_[count_++] = sample;
+        if (count_ != samples_.size()) return;
+        NSLog(@"PERF game us p50/p95/p99: interval=%u/%u/%u tick=%u/%u/%u "
+               "prepare=%u/%u/%u draw=%u/%u/%u scene=%u/%u/%u",
+              p(&FrameMetrics::intervalUs, 50), p(&FrameMetrics::intervalUs, 95),
+              p(&FrameMetrics::intervalUs, 99), p(&FrameMetrics::tickUs, 50),
+              p(&FrameMetrics::tickUs, 95), p(&FrameMetrics::tickUs, 99),
+              p(&FrameMetrics::prepareUs, 50), p(&FrameMetrics::prepareUs, 95),
+              p(&FrameMetrics::prepareUs, 99), p(&FrameMetrics::drawUs, 50),
+              p(&FrameMetrics::drawUs, 95), p(&FrameMetrics::drawUs, 99),
+              p(&FrameMetrics::sceneUs, 50), p(&FrameMetrics::sceneUs, 95),
+              p(&FrameMetrics::sceneUs, 99));
+        NSLog(@"PERF bridge p50/p95/p99: bytes=%u/%u/%u commands=%u/%u/%u "
+               "draws=%u/%u/%u vertices=%u/%u/%u texture-updates=%u/%u/%u "
+               "texture-bytes=%u/%u/%u",
+              p(&FrameMetrics::bridgeBytes, 50), p(&FrameMetrics::bridgeBytes, 95),
+              p(&FrameMetrics::bridgeBytes, 99), p(&FrameMetrics::commands, 50),
+              p(&FrameMetrics::commands, 95), p(&FrameMetrics::commands, 99),
+              p(&FrameMetrics::drawCalls, 50), p(&FrameMetrics::drawCalls, 95),
+              p(&FrameMetrics::drawCalls, 99), p(&FrameMetrics::vertices, 50),
+              p(&FrameMetrics::vertices, 95), p(&FrameMetrics::vertices, 99),
+              p(&FrameMetrics::textureUpdates, 50), p(&FrameMetrics::textureUpdates, 95),
+              p(&FrameMetrics::textureUpdates, 99), p(&FrameMetrics::textureBytes, 50),
+              p(&FrameMetrics::textureBytes, 95), p(&FrameMetrics::textureBytes, 99));
+        NSLog(@"PERF host us p50/p95/p99: encode=%u/%u/%u drawable-wait=%u/%u/%u "
+               "gpu-wait=%u/%u/%u gpu-complete=%u/%u/%u; diagnostics totals: "
+               "fvf1=%llu fvf2=%llu missing-texture=%llu binding-overflow=%llu invalid-draw=%llu",
+              p(&FrameMetrics::encodeUs, 50), p(&FrameMetrics::encodeUs, 95),
+              p(&FrameMetrics::encodeUs, 99), p(&FrameMetrics::drawableWaitUs, 50),
+              p(&FrameMetrics::drawableWaitUs, 95), p(&FrameMetrics::drawableWaitUs, 99),
+              p(&FrameMetrics::gpuWaitUs, 50), p(&FrameMetrics::gpuWaitUs, 95),
+              p(&FrameMetrics::gpuWaitUs, 99), p(&FrameMetrics::gpuCompleteUs, 50),
+              p(&FrameMetrics::gpuCompleteUs, 95), p(&FrameMetrics::gpuCompleteUs, 99),
+              total(&FrameMetrics::fvf1Draws), total(&FrameMetrics::fvf2Draws),
+              total(&FrameMetrics::missingTextures), total(&FrameMetrics::bindingOverflows),
+              total(&FrameMetrics::invalidDraws));
+        count_ = 0;
+    }
+
+private:
+    static constexpr size_t kFrames = 300;
+    using Field = uint32_t FrameMetrics::*;
+
+    uint32_t p(Field field, size_t percentile) const {
+        std::array<uint32_t, kFrames> values;
+        for (size_t i = 0; i < count_; ++i) values[i] = samples_[i].*field;
+        const size_t index = (count_ - 1) * percentile / 100;
+        std::nth_element(values.begin(), values.begin() + index, values.begin() + count_);
+        return values[index];
+    }
+
+    uint64_t total(Field field) const {
+        uint64_t value = 0;
+        for (size_t i = 0; i < count_; ++i) value += samples_[i].*field;
+        return value;
+    }
+
+    std::array<FrameMetrics, kFrames> samples_ = {};
+    size_t count_ = 0;
+};
+
+struct CommandView {
+    uint16_t type;
+    uint32_t offset;
+    uint32_t size;
+};
+
+struct TextureBinding {
+    uint16_t bank;
+    uint16_t slot;
+};
+
+struct TextureBindingEntry {
+    uint32_t textureId;
+    TextureBinding binding;
+};
+
+struct DrawUniform {
+    float screenWidth;
+    float screenHeight;
     uint32_t textureIndex;
     uint32_t colorOp;
     uint32_t colorArg1;
@@ -506,12 +627,12 @@ struct MetalVertex {
     uint32_t alphaArg1;
     uint32_t alphaArg2;
     uint32_t textureFactor;
-    uint32_t padding;
-    uint32_t padding2;
 };
 
 constexpr NSUInteger kVertexBufferSize = 2 * 1024 * 1024;
 constexpr NSUInteger kIndexBufferSize = 512 * 1024;
+constexpr NSUInteger kMaxDrawsPerFrame = 4096;
+constexpr NSUInteger kDrawBufferSize = kMaxDrawsPerFrame * sizeof(DrawUniform);
 // Metal exposes at most 128 textures through one shader argument table. DK2's
 // High-Res menus use well over 160 distinct textures in a frame, so keep two
 // immutable-per-draw banks and switch tables when a draw references the other
@@ -526,7 +647,7 @@ constexpr uint32_t kD3DRenderStateCullMode = 22;
 constexpr uint32_t kD3DRenderStateZFunc = 23;
 constexpr uint32_t kD3DRenderStateAlphaBlendEnable = 27;
 constexpr uint32_t kD3DRenderStateTextureFactor = 60;
-static_assert(sizeof(MetalVertex) == 80);
+static_assert(sizeof(DrawUniform) == 40);
 
 MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
     switch (d3dFunction) {
@@ -972,20 +1093,21 @@ bool inputLogEnabled() {
     id<MTLDevice> _device;
     id<MTL4CommandQueue> _queue;
     id<MTLSharedEvent> _completed;
-    id<MTLRenderPipelineState> _opaquePipeline;
-    id<MTLRenderPipelineState> _alphaPipeline;
-    id<MTLRenderPipelineState> _additivePipeline;
+    id<MTLRenderPipelineState> _opaquePipelines[2];
+    id<MTLRenderPipelineState> _alphaPipelines[2];
+    id<MTLRenderPipelineState> _additivePipelines[2];
     id<MTLDepthStencilState> _depthStates[9][2];
     id<MTLSamplerState> _sampler;
     id<MTLTexture> _whiteTexture;
     id<MTLTexture> _multisampleColorTexture;
     id<MTLTexture> _depthTexture;
-    NSMutableDictionary<NSNumber *, id<MTLTexture>> *_textures;
+    std::unordered_map<uint32_t, id<MTLTexture>> _textures;
     id<MTLResidencySet> _resources;
     id<MTL4CommandAllocator> _allocators[kFramesInFlight];
     id<MTL4CommandBuffer> _commandBuffers[kFramesInFlight];
     id<MTLBuffer> _vertexBuffers[kFramesInFlight];
     id<MTLBuffer> _indexBuffers[kFramesInFlight];
+    id<MTLBuffer> _drawBuffers[kFramesInFlight];
     id<MTL4ArgumentTable>
         _argumentTables[kFramesInFlight][kTextureArgumentTablesPerFrame];
     std::unique_ptr<BridgeReader> _bridge;
@@ -1001,6 +1123,12 @@ bool inputLogEnabled() {
         id<MTLTexture> ring[kFramesInFlight] = {};
     };
     std::unordered_map<uint32_t, DynamicTexture> _dynamicTextures;
+    std::vector<CommandView> _commandViews;
+    std::vector<TextureBindingEntry> _frameTextureBindings;
+    TelemetryWindow _telemetry;
+    TelemetryClock::time_point _lastBridgeArrival;
+    TelemetryClock::time_point _submittedAt[kFramesInFlight];
+    uint64_t _submittedValue[kFramesInFlight];
     uint64_t _frame;
     uint64_t _appliedDrawableSize;
     uint32_t _lastBridgeFrame;
@@ -1036,35 +1164,39 @@ bool inputLogEnabled() {
     NSError *error = nil;
     NSURL *libraryURL = [NSBundle.mainBundle URLForResource:@"DK2Shaders" withExtension:@"metallib"];
     id<MTLLibrary> library = libraryURL ? [_device newLibraryWithURL:libraryURL error:&error] : nil;
-    id<MTLFunction> vertexFunction = [library newFunctionWithName:@"dk2_vertex"];
+    id<MTLFunction> vertexFunctions[] = {
+        [library newFunctionWithName:@"dk2_vertex_1c"],
+        [library newFunctionWithName:@"dk2_vertex_2c"],
+    };
     id<MTLFunction> fragmentFunction = [library newFunctionWithName:@"dk2_fragment"];
     MTLRenderPipelineDescriptor *pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
     pipelineDescriptor.label = @"DK2 fixed-function base pipeline";
-    pipelineDescriptor.vertexFunction = vertexFunction;
     pipelineDescriptor.fragmentFunction = fragmentFunction;
     pipelineDescriptor.colorAttachments[0].pixelFormat = _layer.pixelFormat;
     pipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
     pipelineDescriptor.rasterSampleCount = kSampleCount;
-    pipelineDescriptor.colorAttachments[0].blendingEnabled = NO;
-    _opaquePipeline = vertexFunction && fragmentFunction
-                          ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error]
-                          : nil;
-    pipelineDescriptor.colorAttachments[0].blendingEnabled = YES;
-    pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
-    pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-    pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
-    pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-    _alphaPipeline = vertexFunction && fragmentFunction
-                         ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error]
-                         : nil;
-    pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
-    pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
-    pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
-    pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
-    _additivePipeline = vertexFunction && fragmentFunction
-                            ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error]
-                            : nil;
-    if (!_opaquePipeline || !_alphaPipeline || !_additivePipeline) {
+    for (NSUInteger vertexType = 0; vertexType < 2; ++vertexType) {
+        pipelineDescriptor.vertexFunction = vertexFunctions[vertexType];
+        pipelineDescriptor.colorAttachments[0].blendingEnabled = NO;
+        _opaquePipelines[vertexType] = vertexFunctions[vertexType] && fragmentFunction
+            ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error] : nil;
+        pipelineDescriptor.colorAttachments[0].blendingEnabled = YES;
+        pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+        pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+        pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+        pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+        _alphaPipelines[vertexType] = vertexFunctions[vertexType] && fragmentFunction
+            ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error] : nil;
+        pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+        pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
+        pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+        pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
+        _additivePipelines[vertexType] = vertexFunctions[vertexType] && fragmentFunction
+            ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error] : nil;
+    }
+    if (!_opaquePipelines[0] || !_opaquePipelines[1] ||
+        !_alphaPipelines[0] || !_alphaPipelines[1] ||
+        !_additivePipelines[0] || !_additivePipelines[1]) {
         fail([NSString stringWithFormat:@"Metal shader pipeline failed: %@", error.localizedDescription ?: @"library missing"]);
         return nil;
     }
@@ -1101,7 +1233,9 @@ bool inputLogEnabled() {
     const uint32_t whitePixel = 0xFFFFFFFFu;
     [_whiteTexture replaceRegion:MTLRegionMake2D(0, 0, 1, 1)
                      mipmapLevel:0 withBytes:&whitePixel bytesPerRow:4];
-    _textures = [NSMutableDictionary dictionary];
+    _commandViews.reserve(2048);
+    _frameTextureBindings.reserve(kTextureBindingsPerArgumentTable *
+                                  kTextureArgumentTablesPerFrame);
     if (!_depthStates[8][0] || !_depthStates[4][1] || !_sampler || !_whiteTexture) {
         fail(@"Metal fixed-function resource creation failed.");
         return nil;
@@ -1127,17 +1261,19 @@ bool inputLogEnabled() {
         const MTLResourceOptions uploadOptions = MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined;
         _vertexBuffers[index] = [_device newBufferWithLength:kVertexBufferSize options:uploadOptions];
         _indexBuffers[index] = [_device newBufferWithLength:kIndexBufferSize options:uploadOptions];
+        _drawBuffers[index] = [_device newBufferWithLength:kDrawBufferSize options:uploadOptions];
         _vertexBuffers[index].label = [NSString stringWithFormat:@"DK2 vertices %lu", index];
         _indexBuffers[index].label = [NSString stringWithFormat:@"DK2 indices %lu", index];
+        _drawBuffers[index].label = [NSString stringWithFormat:@"DK2 draw uniforms %lu", index];
 
-        if (!_vertexBuffers[index] || !_indexBuffers[index]) {
+        if (!_vertexBuffers[index] || !_indexBuffers[index] || !_drawBuffers[index]) {
             fail(@"Metal dynamic frame buffer creation failed.");
             return nil;
         }
         for (NSUInteger bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) {
             MTL4ArgumentTableDescriptor *tableDescriptor =
                 [[MTL4ArgumentTableDescriptor alloc] init];
-            tableDescriptor.maxBufferBindCount = 1;
+            tableDescriptor.maxBufferBindCount = 2;
             tableDescriptor.maxTextureBindCount = kTextureBindingsPerArgumentTable;
             tableDescriptor.maxSamplerStateBindCount = 1;
             tableDescriptor.initializeBindings = YES;
@@ -1156,13 +1292,14 @@ bool inputLogEnabled() {
         }
     }
 
-    id<MTLAllocation> allocations[kFramesInFlight * 2 + 1];
+    id<MTLAllocation> allocations[kFramesInFlight * 3 + 1];
     for (NSUInteger index = 0; index < kFramesInFlight; ++index) {
-        allocations[index * 2] = _vertexBuffers[index];
-        allocations[index * 2 + 1] = _indexBuffers[index];
+        allocations[index * 3] = _vertexBuffers[index];
+        allocations[index * 3 + 1] = _indexBuffers[index];
+        allocations[index * 3 + 2] = _drawBuffers[index];
     }
-    allocations[kFramesInFlight * 2] = _whiteTexture;
-    [_resources addAllocations:allocations count:kFramesInFlight * 2 + 1];
+    allocations[kFramesInFlight * 3] = _whiteTexture;
+    [_resources addAllocations:allocations count:kFramesInFlight * 3 + 1];
     [_resources commit];
     [_resources requestResidency];
     [_queue addResidencySet:_resources];
@@ -1246,16 +1383,60 @@ static void *renderWorker(void *context) {
 
 - (void)metalDisplayLink:(CAMetalDisplayLink *)link needsUpdate:(CAMetalDisplayLinkUpdate *)update {
     @autoreleasepool {
+        const auto encodeStarted = TelemetryClock::now();
+        FrameMetrics metrics = {};
+        const uint64_t completedValue = _completed.signaledValue;
+        for (NSUInteger index = 0; index < kFramesInFlight; ++index) {
+            if (_submittedValue[index] && _submittedValue[index] <= completedValue) {
+                metrics.gpuCompleteUs = std::max(
+                    metrics.gpuCompleteUs,
+                    elapsedMicroseconds(_submittedAt[index], encodeStarted));
+                _submittedValue[index] = 0;
+            }
+        }
         const FrameSnapshot *snapshot = _bridge ? _bridge->poll() : nullptr;
+        const bool newBridgeFrame = snapshot && snapshot->frame != _lastBridgeFrame;
         if (gSelfTestFrames == 0 && _bridge && snapshot && snapshot->frame == _lastBridgeFrame) return;
+
+        if (newBridgeFrame) {
+            metrics.intervalUs = _lastBridgeArrival.time_since_epoch().count()
+                                     ? elapsedMicroseconds(_lastBridgeArrival, encodeStarted) : 0;
+            _lastBridgeArrival = encodeStarted;
+            metrics.sceneUs = snapshot->sceneMicroseconds;
+            metrics.tickUs = snapshot->tickMicroseconds;
+            metrics.prepareUs = snapshot->prepareMicroseconds;
+            metrics.drawUs = snapshot->drawMicroseconds;
+            metrics.bridgeBytes = static_cast<uint32_t>(snapshot->bytes.size());
+            metrics.commands = snapshot->commandCount;
+            _commandViews.clear();
+            size_t commandOffset = 0;
+            while (commandOffset + sizeof(DK2MCommandHeader) <= snapshot->bytes.size()) {
+                DK2MCommandHeader header;
+                std::memcpy(&header, snapshot->bytes.data() + commandOffset, sizeof(header));
+                if (header.size < sizeof(header) ||
+                    commandOffset + header.size > snapshot->bytes.size()) break;
+                _commandViews.push_back({header.type, static_cast<uint32_t>(commandOffset),
+                                         header.size});
+                commandOffset += header.size;
+            }
+        }
 
         const NSUInteger slot = _frame % kFramesInFlight;
         if (_frame >= kFramesInFlight) {
             const uint64_t required = _frame - kFramesInFlight + 1;
+            const auto waitStarted = TelemetryClock::now();
             if (![_completed waitUntilSignaledValue:required timeoutMS:1000]) {
                 fail(@"GPU frame completion timed out.");
                 link.paused = YES;
                 return;
+            }
+            const auto waitFinished = TelemetryClock::now();
+            metrics.gpuWaitUs = elapsedMicroseconds(waitStarted, waitFinished);
+            if (_submittedValue[slot]) {
+                metrics.gpuCompleteUs = std::max(
+                    metrics.gpuCompleteUs,
+                    elapsedMicroseconds(_submittedAt[slot], waitFinished));
+                _submittedValue[slot] = 0;
             }
         }
         if (![self ensureRenderTargetsWidth:update.drawable.texture.width
@@ -1274,25 +1455,24 @@ static void *renderWorker(void *context) {
         MTLClearColor clearColor = MTLClearColorMake(0.025 + pulse * 0.035, 0.07, 0.10 + pulse * 0.08, 1.0);
         BOOL residencyChanged = NO;
         if (snapshot) {
-            size_t offset = 0;
-            while (offset + sizeof(DK2MCommandHeader) <= snapshot->bytes.size()) {
-                DK2MCommandHeader header;
-                std::memcpy(&header, snapshot->bytes.data() + offset, sizeof(header));
-                if (header.size < sizeof(header) || offset + header.size > snapshot->bytes.size()) break;
-                if (header.type == DK2M_COMMAND_CLEAR && header.size == sizeof(DK2MClearCommand)) {
+            for (const CommandView &view : _commandViews) {
+                const size_t offset = view.offset;
+                if (view.type == DK2M_COMMAND_CLEAR && view.size == sizeof(DK2MClearCommand)) {
                     DK2MClearCommand clear;
                     std::memcpy(&clear, snapshot->bytes.data() + offset, sizeof(clear));
                     clearColor = MTLClearColorMake(clear.red, clear.green, clear.blue, clear.alpha);
-                } else if (header.type == DK2M_COMMAND_TEXTURE_UPDATE &&
-                           header.size >= sizeof(DK2MTextureUpdateCommand)) {
+                } else if (view.type == DK2M_COMMAND_TEXTURE_UPDATE &&
+                           view.size >= sizeof(DK2MTextureUpdateCommand)) {
                     DK2MTextureUpdateCommand textureUpdate;
                     std::memcpy(&textureUpdate, snapshot->bytes.data() + offset, sizeof(textureUpdate));
                     const size_t expected = sizeof(textureUpdate) + textureUpdate.data_size;
-                    NSNumber *key = @(textureUpdate.texture_id);
-                    if (textureUpdate.texture_id && expected <= header.size &&
+                    const uint32_t key = textureUpdate.texture_id;
+                    if (textureUpdate.texture_id && expected <= view.size &&
                         textureUpdate.width && textureUpdate.height &&
                         textureUpdate.row_pitch >= textureUpdate.width * 4 &&
                         textureUpdate.data_size >= textureUpdate.row_pitch * textureUpdate.height) {
+                        ++metrics.textureUpdates;
+                        metrics.textureBytes += textureUpdate.data_size;
                         const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
                         DynamicTexture &dyn = _dynamicTextures[textureUpdate.texture_id];
                         id<MTLTexture> hd = nil;
@@ -1376,8 +1556,34 @@ static void *renderWorker(void *context) {
                         }
                         }
                     }
+                } else if (view.type == DK2M_COMMAND_TEXTURE_UPDATE_RECT &&
+                           view.size >= sizeof(DK2MTextureUpdateRectCommand)) {
+                    DK2MTextureUpdateRectCommand textureUpdate;
+                    std::memcpy(&textureUpdate, snapshot->bytes.data() + offset,
+                                sizeof(textureUpdate));
+                    const size_t expected = sizeof(textureUpdate) + textureUpdate.data_size;
+                    const auto textureFound = _textures.find(textureUpdate.texture_id);
+                    id<MTLTexture> texture = textureFound == _textures.end()
+                                                   ? nil : textureFound->second;
+                    if (texture && expected <= view.size && textureUpdate.width &&
+                        textureUpdate.height && textureUpdate.x <= texture.width &&
+                        textureUpdate.y <= texture.height &&
+                        textureUpdate.width <= texture.width - textureUpdate.x &&
+                        textureUpdate.height <= texture.height - textureUpdate.y &&
+                        textureUpdate.row_pitch >= textureUpdate.width * 4 &&
+                        textureUpdate.data_size >=
+                            static_cast<uint64_t>(textureUpdate.row_pitch) * textureUpdate.height) {
+                        ++metrics.textureUpdates;
+                        metrics.textureBytes += textureUpdate.data_size;
+                        const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
+                        [texture replaceRegion:MTLRegionMake2D(
+                                                   textureUpdate.x, textureUpdate.y,
+                                                   textureUpdate.width, textureUpdate.height)
+                                   mipmapLevel:0
+                                     withBytes:pixels
+                                   bytesPerRow:textureUpdate.row_pitch];
+                    }
                 }
-                offset += header.size;
             }
         }
         if (residencyChanged) [_resources commit];
@@ -1400,10 +1606,8 @@ static void *renderWorker(void *context) {
         if (snapshot) {
             NSUInteger vertexOffset = 0;
             NSUInteger indexOffset = 0;
-            struct TextureBinding {
-                uint16_t bank;
-                uint16_t slot;
-            };
+            NSUInteger drawUniformCount = 0;
+            auto *drawUniforms = static_cast<DrawUniform *>(_drawBuffers[slot].contents);
             TextureBinding currentTextureBinding = {0, 0};
             TextureBinding nextTextureBinding = {0, 1};
             uint32_t boundArgumentTableBank = 0;
@@ -1416,10 +1620,12 @@ static void *renderWorker(void *context) {
             uint32_t cullMode = 1;
             uint32_t textureFactor = 0xFFFFFFFFu;
             uint32_t textureStage0[7] = {0, 4, 2, 0, 4, 2, 0};
-            std::unordered_map<uint32_t, TextureBinding> textureBindings;
+            _frameTextureBindings.clear();
             for (NSUInteger bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) {
                 [_argumentTables[slot][bank]
                     setAddress:_vertexBuffers[slot].gpuAddress atIndex:0];
+                [_argumentTables[slot][bank]
+                    setAddress:_drawBuffers[slot].gpuAddress atIndex:1];
                 [_argumentTables[slot][bank]
                     setTexture:_whiteTexture.gpuResourceID atIndex:0];
                 [_argumentTables[slot][bank]
@@ -1427,24 +1633,29 @@ static void *renderWorker(void *context) {
             }
             [encoder setArgumentTable:_argumentTables[slot][boundArgumentTableBank]
                              atStages:MTLRenderStageVertex | MTLRenderStageFragment];
-            size_t commandOffset = 0;
-            while (commandOffset + sizeof(DK2MCommandHeader) <= snapshot->bytes.size()) {
-                DK2MCommandHeader header;
-                std::memcpy(&header, snapshot->bytes.data() + commandOffset, sizeof(header));
-                if (header.size < sizeof(header) || commandOffset + header.size > snapshot->bytes.size()) break;
-                if (header.type == DK2M_COMMAND_SET_TEXTURE && header.size == sizeof(DK2MSetTextureCommand)) {
+            for (const CommandView &view : _commandViews) {
+                const size_t commandOffset = view.offset;
+                if (view.type == DK2M_COMMAND_SET_TEXTURE &&
+                    view.size == sizeof(DK2MSetTextureCommand)) {
                     DK2MSetTextureCommand binding;
                     std::memcpy(&binding, snapshot->bytes.data() + commandOffset, sizeof(binding));
                     if (binding.stage == 0 && binding.texture_id) {
-                        auto found = textureBindings.find(binding.texture_id);
-                        if (found != textureBindings.end()) {
-                            currentTextureBinding = found->second;
+                        const auto found = std::find_if(
+                            _frameTextureBindings.begin(), _frameTextureBindings.end(),
+                            [&](const TextureBindingEntry &entry) {
+                                return entry.textureId == binding.texture_id;
+                            });
+                        if (found != _frameTextureBindings.end()) {
+                            currentTextureBinding = found->binding;
                         } else if (nextTextureBinding.bank <
                                    kTextureArgumentTablesPerFrame) {
-                            id<MTLTexture> texture = _textures[@(binding.texture_id)];
+                            const auto textureFound = _textures.find(binding.texture_id);
+                            id<MTLTexture> texture = textureFound == _textures.end()
+                                                       ? nil : textureFound->second;
                             if (texture) {
                                 currentTextureBinding = nextTextureBinding;
-                                textureBindings.emplace(binding.texture_id, currentTextureBinding);
+                                _frameTextureBindings.push_back(
+                                    {binding.texture_id, currentTextureBinding});
                                 [_argumentTables[slot][currentTextureBinding.bank]
                                     setTexture:texture.gpuResourceID
                                        atIndex:currentTextureBinding.slot];
@@ -1455,18 +1666,20 @@ static void *renderWorker(void *context) {
                                 }
                             } else {
                                 currentTextureBinding = {0, 0};
+                                ++metrics.missingTextures;
                             }
                         } else {
                             // A missing binding must never inherit the previous
                             // draw's texture. White preserves vertex colour and
                             // makes capacity failures deterministic.
                             currentTextureBinding = {0, 0};
+                            ++metrics.bindingOverflows;
                         }
                     } else if (binding.stage == 0) {
                         currentTextureBinding = {0, 0};
                     }
-                } else if (header.type == DK2M_COMMAND_RENDER_STATE &&
-                           header.size == sizeof(DK2MRenderStateCommand)) {
+                } else if (view.type == DK2M_COMMAND_RENDER_STATE &&
+                           view.size == sizeof(DK2MRenderStateCommand)) {
                     DK2MRenderStateCommand state;
                     std::memcpy(&state, snapshot->bytes.data() + commandOffset, sizeof(state));
                     switch (state.state) {
@@ -1482,13 +1695,14 @@ static void *renderWorker(void *context) {
                         case kD3DRenderStateTextureFactor: textureFactor = state.value; break;
                         default: break;
                     }
-                } else if (header.type == DK2M_COMMAND_TEXTURE_STAGE_STATE &&
-                           header.size == sizeof(DK2MTextureStageStateCommand)) {
+                } else if (view.type == DK2M_COMMAND_TEXTURE_STAGE_STATE &&
+                           view.size == sizeof(DK2MTextureStageStateCommand)) {
                     DK2MTextureStageStateCommand state;
                     std::memcpy(&state, snapshot->bytes.data() + commandOffset, sizeof(state));
                     if (state.stage == 0 && state.state >= 1 && state.state <= 6)
                         textureStage0[state.state] = state.value;
-                } else if (header.type == DK2M_COMMAND_DRAW_INDEXED && header.size >= sizeof(DK2MDrawIndexedCommand)) {
+                } else if (view.type == DK2M_COMMAND_DRAW_INDEXED &&
+                           view.size >= sizeof(DK2MDrawIndexedCommand)) {
                     DK2MDrawIndexedCommand draw;
                     std::memcpy(&draw, snapshot->bytes.data() + commandOffset, sizeof(draw));
                     const size_t bridgeVertexSize = draw.fvf == DK2M_FVF_VERTEX1C
@@ -1498,70 +1712,44 @@ static void *renderWorker(void *context) {
                     const size_t vertexBytes = static_cast<size_t>(draw.vertex_count) * bridgeVertexSize;
                     const size_t indexBytes = static_cast<size_t>(draw.index_count) * sizeof(uint16_t);
                     const size_t expected = sizeof(draw) + vertexBytes + indexBytes;
-                    const NSUInteger metalVertexBytes = static_cast<NSUInteger>(draw.vertex_count) * sizeof(MetalVertex);
+                    ++metrics.drawCalls;
+                    metrics.vertices += draw.vertex_count;
+                    metrics.indices += draw.index_count;
+                    if (draw.fvf == DK2M_FVF_VERTEX1C) ++metrics.fvf1Draws;
+                    else if (draw.fvf == DK2M_FVF_VERTEX2C) ++metrics.fvf2Draws;
+                    const NSUInteger alignedVertexOffset = bridgeVertexSize
+                        ? (vertexOffset + bridgeVertexSize - 1) / bridgeVertexSize * bridgeVertexSize
+                        : vertexOffset;
                     indexOffset = (indexOffset + 3u) & ~3u;
-                    if (bridgeVertexSize && expected <= header.size &&
-                        vertexOffset + metalVertexBytes <= kVertexBufferSize &&
-                        indexOffset + indexBytes <= kIndexBufferSize && snapshot->width && snapshot->height) {
+                    if (bridgeVertexSize && expected <= view.size &&
+                        alignedVertexOffset + vertexBytes <= kVertexBufferSize &&
+                        indexOffset + indexBytes <= kIndexBufferSize &&
+                        drawUniformCount < kMaxDrawsPerFrame &&
+                        snapshot->width && snapshot->height) {
                         const uint8_t *rawVertices = snapshot->bytes.data() + commandOffset + sizeof(draw);
                         const uint8_t *rawIndices = rawVertices + vertexBytes;
-                        auto *metalVertices = reinterpret_cast<MetalVertex *>(
-                            static_cast<uint8_t *>(_vertexBuffers[slot].contents) + vertexOffset);
-                        for (uint32_t index = 0; index < draw.vertex_count; ++index) {
-                            DK2MVertex1C vertex;
-                            if (draw.fvf == DK2M_FVF_VERTEX1C) {
-                                std::memcpy(&vertex, rawVertices + index * bridgeVertexSize, sizeof(vertex));
-                            } else {
-                                DK2MVertex2C vertex2;
-                                std::memcpy(&vertex2, rawVertices + index * bridgeVertexSize, sizeof(vertex2));
-                                vertex.x = vertex2.x;
-                                vertex.y = vertex2.y;
-                                vertex.z = vertex2.z;
-                                vertex.rhw = vertex2.rhw;
-                                vertex.diffuse = vertex2.diffuse;
-                                vertex.u = vertex2.tex_coord[0][0];
-                                vertex.v = vertex2.tex_coord[0][1];
-                            }
-                            const float reciprocalW = std::abs(vertex.rhw) > 0.000001f ? vertex.rhw : 1.0f;
-                            const float clipW = 1.0f / reciprocalW;
-                            metalVertices[index].position[0] =
-                                (vertex.x * 2.0f / snapshot->width - 1.0f) * clipW;
-                            metalVertices[index].position[1] =
-                                (1.0f - vertex.y * 2.0f / snapshot->height) * clipW;
-                            metalVertices[index].position[2] = vertex.z * clipW;
-                            metalVertices[index].position[3] = clipW;
-                            metalVertices[index].color[0] = ((vertex.diffuse >> 16) & 0xFF) / 255.0f;
-                            metalVertices[index].color[1] = ((vertex.diffuse >> 8) & 0xFF) / 255.0f;
-                            metalVertices[index].color[2] = (vertex.diffuse & 0xFF) / 255.0f;
-                            metalVertices[index].color[3] = ((vertex.diffuse >> 24) & 0xFF) / 255.0f;
-                            metalVertices[index].texCoord[0] = vertex.u;
-                            metalVertices[index].texCoord[1] = vertex.v;
-                            metalVertices[index].textureIndex = currentTextureBinding.slot;
-                            metalVertices[index].colorOp = textureStage0[1];
-                            metalVertices[index].colorArg1 = textureStage0[2];
-                            metalVertices[index].colorArg2 = textureStage0[3];
-                            metalVertices[index].alphaOp = textureStage0[4];
-                            metalVertices[index].alphaArg1 = textureStage0[5];
-                            metalVertices[index].alphaArg2 = textureStage0[6];
-                            metalVertices[index].textureFactor = textureFactor;
-                            metalVertices[index].padding = 0;
-                            metalVertices[index].padding2 = 0;
-                        }
-                        auto *metalIndices = reinterpret_cast<uint16_t *>(
-                            static_cast<uint8_t *>(_indexBuffers[slot].contents) + indexOffset);
-                        const auto *sourceIndices = reinterpret_cast<const uint16_t *>(rawIndices);
-                        const uint32_t baseVertex = static_cast<uint32_t>(vertexOffset / sizeof(MetalVertex));
-                        bool validIndices = true;
-                        for (uint32_t index = 0; index < draw.index_count; ++index) {
-                            const uint32_t adjusted = baseVertex + sourceIndices[index];
-                            if (adjusted > UINT16_MAX) { validIndices = false; break; }
-                            metalIndices[index] = static_cast<uint16_t>(adjusted);
-                        }
-                        if (!validIndices) { commandOffset += header.size; continue; }
-                        id<MTLRenderPipelineState> pipeline = _opaquePipeline;
+                        std::memcpy(static_cast<uint8_t *>(_vertexBuffers[slot].contents) +
+                                        alignedVertexOffset,
+                                    rawVertices, vertexBytes);
+                        std::memcpy(static_cast<uint8_t *>(_indexBuffers[slot].contents) + indexOffset,
+                                    rawIndices, indexBytes);
+                        DrawUniform &uniform = drawUniforms[drawUniformCount];
+                        uniform.screenWidth = static_cast<float>(snapshot->width);
+                        uniform.screenHeight = static_cast<float>(snapshot->height);
+                        uniform.textureIndex = currentTextureBinding.slot;
+                        uniform.colorOp = textureStage0[1];
+                        uniform.colorArg1 = textureStage0[2];
+                        uniform.colorArg2 = textureStage0[3];
+                        uniform.alphaOp = textureStage0[4];
+                        uniform.alphaArg1 = textureStage0[5];
+                        uniform.alphaArg2 = textureStage0[6];
+                        uniform.textureFactor = textureFactor;
+                        const NSUInteger vertexType = draw.fvf == DK2M_FVF_VERTEX1C ? 0 : 1;
+                        id<MTLRenderPipelineState> pipeline = _opaquePipelines[vertexType];
                         if (alphaBlendEnabled) {
                             pipeline = sourceBlend == 2 && destinationBlend == 2
-                                           ? _additivePipeline : _alphaPipeline;
+                                           ? _additivePipelines[vertexType]
+                                           : _alphaPipelines[vertexType];
                         }
                         [encoder setRenderPipelineState:pipeline];
                         const uint32_t effectiveZFunction = zEnabled ? zFunction : 8;
@@ -1581,28 +1769,42 @@ static void *renderWorker(void *context) {
                                             indexCount:draw.index_count
                                              indexType:MTLIndexTypeUInt16
                                            indexBuffer:_indexBuffers[slot].gpuAddress + indexOffset
-                                     indexBufferLength:indexBytes];
-                        vertexOffset += metalVertexBytes;
+                                     indexBufferLength:indexBytes
+                                         instanceCount:1
+                                            baseVertex:alignedVertexOffset / bridgeVertexSize
+                                          baseInstance:drawUniformCount];
+                        vertexOffset = alignedVertexOffset + vertexBytes;
                         indexOffset += indexBytes;
+                        ++drawUniformCount;
+                    } else {
+                        ++metrics.invalidDraws;
                     }
                 }
-                commandOffset += header.size;
             }
             gBridgeFramesRendered.fetch_add(1, std::memory_order_relaxed);
         }
         [encoder endEncoding];
         [commandBuffer endCommandBuffer];
 
+        const auto drawableWaitStarted = TelemetryClock::now();
         [_queue waitForDrawable:update.drawable];
+        metrics.drawableWaitUs = elapsedMicroseconds(drawableWaitStarted,
+                                                      TelemetryClock::now());
         id<MTL4CommandBuffer> submissions[] = {commandBuffer};
         [_queue commit:submissions count:1];
         [_queue signalEvent:_completed value:_frame + 1];
         [_queue signalDrawable:update.drawable];
         [update.drawable present];
+        _submittedAt[slot] = TelemetryClock::now();
+        _submittedValue[slot] = _frame + 1;
 
         ++_frame;
         if (snapshot) _lastBridgeFrame = snapshot->frame;
         gRenderedFrames.store(_frame, std::memory_order_release);
+        if (newBridgeFrame) {
+            metrics.encodeUs = elapsedMicroseconds(encodeStarted, TelemetryClock::now());
+            _telemetry.add(metrics);
+        }
 
         const uint64_t requested = gRequestedDrawableSize.load(std::memory_order_acquire);
         if (requested != 0 && requested != _appliedDrawableSize) {
