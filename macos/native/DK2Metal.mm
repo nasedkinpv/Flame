@@ -19,7 +19,101 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
+
+#import <ImageIO/ImageIO.h>
+
+// Texture dump mode: set DK2_TEXTURE_DUMP=1 (or =/abs/path) to write every
+// unique texture crossing the bridge as PNG, keyed by a content hash. The
+// same hash will later key HD replacements, so filenames are stable across
+// runs. Animated surfaces produce one file per unique frame.
+namespace texdump {
+
+uint64_t contentHash(const uint8_t *row, uint32_t width, uint32_t height, uint32_t pitch) {
+    uint64_t hash = 1469598103934665603ULL;  // FNV-1a 64
+    for (uint32_t y = 0; y < height; ++y, row += pitch) {
+        for (uint32_t x = 0; x < width * 4; ++x) {
+            hash ^= row[x];
+            hash *= 1099511628211ULL;
+        }
+    }
+    return hash;
+}
+
+NSString *directory() {
+    static NSString *dir = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *env = std::getenv("DK2_TEXTURE_DUMP");
+        if (!env || !*env) return;
+        NSString *path = env[0] == '/'
+                ? @(env)
+                : [NSHomeDirectory() stringByAppendingPathComponent:
+                          @"Library/Application Support/Dungeon Keeper 2 Flame/texture-dump"];
+        if ([[NSFileManager defaultManager] createDirectoryAtPath:path
+                                      withIntermediateDirectories:YES
+                                                       attributes:nil
+                                                            error:nil]) {
+            dir = path;
+        }
+    });
+    return dir;
+}
+
+// render thread only
+void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch) {
+    NSString *dir = directory();
+    if (!dir) return;
+    static std::unordered_set<uint64_t> seen;
+    const uint64_t hash = contentHash(pixels, width, height, pitch);
+    if (!seen.insert(hash).second) return;
+    NSString *file = [dir stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"%016llx_%ux%u.png", hash, width, height]];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:file]) return;
+
+    NSMutableData *copy = [NSMutableData dataWithLength:(NSUInteger)width * height * 4];
+    auto *out = static_cast<uint8_t *>(copy.mutableBytes);
+    for (uint32_t y = 0; y < height; ++y) {
+        std::memcpy(out + (size_t)y * width * 4, pixels + (size_t)y * pitch, (size_t)width * 4);
+    }
+    // X8R8G8B8 sources carry zero alpha everywhere - make those opaque so the
+    // dump is viewable; textures that really use alpha are left untouched
+    bool anyAlpha = false;
+    for (size_t i = 3; i < copy.length; i += 4) {
+        if (out[i]) { anyAlpha = true; break; }
+    }
+    if (!anyAlpha) {
+        for (size_t i = 3; i < copy.length; i += 4) out[i] = 0xFF;
+    }
+
+    static dispatch_queue_t queue =
+            dispatch_queue_create("dk2.texture-dump", DISPATCH_QUEUE_SERIAL);
+    dispatch_async(queue, ^{
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGDataProviderRef provider =
+                CGDataProviderCreateWithCFData((__bridge CFDataRef)copy);
+        CGImageRef image = CGImageCreate(
+                width, height, 8, 32, width * 4, space,
+                (CGBitmapInfo)kCGImageAlphaFirst | kCGBitmapByteOrder32Little,
+                provider, NULL, false, kCGRenderingIntentDefault);
+        if (image) {
+            CGImageDestinationRef destination = CGImageDestinationCreateWithURL(
+                    (__bridge CFURLRef)[NSURL fileURLWithPath:file],
+                    CFSTR("public.png"), 1, NULL);
+            if (destination) {
+                CGImageDestinationAddImage(destination, image, NULL);
+                CGImageDestinationFinalize(destination);
+                CFRelease(destination);
+            }
+            CGImageRelease(image);
+        }
+        CGDataProviderRelease(provider);
+        CGColorSpaceRelease(space);
+    });
+}
+
+}  // namespace texdump
 
 namespace {
 
@@ -938,6 +1032,8 @@ static void *renderWorker(void *context) {
                             const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
                             [texture replaceRegion:MTLRegionMake2D(0, 0, textureUpdate.width, textureUpdate.height)
                                        mipmapLevel:0 withBytes:pixels bytesPerRow:textureUpdate.row_pitch];
+                            texdump::dump(pixels, textureUpdate.width, textureUpdate.height,
+                                          textureUpdate.row_pitch);
                         }
                     }
                 }

@@ -35,6 +35,7 @@ readonly SIGNING_IDENTITY="${DK2_CODESIGN_IDENTITY:--}"
   -Wall -Wextra -Werror \
   -framework AppKit \
   -framework GameController \
+  -framework ImageIO \
   -framework Metal \
   -framework QuartzCore \
   -I "${REPO_ROOT}/src/gog_patch_dll" \
