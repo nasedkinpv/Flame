@@ -27779,7 +27779,7 @@ global: va=0041C4C0,name=substractAssign,size=53,member_of=vecf_xyz
       type: kind=struct,id=vecf_xyz
     arg: kind=ptr
       type: kind=struct,id=vecf_xyz
-global: va=0041C500,name=sub_41C500,size=125
+global: va=0041C500,name=sub_41C500,size=125,member_of=vecf_xyz
   type: kind=function,declspec=thiscall
     ret: kind=ptr
       type: kind=float,size=4
@@ -59042,12 +59042,12 @@ global: va=0057C080,name=sub_57C080,size=270,member_of=constructor_0057BCB0
       type: kind=struct,id=vecf_xyz
     arg: kind=ptr
       type: kind=struct,id=vecf_xyz
-global: va=0057C190,name=sub_57C190,size=219
+global: va=0057C190,name=sub_57C190,size=219,member_of=constructor_0057BCB0
   type: kind=function,declspec=thiscall
     ret: kind=ptr
       type: kind=float,size=4
     arg: kind=ptr
-      type: kind=int,size=4
+      type: kind=struct,id=constructor_0057BCB0
     arg: kind=ptr
       type: kind=float,size=4
     arg: kind=ptr
@@ -61964,8 +61964,8 @@ global: va=0059E700,name=sub_59E700,size=80
       type: kind=float,size=4
     arg: kind=float,size=4
     arg: kind=float,size=4
-    arg: kind=ptr
-      type: kind=int,size=4,signed=True
+    arg: kind=int,size=4,signed=True
+    arg: kind=int,size=4,signed=True
     arg: kind=ptr
       type: kind=int,size=4,signed=True
 global: va=0059E750,name=ProceduralMesh_cpp_59E750,size=1329
@@ -61979,7 +61979,8 @@ global: va=0059E750,name=ProceduralMesh_cpp_59E750,size=1329
 global: va=0059EC90,name=sub_59EC90,size=88
   type: kind=function,declspec=cdecl
     ret: kind=int,size=4,signed=True
-    arg: kind=int,size=4,signed=True
+    arg: kind=ptr
+      type: kind=float,size=4
     arg: kind=float,size=4
     arg: kind=float,size=4
     arg: kind=int,size=4,signed=True

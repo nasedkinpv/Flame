@@ -28,6 +28,11 @@
 0041C480 Vec3f *Vec3f::mulV(Vec3f *, float)
 0041C4C0 Vec3f *Vec3f::substractAssign(Vec3f *, Vec3f *)
 0059E6E0 float *Vec3f::sub_59E6E0(float *)
+0044E7B0 Vec3f *Vec3f::sumVec3f(Vec3f *, Vec3f *)
+0041C500 float *Vec3f::sub_41C500(float *)
+0041C580 int Mat3x3f::init_rotationMat(int, float)
+0059E700 float *__cdecl sub_59E700(float *, float, float, int, int)
+0059EC90 int __cdecl sub_59EC90(float *, float, float, int, int)
 
 # RenderData transform wrappers
 0058AC20 int *applyIndxs_sub_58AC20()
@@ -138,6 +143,7 @@
 # functions
 005278C0 int cmd_Game()
 00528080 int __cdecl cmd_dumpPlayer(int, int)
+00553690 int __cdecl widthToFontId(int, int)
 0052BB30 void createPanelButtons(CWindow *, CButton *, ButtonCfg *, CDefaultPlayerInterface *)
 005391F0 void __cdecl changeGui(int, int, CFrontEndComponent *)
 00543840 int __cdecl __onMapSelected(CButton *, int, CFrontEndComponent *)
@@ -153,6 +159,7 @@
 00574310 void __cdecl textureCache_init(float, float, const char *, int)
 00575780 bool __cdecl engine_drawScene(char)
 0057BF00 float *Obj57BCB0::sub_57BF00(float *, float *, float *)
+0057C190 float *Obj57BCB0::sub_57C190(float *, float *, float *)
 0057CEB0 void *__cdecl MyHeap_alloc(int)
 0057D0B0 void __cdecl MyHeap_free(void *)
 005899F0 void __cdecl static_MyDirectDraw_triangles_init(MyDirectDraw *)

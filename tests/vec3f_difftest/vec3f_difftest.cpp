@@ -60,6 +60,30 @@ int main() {
           assert(ret == &rr.x && bitEq(tt.x,e.x) && bitEq(tt.y,e.y) && bitEq(tt.z,e.z)); }
         { Vec3f tt = t, e; refAdd(&t, &e, &t); tt.sub_59E6E0(&tt.x);
           assert(bitEq(tt.x,e.x) && bitEq(tt.y,e.y) && bitEq(tt.z,e.z)); }
+        // 0041C500 normalize: dot = (y*y + z*z) + x*x, inv = 1/sqrt
+        { Vec3f tt = t, o{9,9,9};
+          float dot = (tt.y*tt.y + tt.z*tt.z) + tt.x*tt.x;
+          float inv = 1.0f / sqrtf(dot);
+          Vec3f e{tt.x*inv, tt.y*inv, tt.z*inv};
+          float *ret = tt.sub_41C500(&o.x);
+          assert(ret == &o.x && bitEq(o.x,e.x) && bitEq(o.y,e.y) && bitEq(o.z,e.z)); }
+        { Vec3f tt = t;
+          float dot = (tt.y*tt.y + tt.z*tt.z) + tt.x*tt.x;
+          float inv = 1.0f / sqrtf(dot);
+          Vec3f e{tt.x*inv, tt.y*inv, tt.z*inv};
+          tt.sub_41C500(&tt.x);  // output == this
+          assert(bitEq(tt.x,e.x) && bitEq(tt.y,e.y) && bitEq(tt.z,e.z)); }
+        // 0059E700 / 0059EC90 axis adders, all four flag combos
+        for (int fa = 0; fa < 2; ++fa) for (int fb = 0; fb < 2; ++fb) {
+            Vec3f v1 = t, e1 = t;
+            if (fa != fb) { e1.y += fa ? -a : a; e1.z += b; }
+            float *ret = dk2::sub_59E700(&v1.x, a, b, fa, fb);
+            assert(ret == &v1.x && bitEq(v1.x,e1.x) && bitEq(v1.y,e1.y) && bitEq(v1.z,e1.z));
+            Vec3f v2 = t, e2 = t;
+            if (fa != fb) { e2.x += fa ? -a : a; e2.z += b; }
+            dk2::sub_59EC90(&v2.x, a, b, fa, fb);
+            assert(bitEq(v2.x,e2.x) && bitEq(v2.y,e2.y) && bitEq(v2.z,e2.z));
+        }
         n++;
     }
     // Vec3f is 12 bytes; a heap allocation of exactly 12 bytes catches a
