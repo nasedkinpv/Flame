@@ -99,6 +99,17 @@ FakeSurface::FakeSurface(DDSURFACEDESC2 *desc) {
         descCpy.ddpfPixelFormat.dwRGBAlphaBitMask = 0;
     }
     if ((dwFlags & 0x40) != 0 || (descCpy.ddsCaps.dwCaps & 0x20000) != 0) gog_assert_failed("FakeSurface::FakeSurface:437");
+    if (!descCpy.dwWidth || !descCpy.dwHeight) {
+        // exit-to-menu recreates offscreen surfaces while the display mode is
+        // torn down and the desc arrives without dimensions; accept implicit
+        // dimensions like the primary-surface path does
+        gog_debugf("FakeSurface: implicit dims %ux%u -> %ux%u (caps 0x%x)",
+                   descCpy.dwWidth, descCpy.dwHeight,
+                   gog::g_dwWidth, gog::g_dwHeight, descCpy.ddsCaps.dwCaps);
+        if (!descCpy.dwWidth) descCpy.dwWidth = gog::g_dwWidth;
+        if (!descCpy.dwHeight) descCpy.dwHeight = gog::g_dwHeight;
+        descCpy.dwFlags |= DDSD_WIDTH | DDSD_HEIGHT;
+    }
     memcpy(&this->f8_surfDesc, &descCpy, sizeof(this->f8_surfDesc));
     if (!this->f8_surfDesc.dwWidth) gog_assert_failed("FakeSurface::FakeSurface:441");
     if (!this->f8_surfDesc.dwHeight) gog_assert_failed("FakeSurface::FakeSurface:442");
