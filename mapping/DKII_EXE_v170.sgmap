@@ -61966,8 +61966,6 @@ global: va=0059E700,name=sub_59E700,size=80
     arg: kind=float,size=4
     arg: kind=int,size=4,signed=True
     arg: kind=int,size=4,signed=True
-    arg: kind=ptr
-      type: kind=int,size=4,signed=True
 global: va=0059E750,name=ProceduralMesh_cpp_59E750,size=1329
   type: kind=function,declspec=cdecl
     ret: kind=int,size=4,signed=True
