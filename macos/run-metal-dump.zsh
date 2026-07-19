@@ -32,7 +32,10 @@ fail() {
 /bin/mkdir -p "${BRIDGE_FILE:h}"
 
 print -- "texture dump -> ${DUMP_DIR}"
+FS_ARG=()
+[[ "${DK2_FULLSCREEN:-1}" == 1 ]] && FS_ARG=(--fullscreen)
 exec open -W -n "${APP}" --args \
+  "${FS_ARG[@]}" \
   "--bridge-file=${BRIDGE_FILE}" \
   "--game-runner=${RUNNER}" \
   "--runner-env=DK2_LEVEL=${LEVEL}" \

@@ -367,6 +367,7 @@ std::atomic<uint64_t> gBridgeFramesRendered{0};
 uint64_t gSelfTestFrames = 0;
 NSString *gBridgePath = nil;
 NSString *gGameRunnerPath = nil;
+bool gStartFullscreen = false;
 bool gBridgeRequired = false;
 std::atomic<DK2MFileHeader *> gInputHeader{nullptr};
 
@@ -1958,6 +1959,10 @@ static void *renderWorker(void *context) {
     _renderer = [[DK2MetalRenderer alloc] initWithLayer:layer];
     [_view publishCurrentInput];
     [_renderer start];
+    if (gStartFullscreen && !(_window.styleMask & NSWindowStyleMaskFullScreen)) {
+        // native fullscreen space - this is what engages macOS Game Mode
+        [_window toggleFullScreen:nil];
+    }
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
@@ -2015,6 +2020,8 @@ int main(int argc, const char *argv[]) {
                 gBridgePath = [argument substringFromIndex:14];
             } else if ([argument isEqualToString:@"--bridge-self-test"]) {
                 gBridgeRequired = true;
+            } else if ([argument isEqualToString:@"--fullscreen"]) {
+                gStartFullscreen = true;
             } else if ([argument hasPrefix:@"--game-runner="]) {
                 gGameRunnerPath = [argument substringFromIndex:14];
             } else if ([argument hasPrefix:@"--runner-env="]) {
