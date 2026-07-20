@@ -127,6 +127,21 @@ public:
         for (DWORD stage = 0; stage < 3; ++stage) {
             if (boundTextures_[stage]) emitTexture(stage, boundTextures_[stage]);
         }
+        // Mesh commands staged during the game's prepare phase (sceneEmit runs
+        // before BeginScene, i.e. between frames) flush into the frame head:
+        // they draw first, and z-testing orders them against later draws.
+        if (!stagedMesh_.empty()) {
+            for (uint32_t id : stagedMeshTextures_) emitTexture(0, id);
+            if (used_ + stagedMesh_.size() <= DK2M_SLOT_CAPACITY) {
+                append(stagedMesh_.data(), static_cast<uint32_t>(stagedMesh_.size()));
+                commandCount_ += stagedMeshCommandCount_;
+            }
+            stagedMesh_.clear();
+            stagedMeshTextures_.clear();
+            stagedMeshCommandCount_ = 0;
+            stagedCamera_ = false;
+            stagedLights_ = false;
+        }
         for (const auto &entry : renderStates_) emitRenderState(entry.first, entry.second);
         for (const auto &entry : textureStageStates_) {
             emitTextureStageState(static_cast<DWORD>(entry.first >> 32),
@@ -1381,23 +1396,33 @@ public:
         return true;
     }
 
+    void stageBytes(const void *data, uint32_t size) {
+        const auto *bytes = static_cast<const uint8_t *>(data);
+        stagedMesh_.insert(stagedMesh_.end(), bytes, bytes + size);
+    }
+
     void cameraSet(const float viewProj[16]) {
-        if (!active_ || used_ + sizeof(DK2MCameraSetCommand) > DK2M_SLOT_CAPACITY) return;
         DK2MCameraSetCommand command = {};
         command.header.type = DK2M_COMMAND_CAMERA_SET;
         command.header.size = sizeof(command);
         std::memcpy(command.view_proj, viewProj, sizeof(command.view_proj));
+        if (!active_) {
+            if (stagedCamera_) return;
+            stagedCamera_ = true;
+            stageBytes(&command, sizeof(command));
+            ++stagedMeshCommandCount_;
+            return;
+        }
+        if (used_ + sizeof(command) > DK2M_SLOT_CAPACITY) return;
         append(&command, sizeof(command));
         ++commandCount_;
     }
 
     void lightsSet(const void *lights, uint32_t lightCount, float ambientR,
                    float ambientG, float ambientB, const float falloffLut[256]) {
-        if (!active_) return;
         const uint32_t lutBytes = 256u * sizeof(float);
         const uint32_t lightBytes = lightCount * static_cast<uint32_t>(sizeof(DK2MLight));
         const uint32_t size = static_cast<uint32_t>(sizeof(DK2MLightsSetCommand)) + lutBytes + lightBytes;
-        if (used_ + size > DK2M_SLOT_CAPACITY) return;
         DK2MLightsSetCommand command = {};
         command.header.type = DK2M_COMMAND_LIGHTS_SET;
         command.header.size = size;
@@ -1405,23 +1430,35 @@ public:
         command.ambient_r = ambientR;
         command.ambient_g = ambientG;
         command.ambient_b = ambientB;
+        if (!active_) {
+            if (stagedLights_) return;
+            stagedLights_ = true;
+            stageBytes(&command, sizeof(command));
+            stageBytes(falloffLut, lutBytes);
+            if (lightBytes) stageBytes(lights, lightBytes);
+            ++stagedMeshCommandCount_;
+            return;
+        }
+        if (used_ + size > DK2M_SLOT_CAPACITY) return;
         append(&command, sizeof(command));
         append(falloffLut, lutBytes);
         if (lightBytes) append(lights, lightBytes);
         ++commandCount_;
     }
 
+    void frameSize(uint32_t *width, uint32_t *height) const {
+        if (width) *width = width_;
+        if (height) *height = height_;
+    }
+
     void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCount,
                         const uint16_t *indices, uint32_t indexCount, uint32_t tint,
                         uint32_t flags, float ambientR, float ambientG, float ambientB) {
-        if (!active_ || !vertices || !vertexCount || !indices || !indexCount) return;
+        if (!vertices || !vertexCount || !indices || !indexCount) return;
         const uint32_t vertexBytes = vertexCount * static_cast<uint32_t>(sizeof(DK2MMeshVertex));
         const uint32_t indexBytes = (indexCount * 2u + 3u) & ~3u;
         const uint32_t size = static_cast<uint32_t>(sizeof(DK2MDrawMeshInlineCommand)) +
                               vertexBytes + indexBytes;
-        if (used_ + size > DK2M_SLOT_CAPACITY) return;
-        if (textureId) emitTexture(0, textureId);
-        if (used_ + size > DK2M_SLOT_CAPACITY) return;
         DK2MDrawMeshInlineCommand command = {};
         command.header.type = DK2M_COMMAND_DRAW_MESH_INLINE;
         command.header.size = size;
@@ -1433,13 +1470,26 @@ public:
         command.ambient_r = ambientR;
         command.ambient_g = ambientG;
         command.ambient_b = ambientB;
+        const uint16_t zeroPad = 0;
+        const uint32_t padBytes = indexBytes - indexCount * 2u;
+        if (!active_) {
+            // Staged during prepare (sceneEmit runs between frames); flushed
+            // into the next frame's head by begin().
+            stageBytes(&command, sizeof(command));
+            stageBytes(vertices, vertexBytes);
+            stageBytes(indices, indexCount * 2u);
+            if (padBytes) stageBytes(&zeroPad, padBytes);
+            if (textureId) stagedMeshTextures_.push_back(textureId);
+            ++stagedMeshCommandCount_;
+            return;
+        }
+        if (used_ + size > DK2M_SLOT_CAPACITY) return;
+        if (textureId) emitTexture(0, textureId);
+        if (used_ + size > DK2M_SLOT_CAPACITY) return;
         append(&command, sizeof(command));
         append(vertices, vertexBytes);
         append(indices, indexCount * 2u);
-        if (indexBytes != indexCount * 2u) {
-            const uint16_t zero = 0;
-            append(&zero, indexBytes - indexCount * 2u);
-        }
+        if (padBytes) append(&zeroPad, padBytes);
         ++commandCount_;
     }
 
@@ -1539,6 +1589,12 @@ private:
     };
     std::unordered_map<uint32_t, MeshState> meshes_;
     uint32_t meshConsumerSession_ = 0;
+    // mesh commands issued between frames (game prepare phase), flushed by begin()
+    std::vector<uint8_t> stagedMesh_;
+    std::vector<uint32_t> stagedMeshTextures_;
+    uint32_t stagedMeshCommandCount_ = 0;
+    bool stagedCamera_ = false;
+    bool stagedLights_ = false;
     std::unordered_map<uint32_t, TextureCache> textures_;
     std::unordered_map<uintptr_t, uint32_t> surfaceTextures_;
     std::unordered_map<uint32_t, uint32_t> renderStates_;
@@ -1680,6 +1736,8 @@ void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCou
     producer.drawMeshInline(textureId, vertices, vertexCount, indices, indexCount,
                             tint, flags, ambientR, ambientG, ambientB);
 }
+
+void frameSize(uint32_t *width, uint32_t *height) { producer.frameSize(width, height); }
 
 void setGameTickTiming(uint32_t tickMicroseconds) {
     producer.gameTickTiming(tickMicroseconds);

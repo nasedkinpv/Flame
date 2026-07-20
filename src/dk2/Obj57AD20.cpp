@@ -1,17 +1,34 @@
 #include "dk2/Obj57AD20.h"
 
+#include "dk2/CEngineDDSurface.h"
+#include "dk2/MyCESurfHandle.h"
 #include "dk2/MyScaledSurface.h"
 #include "dk2/Obj57BCB0.h"
 #include "dk2/Obj58EF60.h"
 #include "dk2/SceneObject2E.h"
 #include "dk2/Uv2f.h"
+#include "dk2/utils/Mat3x3f.h"
 #include "dk2/utils/Vec3f.h"
 #include "dk2_functions.h"
 #include "dk2_globals.h"
+#include <fake/FakeTexture.h>
+#include <metal_bridge/DK2BridgeProtocol.h>
+#include <metal_bridge/MetalBridgeProducer.h>
+#include <tools/flame_config.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <emmintrin.h>
+#include <vector>
+
+// Reroutes the translated deformed-mesh emitter (sub_57B6D0) to the Metal
+// bridge's world-space mesh pipeline: the GPU does projection and per-vertex
+// point-light accumulation instead of the original per-vertex CPU loop.
+flame_config::define_flame_option<bool> o_gog_meshGpuPath(
+    "gog:MeshGpuPath", flame_config::OG_Config,
+    "Emit dynamic meshes through the Metal world-space pipeline (GPU transform + lighting)",
+    false
+);
 
 
 namespace {
@@ -84,6 +101,168 @@ void emitVertex(RenderFun fun, uint32_t index, dk2::Vec3f *vectors, dk2::Uv2f *u
     } else {
         fun(index, vectors, uvs);
     }
+}
+
+// --- GPU mesh path helpers (metal bridge protocol v9) ---
+
+struct SceneLightForGpu {   // mirrors Obj57BCB0.cpp's SceneLight view
+    uint32_t unused;
+    uint32_t flags;
+    dk2::Vec3f position;
+    dk2::Vec3f color;
+    float queryRadius;
+    float distanceSquaredLimit;
+    float attenuationScale;
+    uint8_t padding[8];
+    float facingScale;
+};
+
+bool meshGpuActive() {
+    return *o_gog_meshGpuPath && gog::metal_bridge::isEnabled();
+}
+
+// The colour floats the engine carries per vertex/ambient are stored in the
+// float-bias encoding (value = bias1 + bias2 + n); the CPU path recovers n
+// via mantissa extraction in colourComponent. Recover it explicitly here.
+float debiasColour(float value) {
+    const float firstBias = *reinterpret_cast<const float *>(0x0066FE78);
+    const float secondBias = *reinterpret_cast<const float *>(0x0066FE8C);
+    return value - firstBias - secondBias;
+}
+
+uint32_t packBaseColor(const dk2::Vec3f &colour) {
+    auto clampByte = [](float v) -> uint32_t {
+        const float d = debiasColour(v);
+        return d <= 0.0f ? 0u : (d >= 255.0f ? 255u : static_cast<uint32_t>(d));
+    };
+    return (clampByte(colour.x) << 16) | (clampByte(colour.y) << 8) | clampByte(colour.z);
+}
+
+// viewProj = P * [M|T] assembled from the same globals RenderData_addToArr
+// projects with: screen_x = Ax*F/z*x + Cx, screen_y = Ay*F/z*y + Cy, near
+// depth = zAdd3 - zMul3*F/z, view = g_mat_77F3A8 * v + g_vec_77F4C0.
+void emitMeshCamera() {
+    uint32_t w = 0, h = 0;
+    gog::metal_bridge::frameSize(&w, &h);
+    if (!w || !h) return;
+    const float F = *reinterpret_cast<const float *>(0x0066FE44);
+    const float Ax = *reinterpret_cast<const float *>(0x0077F4CC);
+    const float Cx = *reinterpret_cast<const float *>(0x0077F4F0);
+    const float Ay = *reinterpret_cast<const float *>(0x0078093C);
+    const float Cy = *reinterpret_cast<const float *>(0x0077F930);
+    const float zAdd3 = dk2::g_zAdd3_7793A0;
+    const float zMul3 = dk2::g_zMul3_77F934;
+    const auto &M = dk2::g_mat_77F3A8;
+    const auto &T = dk2::g_vec_77F4C0;
+    const float sx = 2.0f * Ax * F / static_cast<float>(w);
+    const float ox = 2.0f * Cx / static_cast<float>(w) - 1.0f;
+    const float sy = -2.0f * Ay * F / static_cast<float>(h);
+    const float oy = 1.0f - 2.0f * Cy / static_cast<float>(h);
+    float R[4][4] = {};
+    for (int c = 0; c < 3; ++c) {
+        R[0][c] = sx * M.m[0][c] + ox * M.m[2][c];
+        R[1][c] = sy * M.m[1][c] + oy * M.m[2][c];
+        R[2][c] = zAdd3 * M.m[2][c];
+        R[3][c] = M.m[2][c];
+    }
+    R[0][3] = sx * T.x + ox * T.z;
+    R[1][3] = sy * T.y + oy * T.z;
+    R[2][3] = zAdd3 * T.z - zMul3 * F;
+    R[3][3] = T.z;
+    float columnMajor[16];
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            columnMajor[c * 4 + r] = R[r][c];
+    gog::metal_bridge::cameraSet(columnMajor);
+}
+
+void emitFrameLights(uint32_t *lightData) {
+    const auto *lut = reinterpret_cast<const float *>(0x007818A0);
+    if (!lightData) {
+        gog::metal_bridge::lightsSet(nullptr, 0, 0.0f, 0.0f, 0.0f, lut);
+        return;
+    }
+    const int32_t total = static_cast<int32_t>(lightData[0]) + static_cast<int32_t>(lightData[1]);
+    static std::vector<DK2MLight> scratch;
+    scratch.clear();
+    const auto lights = reinterpret_cast<const SceneLightForGpu *const *>(
+            reinterpret_cast<const uint8_t *>(lightData) + 0x38);
+    for (int32_t i = 0; i < total; ++i) {
+        const SceneLightForGpu &s = *lights[i];
+        DK2MLight light = {};
+        light.px = s.position.x;
+        light.py = s.position.y;
+        light.pz = s.position.z;
+        light.r = s.color.x / 255.0f;
+        light.g = s.color.y / 255.0f;
+        light.b = s.color.z / 255.0f;
+        light.dist_sq_limit = s.distanceSquaredLimit;
+        light.atten_scale = s.attenuationScale;
+        light.facing_scale = s.facingScale;
+        scratch.push_back(light);
+    }
+    gog::metal_bridge::lightsSet(scratch.data(), static_cast<uint32_t>(scratch.size()),
+                                 0.0f, 0.0f, 0.0f, lut);
+}
+
+uint32_t resolveBridgeTextureId(dk2::MyScaledSurface *surface) {
+    if (!surface || !surface->surfh || !surface->surfh->cesurf) return 0;
+    auto *dd = reinterpret_cast<dk2::CEngineDDSurface *>(surface->surfh->cesurf);
+    auto *fake = reinterpret_cast<gog::FakeTexture *>(dd->devTex);
+    if (!fake) return 0;
+    // register/refresh the pixels with the producer without disturbing draw
+    // state: setTexture also captures the surface into the texture cache
+    gog::metal_bridge::setTexture(0, fake->bridgeId(), fake->bridgeSurface());
+    return fake->bridgeId();
+}
+
+// Emit one MeshEntry through the bridge's inline world-space path. The UV
+// stage-0 scale/offset tables were just written by __renderFun_setSceneObject2E
+// for this very scene object, so reading them here matches writeVertex1C.
+bool drawEntryOnGpu(MeshEntry &entry, dk2::MyScaledSurface *surface,
+                    const dk2::Vec3f &ambient, uint32_t *lightData) {
+    if (!entry.triangleCount || !entry.vertices || !entry.triangleIndices) return false;
+    const uint32_t indexCount = static_cast<uint32_t>(entry.triangleCount) * 3u;
+    uint32_t maxIndex = 0;
+    for (uint32_t i = 0; i < indexCount; ++i) {
+        if (entry.triangleIndices[i] > maxIndex) maxIndex = entry.triangleIndices[i];
+    }
+    const uint32_t vertexCount = maxIndex + 1;
+    static std::vector<DK2MMeshVertex> vertices;
+    static std::vector<uint16_t> indices;
+    vertices.resize(vertexCount);
+    indices.resize(indexCount);
+    for (uint32_t i = 0; i < indexCount; ++i) indices[i] = entry.triangleIndices[i];
+    const float uvScale = *reinterpret_cast<const float *>(0x0066FB58);
+    const float uS = *reinterpret_cast<const float *>(0x00779368);
+    const float vS = *reinterpret_cast<const float *>(0x0076F340);
+    const float uO = *reinterpret_cast<const float *>(0x0077F480);
+    const float vO = *reinterpret_cast<const float *>(0x0077F3D8);
+    for (uint32_t v = 0; v < vertexCount; ++v) {
+        const MeshVertex &src = entry.vertices[v];
+        DK2MMeshVertex &dst = vertices[v];
+        dst.px = src.position.x;
+        dst.py = src.position.y;
+        dst.pz = src.position.z;
+        dst.nx = src.normal.x;
+        dst.ny = src.normal.y;
+        dst.nz = src.normal.z;
+        dst.u = uS * (static_cast<float>(src.packedUv & 0xFFFF) * uvScale) + uO;
+        dst.v = vS * (static_cast<float>(src.packedUv >> 16) * uvScale) + vO;
+        dst.base_color = packBaseColor(src.color);
+    }
+    const uint32_t alphaTerm = *reinterpret_cast<const uint32_t *>(0x00779380);
+    const uint32_t tint = (alphaTerm & 0xFF000000u) | 0x00FFFFFFu;
+    const uint32_t textureId = resolveBridgeTextureId(surface);
+    emitMeshCamera();
+    emitFrameLights(lightData);
+    gog::metal_bridge::drawMeshInline(
+        textureId, vertices.data(), vertexCount, indices.data(), indexCount, tint,
+        DK2M_DRAW_MESH_LIT,
+        debiasColour(ambient.x) / 255.0f,
+        debiasColour(ambient.y) / 255.0f,
+        debiasColour(ambient.z) / 255.0f);
+    return true;
 }
 
 void processVertex(
@@ -316,6 +495,11 @@ int *dk2::Obj57AD20::sub_57B6D0(
             vec_14.x + g_vec_760A98.x + surface->vec.x,
             vec_14.y + g_vec_760A98.y + surface->vec.y,
             vec_14.z + g_vec_760A98.z + surface->vec.z};
+
+    if (meshGpuActive() && drawEntryOnGpu(entry, surface, ambient, lightData)) {
+        return applyIndxs_sub_58AC20();
+    }
+
     Obj57BCB0 lights;
     lights.count = 0;
     lights.constructor(lightData, f2C);

@@ -67,6 +67,8 @@ void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12],
 void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCount,
                     const uint16_t *indices, uint32_t indexCount, uint32_t tint,
                     uint32_t flags, float ambientR, float ambientG, float ambientB);
+// Last begun frame's dimensions (stable during the game's prepare phase).
+void frameSize(uint32_t *width, uint32_t *height);
 
 }
 
