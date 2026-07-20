@@ -212,22 +212,39 @@ HRESULT FakeDevice3::EnumTextureFormats(LPD3DENUMPIXELFORMATSCALLBACK cb, LPVOID
     pixFormat.dwGBitMask = 0xFF00;
     pixFormat.dwRBitMask = 0xFF0000;
     pixFormat.dwRGBAlphaBitMask = 0xFF000000;
-    if (cb(&pixFormat, a3) != 1)
-        return 0;
-    // D3DFMT_V8U8 (DDPF_BUMPDUDV): without this, DK2's bump-format probe in
-    // MyDirectDraw_init never finds a 16bpp bump pixel format, so it never
-    // creates a bump texture at all - EnableBumpMapping's water/lava stage
-    // silently ends up with no texture bound (always the shared white
-    // fallback) instead of failing loudly. MetalBridgeProducer::copyTexture
-    // already decodes this exact layout (dwRBitMask=Du, dwGBitMask=Dv).
+    // NOTE: this call's return value must NOT gate the bump formats below -
+    // the game's enumeration callback returns 1 (its "accept"/stop signal)
+    // for this 32bpp ARGB colour format almost every time, so checking it
+    // here (as an earlier version of this patch mistakenly did) means the
+    // function returns before ever advertising a bump format at all.
+    cb(&pixFormat, a3);
+    // DK2's bump-format probe (MyDirectDraw_init, MyDirectDraw.cpp) only
+    // looks at 16bpp DDPF_BUMPDUDV[|BUMPLUMINANCE] formats; without one
+    // advertised here it never creates a bump texture, so EnableBumpMapping's
+    // water/lava stage silently ends up with no texture bound (always the
+    // shared white fallback) instead of failing loudly. Whether the
+    // luminance variant is required depends on EnableBumpLuminance (probed
+    // as a device flag at enumeration time, not visible to us here), so
+    // advertise both; MetalBridgeProducer::copyTexture's 16bpp decode
+    // already handles either layout via the dwFlags/masks it's given.
+    // D3DFMT_L6V5U5 (DDPF_BUMPDUDV | DDPF_BUMPLUMINANCE): 5-bit U, 5-bit V,
+    // 6-bit L.
     pixFormat.dwSize = sizeof(DDPIXELFORMAT);
-    pixFormat.dwFlags = 0x00080000;  // DDPF_BUMPDUDV
+    pixFormat.dwFlags = 0x000C0000;  // DDPF_BUMPDUDV | DDPF_BUMPLUMINANCE
     pixFormat.dwFourCC = 0;
     pixFormat.dwRGBBitCount = 16;    // union: dwBumpBitCount
-    pixFormat.dwRBitMask = 0x00FF;   // union: dwBumpDuBitMask
-    pixFormat.dwGBitMask = 0xFF00;   // union: dwBumpDvBitMask
-    pixFormat.dwBBitMask = 0;        // union: dwBumpLuminanceBitMask (none)
+    pixFormat.dwRBitMask = 0x001F;   // union: dwBumpDuBitMask
+    pixFormat.dwGBitMask = 0x03E0;   // union: dwBumpDvBitMask
+    pixFormat.dwBBitMask = 0xFC00;   // union: dwBumpLuminanceBitMask
     pixFormat.dwRGBAlphaBitMask = 0;
+    cb(&pixFormat, a3);
+    // D3DFMT_V8U8 (DDPF_BUMPDUDV only): 8-bit U, 8-bit V, no luminance.
+    pixFormat.dwSize = sizeof(DDPIXELFORMAT);
+    pixFormat.dwFlags = 0x00080000;  // DDPF_BUMPDUDV
+    pixFormat.dwRGBBitCount = 16;
+    pixFormat.dwRBitMask = 0x00FF;
+    pixFormat.dwGBitMask = 0xFF00;
+    pixFormat.dwBBitMask = 0;
     cb(&pixFormat, a3);
     return 0;
 }
