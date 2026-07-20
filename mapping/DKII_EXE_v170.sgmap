@@ -21233,7 +21233,7 @@ struct: id=constructor_0055DF40,path=dk2/settings,name=NetworkCfg,size=1570
       type: kind=int,size=1,signed=True,winapi=char
   field: name=f61E__eos
     type: kind=int,size=4,signed=True
-struct: id=call_new_00571B3B,name=NewObj571B3B,size=204
+struct: id=call_new_00571B3B,name=NewObj571B3B,size=352
   field: name=f0_a2
     type: kind=int,size=2,signed=True
   field: name=f2_a3
@@ -21286,6 +21286,11 @@ struct: id=call_new_00571B3B,name=NewObj571B3B,size=204
     type: kind=int,size=4,signed=True
   field: name=field_C8
     type: kind=int,size=4,signed=True
+  field: name=gap_CC
+    type: kind=array,count=144
+      type: kind=int,size=1
+  field: name=f15C_sceneScale
+    type: kind=float,size=4
 struct: id=constructor_00402AF0,name=Obj402AF0,size=112
   field: name=f0_vec1
     type: kind=struct,id=vecf_xyz
@@ -58110,10 +58115,9 @@ global: va=00572CD0,name=constructor,size=25,member_of=vecf_xyz
     arg: kind=float,size=4
     arg: kind=float,size=4
     arg: kind=float,size=4
-global: va=00572CF0,name=sub_572CF0,size=267
+global: va=00572CF0,name=emitSceneCellPrimitives,size=267
   type: kind=function,declspec=stdcall
-    ret: kind=ptr
-      type: kind=int,size=4
+    ret: kind=void
 global: va=00572E00,name=sub_572E00,size=343
   type: kind=function,declspec=cdecl
     ret: kind=void
@@ -85441,6 +85445,8 @@ global: va=00760B18,name=g_vec_760B18,size=12
   type: kind=struct,id=vecf_xyz
 global: va=00760B28,name=g_vec_760B28,size=12
   type: kind=struct,id=vecf_xyz
+global: va=00760B34,name=g_rebuildSceneCellLists,size=4
+  type: kind=int,size=4,signed=True
 global: va=00760B38,name=g_vec_760B38,size=12
   type: kind=struct,id=vecf_xyz
 global: va=00760B44,name=g_sc_renderHeight,size=4

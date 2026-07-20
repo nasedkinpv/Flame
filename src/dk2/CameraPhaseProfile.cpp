@@ -23,7 +23,7 @@ enum CameraPhase : uint32_t {
     BuildVisibleB,
     CreateMeshes,
     FinishLists,
-    Cleanup,
+    EmitSceneCells,
     PhaseCount,
 };
 
@@ -46,11 +46,11 @@ struct CameraPhaseProfile {
         patch::log::dbg(
                 "PERF camera avg us: generate=%llu state=%llu zarrays=%llu "
                 "projection=%llu visibleA=%llu visibleB=%llu meshes=%llu "
-                "finish=%llu cleanup=%llu",
+                "finish=%llu sceneEmit=%llu",
                 averageUs(Generate), averageUs(CameraState), averageUs(ZArrays),
                 averageUs(Projection), averageUs(BuildVisibleA),
                 averageUs(BuildVisibleB), averageUs(CreateMeshes),
-                averageUs(FinishLists), averageUs(Cleanup));
+                averageUs(FinishLists), averageUs(EmitSceneCells));
         *this = {};
     }
 };
@@ -175,13 +175,11 @@ int __cdecl profileFinishLists() {
     return measure<int>(FinishLists, reinterpret_cast<Function>(0x00576230));
 }
 
-uint32_t *__cdecl profileCleanup() {
-    using Function = uint32_t *(__cdecl *)();
-    uint32_t *result = measure<uint32_t *>(
-            Cleanup, reinterpret_cast<Function>(0x00572CF0));
+void __stdcall profileSceneEmission() {
+    using Function = void (__stdcall *)();
+    measureVoid(EmitSceneCells, reinterpret_cast<Function>(0x00572CF0));
     if (g_profile.frames == 299) g_primitiveProfile.finish(300);
     g_profile.finishFrame();
-    return result;
 }
 
 struct CallPatch {
@@ -270,7 +268,7 @@ bool dk2::installCameraPhaseProfiler() {
             {0x00575D05, 0x00576230,
              reinterpret_cast<uintptr_t>(&profileFinishLists), "finish"},
             {0x00575D0A, 0x00572CF0,
-             reinterpret_cast<uintptr_t>(&profileCleanup), "cleanup"},
+             reinterpret_cast<uintptr_t>(&profileSceneEmission), "scene emission"},
     };
     for (const CallPatch &patch : patches) {
         if (!patchCall(patch)) return false;
