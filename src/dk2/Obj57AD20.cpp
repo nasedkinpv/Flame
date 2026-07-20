@@ -325,11 +325,23 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
                 void *pixels = base->v_lockBuf();
                 if (pixels) {
                     ++g_resolveStats.rawHit;
+                    // lineWidth is zero on plain CPU pages - fall back to a
+                    // tight row stride
+                    const uint32_t stridePixels = base->lineWidth > base->width
+                        ? static_cast<uint32_t>(base->lineWidth)
+                        : static_cast<uint32_t>(base->width);
+                    static bool loggedPage = false;
+                    if (!loggedPage) {
+                        loggedPage = true;
+                        patch::log::dbg("mesh page: w=%d h=%d lineWidth=%d bpp=%u",
+                                        base->width, base->height, base->lineWidth,
+                                        bytesPerPixel);
+                    }
                     const uint32_t id = gog::metal_bridge::ensureBufferTexture(
                         base, pixels,
                         static_cast<uint32_t>(base->width),
                         static_cast<uint32_t>(base->height),
-                        static_cast<uint32_t>(base->lineWidth) * 4u);
+                        stridePixels * 4u);
                     base->v_unlockBuf(reinterpret_cast<int>(pixels));
                     if (id) {
                         *bridgeIdOut = id;
