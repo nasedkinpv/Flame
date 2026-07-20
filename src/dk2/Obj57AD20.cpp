@@ -2,6 +2,7 @@
 
 #include "dk2/CEngineDDSurface.h"
 #include "dk2/CEngineSurfaceBase.h"
+#include "dk2/SurfaceHolder.h"
 #include "dk2/MyCESurfHandle.h"
 #include "dk2/MyCESurfScale.h"
 #include "dk2/MyScaledSurface.h"
@@ -299,6 +300,28 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
         if (!candidateCount) ++g_resolveStats.noCandidates;
         for (int i = 0; i < candidateCount; ++i) {
             dk2::MyCESurfHandle *handle = candidates[i];
+            // The actual GPU texture is the HOLDER page the handle was packed
+            // into (paint() blends the handle's CPU rect into holder->surf,
+            // and the stage-0 UV tables map into holder space) - the 128x128
+            // DD-backed atlas pages. Prefer it over the handle's own cesurf.
+            if (handle->holder_parent && handle->holder_parent->surf) {
+                auto *page = reinterpret_cast<dk2::CEngineDDSurface *>(
+                        handle->holder_parent->surf);
+                auto *pageTex = reinterpret_cast<gog::FakeTexture *>(page->devTex);
+                if (pageTex && isOurFakeTexture(pageTex)) {
+                    ++g_resolveStats.fakeHit;
+                    *bridgeIdOut = pageTex->bridgeId();
+                    *bridgeSurfaceOut = pageTex->bridgeSurface();
+                    return 1;
+                }
+                if (page->surfCreated && page->ddSurf &&
+                    reinterpret_cast<uintptr_t>(page->ddSurf) > 0x10000) {
+                    ++g_resolveStats.rawHit;
+                    *bridgeIdOut = 0;
+                    *bridgeSurfaceOut = page->ddSurf;
+                    return 1;
+                }
+            }
             // the engine creates cesurf lazily at paint time; do the same
             if (!handle->cesurf) handle->create();
             if (!handle->cesurf) { ++g_resolveStats.cesurfNull; continue; }
