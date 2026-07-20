@@ -552,6 +552,23 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     // as alpha), default -> opaque with blending disabled.
     uint32_t meshFlags = DK2M_DRAW_MESH_LIT;
     const uint32_t drawFlags = surface ? surface->drawFlags : 0;
+    // one-shot log of each distinct (drawFlags, flags) pair seen, to map the
+    // real bit layout against the 0x589300 applier
+    {
+        static uint64_t seenPairs[16];
+        static int seenCount = 0;
+        const uint64_t pair = (static_cast<uint64_t>(drawFlags) << 32) |
+                              (surface ? surface->flags : 0u);
+        bool known = false;
+        for (int i = 0; i < seenCount; ++i) {
+            if (seenPairs[i] == pair) { known = true; break; }
+        }
+        if (!known && seenCount < 16) {
+            seenPairs[seenCount++] = pair;
+            patch::log::dbg("mesh flags pair: drawFlags=%08X flags=%08X",
+                            drawFlags, surface ? surface->flags : 0u);
+        }
+    }
     if (drawFlags & 0x20u) meshFlags |= DK2M_DRAW_MESH_ALPHA_BLEND;
     else if (drawFlags & 0x1u) meshFlags |= DK2M_DRAW_MESH_ADDITIVE;
     else if (drawFlags & 0x1000u) meshFlags |= DK2M_DRAW_MESH_ALPHA_BLEND;
