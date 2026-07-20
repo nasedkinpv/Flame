@@ -2085,6 +2085,34 @@ static void *renderWorker(void *context) {
                         uniform.bumpEnvMat1_11 = bumpEnv[1][3];
                         uniform.bumpEnvLScale1 = bumpEnv[1][4];
                         uniform.bumpEnvLOffset1 = bumpEnv[1][5];
+                        // ponytail: one-shot log of the actual bump-op/matrix a
+                        // draw is using, so a wrong stage or wrong matrix values
+                        // show up as data instead of a guess from a screenshot.
+                        if (uniform.colorOp == 22 || uniform.colorOp == 23 ||
+                            uniform.colorOp1 == 22 || uniform.colorOp1 == 23) {
+                            static bool loggedBumpDraw = false;
+                            if (!loggedBumpDraw) {
+                                loggedBumpDraw = true;
+                                NSLog(@"DIAG bump draw: colorOp0=%u tex0=%u colorOp1=%u tex1=%u "
+                                      "colorOp2=%u alphaOp2=%u colorArg1_2=%u colorArg2_2=%u "
+                                      "alphaArg1_2=%u alphaArg2_2=%u tex2=%u "
+                                      "mat0=(%.3f %.3f %.3f %.3f) mat1=(%.3f %.3f %.3f %.3f) "
+                                      "lscale1=%.3f loffset1=%.3f alphaBlendEnabled=%d "
+                                      "srcBlend=%u destBlend=%u",
+                                      uniform.colorOp, uniform.textureIndex,
+                                      uniform.colorOp1, uniform.textureIndex1,
+                                      uniform.colorOp2, uniform.alphaOp2,
+                                      uniform.colorArg1_2, uniform.colorArg2_2,
+                                      uniform.alphaArg1_2, uniform.alphaArg2_2,
+                                      uniform.textureIndex2,
+                                      uniform.bumpEnvMat0_00, uniform.bumpEnvMat0_01,
+                                      uniform.bumpEnvMat0_10, uniform.bumpEnvMat0_11,
+                                      uniform.bumpEnvMat1_00, uniform.bumpEnvMat1_01,
+                                      uniform.bumpEnvMat1_10, uniform.bumpEnvMat1_11,
+                                      uniform.bumpEnvLScale1, uniform.bumpEnvLOffset1,
+                                      alphaBlendEnabled, sourceBlend, destinationBlend);
+                            }
+                        }
                         const NSUInteger vertexType = draw.fvf == DK2M_FVF_VERTEX1C ? 0 : 1;
                         id<MTLRenderPipelineState> pipeline = _opaquePipelines[vertexType];
                         if (alphaBlendEnabled) {
