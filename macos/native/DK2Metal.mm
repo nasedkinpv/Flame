@@ -1866,28 +1866,27 @@ static void *renderWorker(void *context) {
                 return binding;
             };
             // Stage 0 (unconstrained): reuse an existing binding in any bank,
-            // else allocate in the LEAST-FULL bank with room. Stage 1/2 are
-            // then bank-locked to whatever bank stage 0 picked (see below), so
-            // first-fit here used to pack bank 0 solid (127 textures) almost
-            // immediately, then have every draw whose stage-0 texture already
-            // lived in that now-full bank force stage 1/2 to overflow even
-            // though plenty of total capacity remained in later banks.
-            // Spreading new textures to the emptiest bank keeps headroom in
-            // every bank roughly even, so a draw's stage 1/2 texture is far
-            // more likely to still fit alongside its stage 0 texture.
+            // else allocate in the first bank with room. A texture that does
+            // not fit anywhere falls back to the shared white slot {0, 0}.
+            //
+            // Tried "least-full bank" here once, reasoning it would leave more
+            // headroom for stage 1/2 to land alongside stage 0 in the same
+            // bank. It measurably made things worse: stage 0/1/2 textures for
+            // one draw are bound via separate SET_TEXTURE commands at
+            // different times, and first-fit's tendency to keep filling
+            // "the current bank" until it's full is what accidentally kept
+            // temporally-close textures (i.e. textures actually used together
+            // by the same draws) clustered in the same bank. Spreading new
+            // textures evenly instead scattered them, so stage 1/2 missed
+            // stage 0's bank far more often - binding-overflow went from
+            // ~25k-90k to 30k-220k per window. Reverted.
             auto resolveTextureBinding = [&](uint32_t textureId) -> TextureBinding {
                 const auto found = std::find_if(
                     _frameTextureBindings.begin(), _frameTextureBindings.end(),
                     [&](const TextureBindingEntry &entry) { return entry.textureId == textureId; });
                 if (found != _frameTextureBindings.end()) return found->binding;
-                uint16_t bestBank = 0;
-                NSUInteger bestFree = 0;
                 for (uint16_t bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) {
-                    const NSUInteger free = kTextureBindingsPerArgumentTable - nextSlot[bank];
-                    if (free > bestFree) { bestFree = free; bestBank = bank; }
-                }
-                if (bestFree > 0) {
-                    if (const auto binding = allocateInBank(textureId, bestBank)) return *binding;
+                    if (const auto binding = allocateInBank(textureId, bank)) return *binding;
                 }
                 ++metrics.bindingOverflows;
                 return {0, 0};
