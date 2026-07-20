@@ -11,10 +11,12 @@
 #include "dk2/utils/Vec3f.h"
 #include "dk2_functions.h"
 #include "dk2_globals.h"
+#include "patches/logging.h"
 #include <fake/FakeTexture.h>
 #include <metal_bridge/DK2BridgeProtocol.h>
 #include <metal_bridge/MetalBridgeProducer.h>
 #include <tools/flame_config.h>
+#include <windows.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -218,6 +220,44 @@ uint32_t resolveBridgeTextureId(dk2::MyScaledSurface *surface) {
     return fake->bridgeId();
 }
 
+// SEH-guarded raw copy out of a MeshEntry: not every entry reaching
+// sub_57B6D0 carries the layout this reroute assumes (a level-load crash
+// showed entry.vertices holding float-looking garbage), and a bad pointer
+// must mean "fall back to the CPU path", not a page fault. Plain loops only
+// inside __try - no C++ objects, so no unwinding is needed.
+int copyEntryGuarded(const MeshEntry &entry, uint32_t indexCount,
+                     uint32_t *vertexCountOut,
+                     DK2MMeshVertex *outVertices, uint32_t outCapacity,
+                     uint16_t *outIndices,
+                     float uvScale, float uS, float vS, float uO, float vO) {
+    __try {
+        uint32_t maxIndex = 0;
+        for (uint32_t i = 0; i < indexCount; ++i) {
+            if (entry.triangleIndices[i] > maxIndex) maxIndex = entry.triangleIndices[i];
+            outIndices[i] = entry.triangleIndices[i];
+        }
+        const uint32_t vertexCount = maxIndex + 1;
+        if (vertexCount > outCapacity) return 0;
+        for (uint32_t v = 0; v < vertexCount; ++v) {
+            const MeshVertex &src = entry.vertices[v];
+            DK2MMeshVertex &dst = outVertices[v];
+            dst.px = src.position.x;
+            dst.py = src.position.y;
+            dst.pz = src.position.z;
+            dst.nx = src.normal.x;
+            dst.ny = src.normal.y;
+            dst.nz = src.normal.z;
+            dst.u = uS * (static_cast<float>(src.packedUv & 0xFFFF) * uvScale) + uO;
+            dst.v = vS * (static_cast<float>(src.packedUv >> 16) * uvScale) + vO;
+            dst.base_color = packBaseColor(src.color);
+        }
+        *vertexCountOut = vertexCount;
+        return 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 // Emit one MeshEntry through the bridge's inline world-space path. The UV
 // stage-0 scale/offset tables were just written by __renderFun_setSceneObject2E
 // for this very scene object, so reading them here matches writeVertex1C.
@@ -225,33 +265,25 @@ bool drawEntryOnGpu(MeshEntry &entry, dk2::MyScaledSurface *surface,
                     const dk2::Vec3f &ambient, uint32_t *lightData) {
     if (!entry.triangleCount || !entry.vertices || !entry.triangleIndices) return false;
     const uint32_t indexCount = static_cast<uint32_t>(entry.triangleCount) * 3u;
-    uint32_t maxIndex = 0;
-    for (uint32_t i = 0; i < indexCount; ++i) {
-        if (entry.triangleIndices[i] > maxIndex) maxIndex = entry.triangleIndices[i];
-    }
-    const uint32_t vertexCount = maxIndex + 1;
-    static std::vector<DK2MMeshVertex> vertices;
-    static std::vector<uint16_t> indices;
-    vertices.resize(vertexCount);
-    indices.resize(indexCount);
-    for (uint32_t i = 0; i < indexCount; ++i) indices[i] = entry.triangleIndices[i];
+    // uint8 indices bound both buffers: at most 256 vertices, 255*3 indices
+    static DK2MMeshVertex vertices[256];
+    static uint16_t indices[765];
     const float uvScale = *reinterpret_cast<const float *>(0x0066FB58);
     const float uS = *reinterpret_cast<const float *>(0x00779368);
     const float vS = *reinterpret_cast<const float *>(0x0076F340);
     const float uO = *reinterpret_cast<const float *>(0x0077F480);
     const float vO = *reinterpret_cast<const float *>(0x0077F3D8);
-    for (uint32_t v = 0; v < vertexCount; ++v) {
-        const MeshVertex &src = entry.vertices[v];
-        DK2MMeshVertex &dst = vertices[v];
-        dst.px = src.position.x;
-        dst.py = src.position.y;
-        dst.pz = src.position.z;
-        dst.nx = src.normal.x;
-        dst.ny = src.normal.y;
-        dst.nz = src.normal.z;
-        dst.u = uS * (static_cast<float>(src.packedUv & 0xFFFF) * uvScale) + uO;
-        dst.v = vS * (static_cast<float>(src.packedUv >> 16) * uvScale) + vO;
-        dst.base_color = packBaseColor(src.color);
+    uint32_t vertexCount = 0;
+    if (!copyEntryGuarded(entry, indexCount, &vertexCount, vertices, 256, indices,
+                          uvScale, uS, vS, uO, vO)) {
+        static bool loggedBadEntry = false;
+        if (!loggedBadEntry) {
+            loggedBadEntry = true;
+            patch::log::dbg("mesh gpu path: unreadable entry (vertices=%p indices=%p), "
+                            "falling back to CPU emission",
+                            entry.vertices, entry.triangleIndices);
+        }
+        return false;
     }
     const uint32_t alphaTerm = *reinterpret_cast<const uint32_t *>(0x00779380);
     const uint32_t tint = (alphaTerm & 0xFF000000u) | 0x00FFFFFFu;
@@ -259,7 +291,7 @@ bool drawEntryOnGpu(MeshEntry &entry, dk2::MyScaledSurface *surface,
     emitMeshCamera();
     emitFrameLights(lightData);
     gog::metal_bridge::drawMeshInline(
-        textureId, vertices.data(), vertexCount, indices.data(), indexCount, tint,
+        textureId, vertices, vertexCount, indices, indexCount, tint,
         DK2M_DRAW_MESH_LIT,
         debiasColour(ambient.x) / 255.0f,
         debiasColour(ambient.y) / 255.0f,
