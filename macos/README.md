@@ -1,10 +1,33 @@
-# Dungeon Keeper 2 Flame for macOS
+# Flametal: Dungeon Keeper 2 native macOS edition
 
 The current native pipeline keeps the original 32-bit game simulation isolated in Wine and renders it in a separate arm64 AppKit/Metal 4 host:
 
-`DK2 + Flame (i386/Wine) → shared protocol v8 → AppKit + Metal 4 (arm64)`
+`DK2 + Flame (i386/Wine) → shared protocol v9 → AppKit + Metal 4 (arm64)`
 
-Flame captures the game's Direct3D 3 command stream without asking WineD3D to render it. The native host owns presentation, scaling, focus, keyboard and mouse input. Absolute pointer coordinates use AppKit, raw relative motion and keyboard state use GameController, and scrolling uses AppKit's precise wheel events.
+Flame (the underlying [DiaLight/Flame](https://github.com/DiaLight/Flame) patch layer this fork is built on) captures the game's Direct3D 3 command stream without asking WineD3D to render it. The native host owns presentation, scaling, focus, keyboard and mouse input. Absolute pointer coordinates use AppKit, raw relative motion and keyboard state use GameController, and scrolling uses AppKit's precise wheel events.
+
+## Rendering paths
+
+Two rendering paths coexist over the same bridge:
+
+- **Legacy path** (default for everything): the game's original CPU pipeline
+  emits pre-transformed screen-space FVF vertices; the host replays them
+  through a fixed-function texture-stage combiner ported to Metal (multi-stage
+  blending, `D3DTOP_BUMPENVMAP` environment bump mapping, per-draw
+  depth/blend/cull state). The 2D overlay is reconstructed from the game's
+  black/white matte pair with per-tile dirty tracking, and a tile only
+  re-uploads when its composited pixels actually changed.
+- **World-space mesh path** (protocol v9, opt-in, under active development):
+  object-space or world-space meshes cross the bridge once (or per frame for
+  deformed geometry via `DRAW_MESH_INLINE`), together with a per-frame camera,
+  the scene light list and the engine's own 256-entry falloff LUT. The Metal
+  vertex shader then performs projection and DK2's exact per-vertex point-light
+  accumulation, replacing the original engine's per-vertex CPU loop. The first
+  rerouted emitter is the deformed/dynamic mesh family (`sub_57B6D0`); enable it
+  with `MeshGpuPath = true` in the `[gog]` section of `flame/config.toml` for
+  A/B testing. The camera matrix is assembled in closed form from the same
+  globals the original projection uses, so GPU output lands in the same clip
+  space as legacy draws and z-testing orders the two paths correctly.
 
 ## Build and run
 

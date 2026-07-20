@@ -1,14 +1,25 @@
-# Flame
+# Flametal
 
-Flame modifies the Dungeon Keeper 2 code to fix the bugs found in both single and multiplayer.
-It works with the Disk, Steam and GOG versions of the game.
+Flametal is a fork of [DiaLight/Flame](https://github.com/DiaLight/Flame), which modifies the Dungeon Keeper 2 code to fix bugs found in both single and multiplayer and works with the Disk, Steam and GOG versions of the game.
 
-Warning: Saves and network sessions between Flame and non-Flame Dungeon Keeper 2 versions are [incompatible](https://github.com/DiaLight/Flame/issues/57).
+Warning: Saves and network sessions between Flame/Flametal and non-Flame Dungeon Keeper 2 versions are [incompatible](https://github.com/DiaLight/Flame/issues/57).
 But you can use `-original-compatible` flag to disable some patches that breaks compatibility.
+
+## Credits
+
+All of the original decompilation work, the DLL function-replacement approach, and the multiplayer/singleplayer bug fixes are [DiaLight](https://github.com/DiaLight)'s, from the upstream [Flame](https://github.com/DiaLight/Flame) project. Flametal builds the native macOS edition described below on top of that foundation; it isn't a rewrite or a replacement of DiaLight's work.
+
+(Internal paths, project files and identifiers still say "Flame"/"DK2" in places - a full rename is planned separately and isn't done yet.)
 
 ## Native macOS edition
 
-This fork adds a self-contained Apple Silicon app that imports the user's original GOG 1.7 game into an isolated Wine prefix, then streams its Direct3D 3 command buffer to a native AppKit/Metal 4 renderer. It includes native windowing and input, Retina/high-resolution output, corrected lighting and translucent UI, optional HD texture replacement and dumping, and SSE2 rewrites of hot DK2 geometry and lighting paths.
+This fork adds a self-contained Apple Silicon app that imports the user's original GOG 1.7 game into an isolated Wine prefix, then streams its Direct3D 3 command buffer to a native AppKit/Metal 4 renderer instead of going through WineD3D. Highlights:
+
+- **Rendering bridge**: DK2's D3D3/DirectDraw4 calls are captured over a shared-memory ring buffer and replayed by a native Metal 4 host - including a from-scratch fixed-function texture-stage combiner (multi-stage texture blending, `D3DTOP_BUMPENVMAP` environment bump mapping for water/lava) and content-compare dirty tracking for the 2D UI overlay (a tile re-uploads only when its composited pixels actually changed).
+- **GPU mesh pipeline (in progress)**: a second, opt-in rendering path (bridge protocol v9) moves DK2's per-vertex CPU work - projection and point-light accumulation - into the Metal vertex shader. Meshes cross the bridge in object/world space with a per-frame camera, light list and the engine's own falloff LUT; the lighting model is a bit-exact port of the original. First rerouted emitter: the deformed/dynamic mesh family (`MeshGpuPath = true` in `[gog]`).
+- **Native windowing and input**: real AppKit window/fullscreen lifecycle, Retina/high-resolution output, native cursor and keyboard/text input routing, one-command launch and first-run game import.
+- **Performance**: a large ongoing campaign translating hot original x87 engine paths (vertex/matrix math, lighting, mesh and animation traversal, spatial queries, shadows) into SSE2 C++, plus CPU-side frame telemetry on both sides of the bridge to find the next hotspot.
+- **Textures**: optional HD texture replacement, a texture dump/curation pipeline (collage/sprite detection, ComfyUI batch upscaling), and 16-bit bump-map pixel format support.
 
 See [macos/README.md](macos/README.md) for the build, packaging, import and run instructions. No copyrighted game data is included.
 
