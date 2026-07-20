@@ -2090,14 +2090,12 @@ static void *renderWorker(void *context) {
                         // uploaded, all falling back to the white slot 0), and
                         // only once textures actually resolved, so this reflects
                         // a real steady-state water draw.
-                        if ((uniform.colorOp == 22 || uniform.colorOp == 23 ||
-                             uniform.colorOp1 == 22 || uniform.colorOp1 == 23) &&
-                            uniform.textureIndex != 0 && uniform.textureIndex1 != 0) {
+                        if (alphaBlendEnabled) {
                             static NSTimeInterval lastLogged = 0;
                             const NSTimeInterval now = CACurrentMediaTime();
-                            if (now - lastLogged > 2.0) {
+                            if (now - lastLogged > 1.0) {
                                 lastLogged = now;
-                                NSLog(@"DIAG bump draw: colorOp0=%u tex0=%u colorOp1=%u tex1=%u "
+                                NSLog(@"DIAG blend draw: colorOp0=%u tex0=%u colorOp1=%u tex1=%u "
                                       "colorOp2=%u alphaOp2=%u colorArg1_2=%u colorArg2_2=%u "
                                       "alphaArg1_2=%u alphaArg2_2=%u tex2=%u "
                                       "mat0=(%.3f %.3f %.3f %.3f) mat1=(%.3f %.3f %.3f %.3f) "
