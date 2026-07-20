@@ -38,7 +38,7 @@ cd "${GAME_DIR}" || fail "game directory is missing"
 env -i \
   PATH='/usr/bin:/bin' \
   USER="${USER}" LOGNAME="${LOGNAME:-${USER}}" LANG='en_US.UTF-8' TMPDIR='/tmp' \
-  WINEPREFIX="${PREFIX}" WINEDEBUG='-all' \
+  WINEPREFIX="${PREFIX}" WINEDEBUG="${DK2_WINEDEBUG:--all}" \
   WINEDLLOVERRIDES='ddraw,d3dimm,dinput=b;winedbg.exe=d' \
   DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
   MVK_CONFIG_LOG_LEVEL='0' \

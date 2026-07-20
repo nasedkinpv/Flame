@@ -1013,16 +1013,36 @@ private:
 
                 const uint32_t xBegin = tileX * kOverlayTileSize;
                 const uint32_t xEnd = std::min(xBegin + kOverlayTileSize, black.width);
+                // Unmatte into a tile-sized scratch and only publish (and bump
+                // the tile version, which is what schedules a bridge upload)
+                // when the composited pixels actually changed. The game clears
+                // and redraws the whole 2D layer every frame, so the input
+                // mattes' generations tick on every tile every frame - but the
+                // composited result is usually byte-identical, and version-on-
+                // input-change degenerated into re-uploading the entire
+                // 1600x1200 overlay (~7.7MB) through the bridge each frame.
+                alignas(16) uint8_t scratch[kOverlayTileSize * kOverlayTileSize * 4];
+                const uint32_t spanBytes = (xEnd - xBegin) * 4;
                 for (uint32_t y = yBegin; y < yEnd; ++y) {
                     unmatteOverlaySpan(
                         black.pixels.data() + static_cast<size_t>(y) * black.rowPitch + static_cast<size_t>(xBegin) * 4,
                         white.pixels.data() + static_cast<size_t>(y) * white.rowPitch + static_cast<size_t>(xBegin) * 4,
-                        overlay_.pixels.data() + static_cast<size_t>(y) * overlay_.rowPitch + static_cast<size_t>(xBegin) * 4,
+                        scratch + static_cast<size_t>(y - yBegin) * spanBytes,
                         xEnd - xBegin);
+                }
+                bool changed = false;
+                for (uint32_t y = yBegin; y < yEnd; ++y) {
+                    uint8_t *dst = overlay_.pixels.data() +
+                        static_cast<size_t>(y) * overlay_.rowPitch + static_cast<size_t>(xBegin) * 4;
+                    const uint8_t *src = scratch + static_cast<size_t>(y - yBegin) * spanBytes;
+                    if (!changed && std::memcmp(dst, src, spanBytes) != 0) changed = true;
+                    if (changed) std::memcpy(dst, src, spanBytes);
                 }
                 state.lastBlackGen = blackGen;
                 state.lastWhiteGen = whiteGen;
-                if (++state.version == 0) state.version = 1;
+                if (changed) {
+                    if (++state.version == 0) state.version = 1;
+                }
             }
         }
     }

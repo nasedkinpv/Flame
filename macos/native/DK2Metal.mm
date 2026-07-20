@@ -1683,6 +1683,20 @@ static void *renderWorker(void *context) {
                         textureUpdate.data_size >= textureUpdate.row_pitch * textureUpdate.height) {
                         ++metrics.textureUpdates;
                         metrics.textureBytes += textureUpdate.data_size;
+                        // ponytail: periodic log of large per-frame texture
+                        // uploads - ~8MB/frame is streaming through the bridge
+                        // and this names the culprit id/size. Remove once the
+                        // re-upload source is fixed.
+                        if (textureUpdate.data_size >= 1024u * 1024u) {
+                            static NSTimeInterval lastLoggedBigUpload = 0;
+                            const NSTimeInterval now = CACurrentMediaTime();
+                            if (now - lastLoggedBigUpload > 2.0) {
+                                lastLoggedBigUpload = now;
+                                NSLog(@"DIAG big texture upload: id=%u %ux%u bytes=%u",
+                                      textureUpdate.texture_id, textureUpdate.width,
+                                      textureUpdate.height, textureUpdate.data_size);
+                            }
+                        }
                         const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
                         DynamicTexture &dyn = _dynamicTextures[textureUpdate.texture_id];
                         id<MTLTexture> hd = nil;
