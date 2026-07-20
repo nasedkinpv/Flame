@@ -2355,12 +2355,14 @@ static void *renderWorker(void *context) {
                         uniform.tint = meshDebug ? 0xFFFFFFFFu : inlineDraw.tint;
                         uniform.flags = inlineDraw.flags | (meshDebug ? 8u : 0u);
                         uniform.pad = 0;
-                        // opaque unless the draw itself is flagged blended: mesh
+                        // pipeline strictly from the draw's own flags: mesh
                         // commands sit at the frame head and must not inherit
                         // whatever blend state the previous frame replay left on
-                        id<MTLRenderPipelineState> pipeline =
-                            (!meshDebug && (inlineDraw.flags & 2u))
-                                ? _meshAlphaPipeline : _meshOpaquePipeline;
+                        id<MTLRenderPipelineState> pipeline = _meshOpaquePipeline;
+                        if (!meshDebug) {
+                            if (inlineDraw.flags & 4u) pipeline = _meshAdditivePipeline;
+                            else if (inlineDraw.flags & 2u) pipeline = _meshAlphaPipeline;
+                        }
                         [encoder setRenderPipelineState:pipeline];
                         const uint32_t effectiveZFunction = meshDebug ? 8 : (zEnabled ? zFunction : 8);
                         const uint32_t effectiveZWrite = meshDebug ? 0 : (zEnabled && zWriteEnabled ? 1 : 0);

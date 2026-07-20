@@ -546,9 +546,18 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     // both vertex colour and ambient); the "bias" constants in the engine's
     // encoding helpers are themselves negative magic numbers, so nothing here
     // needs debiasing.
+    // Translate the batch draw-flag word exactly as the original per-batch
+    // state applier (0x589300) does: bit 0x20 -> SRCALPHA/INVSRCALPHA blend,
+    // bit 0x1 -> ONE/ONE additive, bit 0x1000 -> modulate blend (approximated
+    // as alpha), default -> opaque with blending disabled.
+    uint32_t meshFlags = DK2M_DRAW_MESH_LIT;
+    const uint32_t drawFlags = surface ? surface->drawFlags : 0;
+    if (drawFlags & 0x20u) meshFlags |= DK2M_DRAW_MESH_ALPHA_BLEND;
+    else if (drawFlags & 0x1u) meshFlags |= DK2M_DRAW_MESH_ADDITIVE;
+    else if (drawFlags & 0x1000u) meshFlags |= DK2M_DRAW_MESH_ALPHA_BLEND;
     gog::metal_bridge::drawMeshInline(
         textureId, vertices, vertexCount, indices, indexCount, tint,
-        DK2M_DRAW_MESH_LIT | DK2M_DRAW_MESH_ALPHA_BLEND,
+        meshFlags,
         ambient.x / 255.0f,
         ambient.y / 255.0f,
         ambient.z / 255.0f);
