@@ -8,10 +8,12 @@
 #include <d3d.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -127,6 +129,9 @@ public:
         for (DWORD stage = 0; stage < 3; ++stage) {
             if (boundTextures_[stage]) emitTexture(stage, boundTextures_[stage]);
         }
+        // Inline buckets accumulated during prepare flush into the fresh
+        // frame directly (active_ is already set at this point).
+        flushInlineBuckets();
         // Mesh commands staged during the game's prepare phase (sceneEmit runs
         // before BeginScene, i.e. between frames) flush into the frame head:
         // they draw first, and z-testing orders them against later draws.
@@ -266,6 +271,7 @@ public:
 
     void finish() {
         if (!active_) return;
+        flushInlineBuckets();
         const auto overlayStarted = PhaseClock::now();
         emitOverlay();
         emitCursor();
@@ -1492,9 +1498,75 @@ public:
         if (height) *height = height_;
     }
 
+    // Opaque z-tested inline draws sharing (texture, tint, flags, ambient)
+    // merge into per-state buckets and flush as ONE command each: terrain
+    // goes through this path one tile at a time (~4-5K calls/frame), and
+    // unmerged that exploded bridge draw count ~5x over the legacy batcher.
+    struct InlineBucket {
+        std::vector<uint8_t> vertices;
+        std::vector<uint16_t> indices;
+        uint32_t vertexCount = 0;
+        uint32_t textureId = 0;
+        uint32_t tint = 0;
+        uint32_t flags = 0;
+        float ambient[3] = {};
+    };
+    using InlineKey = std::array<uint32_t, 6>;
+    std::map<InlineKey, InlineBucket> inlineBuckets_;
+
+    void flushInlineBucket(InlineBucket &bucket) {
+        if (!bucket.vertexCount) return;
+        emitInlineCommand(bucket.textureId, bucket.vertices.data(), bucket.vertexCount,
+                          bucket.indices.data(), static_cast<uint32_t>(bucket.indices.size()),
+                          bucket.tint, bucket.flags,
+                          bucket.ambient[0], bucket.ambient[1], bucket.ambient[2]);
+        bucket.vertices.clear();
+        bucket.indices.clear();
+        bucket.vertexCount = 0;
+    }
+
+    void flushInlineBuckets() {
+        for (auto &entry : inlineBuckets_) flushInlineBucket(entry.second);
+    }
+
     void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCount,
                         const uint16_t *indices, uint32_t indexCount, uint32_t tint,
                         uint32_t flags, float ambientR, float ambientG, float ambientB) {
+        if (!vertices || !vertexCount || !indices || !indexCount) return;
+        if ((flags & 2u) == 0) {  // opaque + z-tested: order-independent, merge
+            uint32_t ambientBits[3];
+            std::memcpy(ambientBits, &ambientR, 4);
+            std::memcpy(ambientBits + 1, &ambientG, 4);
+            std::memcpy(ambientBits + 2, &ambientB, 4);
+            const InlineKey key = {textureId, tint, flags,
+                                   ambientBits[0], ambientBits[1], ambientBits[2]};
+            InlineBucket &bucket = inlineBuckets_[key];
+            if (bucket.vertexCount + vertexCount > 60000u) flushInlineBucket(bucket);
+            if (!bucket.vertexCount) {
+                bucket.textureId = textureId;
+                bucket.tint = tint;
+                bucket.flags = flags;
+                bucket.ambient[0] = ambientR;
+                bucket.ambient[1] = ambientG;
+                bucket.ambient[2] = ambientB;
+            }
+            const auto *vertexBytes = static_cast<const uint8_t *>(vertices);
+            bucket.vertices.insert(bucket.vertices.end(), vertexBytes,
+                                   vertexBytes + static_cast<size_t>(vertexCount) * sizeof(DK2MMeshVertex));
+            const uint16_t rebase = static_cast<uint16_t>(bucket.vertexCount);
+            for (uint32_t i = 0; i < indexCount; ++i) {
+                bucket.indices.push_back(static_cast<uint16_t>(indices[i] + rebase));
+            }
+            bucket.vertexCount += vertexCount;
+            return;
+        }
+        emitInlineCommand(textureId, vertices, vertexCount, indices, indexCount,
+                          tint, flags, ambientR, ambientG, ambientB);
+    }
+
+    void emitInlineCommand(uint32_t textureId, const void *vertices, uint32_t vertexCount,
+                           const uint16_t *indices, uint32_t indexCount, uint32_t tint,
+                           uint32_t flags, float ambientR, float ambientG, float ambientB) {
         if (!vertices || !vertexCount || !indices || !indexCount) return;
         const uint32_t vertexBytes = vertexCount * static_cast<uint32_t>(sizeof(DK2MMeshVertex));
         const uint32_t indexBytes = (indexCount * 2u + 3u) & ~3u;

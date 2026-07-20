@@ -306,12 +306,16 @@ bool drawEntryOnGpu(MeshEntry &entry, dk2::MyScaledSurface *surface,
     }
     emitMeshCamera();
     emitFrameLights(lightData);
+    // Colours are plain 0..255 floats everywhere (probe confirmed zeros for
+    // both vertex colour and ambient); the "bias" constants in the engine's
+    // encoding helpers are themselves negative magic numbers, so nothing here
+    // needs debiasing.
     gog::metal_bridge::drawMeshInline(
         textureId, vertices, vertexCount, indices, indexCount, tint,
         DK2M_DRAW_MESH_LIT,
-        debiasColour(ambient.x) / 255.0f,
-        debiasColour(ambient.y) / 255.0f,
-        debiasColour(ambient.z) / 255.0f);
+        ambient.x / 255.0f,
+        ambient.y / 255.0f,
+        ambient.z / 255.0f);
     return true;
 }
 
