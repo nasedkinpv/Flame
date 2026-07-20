@@ -280,6 +280,8 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
         }
         for (int i = 0; i < candidateCount; ++i) {
             dk2::MyCESurfHandle *handle = candidates[i];
+            // the engine creates cesurf lazily at paint time; do the same
+            if (!handle->cesurf) handle->create();
             if (!handle->cesurf) continue;
             auto *dd = reinterpret_cast<dk2::CEngineDDSurface *>(handle->cesurf);
             auto *fake = reinterpret_cast<gog::FakeTexture *>(dd->devTex);
