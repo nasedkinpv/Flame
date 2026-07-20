@@ -197,7 +197,7 @@ void emitMeshCamera() {
 // growing list; the producer keeps only the last (fullest) payload.
 void emitFrameLights(uint32_t *lightData) {
     const auto *lut = reinterpret_cast<const float *>(0x007818A0);
-    static std::vector<const SceneLightForGpu *> seen;
+    static std::vector<uint64_t> seen;  // content keys, not pointers
     static std::vector<DK2MLight> scratch;
     static uint32_t lastFrame = 0xFFFFFFFFu;
     const uint32_t stamp = gog::metal_bridge::frameCounter();
@@ -214,15 +214,24 @@ void emitFrameLights(uint32_t *lightData) {
     const int32_t total = static_cast<int32_t>(lightData[0]) + static_cast<int32_t>(lightData[1]);
     const auto lights = reinterpret_cast<const SceneLightForGpu *const *>(
             reinterpret_cast<const uint8_t *>(lightData) + 0x38);
-    for (int32_t i = 0; i < total && i < 512; ++i) {
+    for (int32_t i = 0; i < total && i < 1024; ++i) {
         if (!lights[i]) continue;
-        bool known = false;
-        for (const auto *p : seen) {
-            if (p == lights[i]) { known = true; break; }
-        }
-        if (known || scratch.size() >= 512) continue;
-        seen.push_back(lights[i]);
         const SceneLightForGpu &s = *lights[i];
+        // content key: the game may rebuild light structs each frame, so
+        // pointer identity multiplies duplicates and overflows the cap -
+        // which drops the LATE lights of the frame (cursor, effects) at
+        // camera angles where many meshes contribute subsets.
+        uint32_t pxBits, pyBits, rBits;
+        std::memcpy(&pxBits, &s.position.x, 4);
+        std::memcpy(&pyBits, &s.position.y, 4);
+        std::memcpy(&rBits, &s.color.x, 4);
+        const uint64_t key = (static_cast<uint64_t>(pxBits) << 32) ^ (pyBits ^ (static_cast<uint64_t>(rBits) << 13));
+        bool known = false;
+        for (uint64_t k : seen) {
+            if (k == key) { known = true; break; }
+        }
+        if (known || scratch.size() >= 1024) continue;
+        seen.push_back(key);
         DK2MLight light = {};
         light.px = s.position.x;
         light.py = s.position.y;

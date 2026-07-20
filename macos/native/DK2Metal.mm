@@ -893,7 +893,7 @@ constexpr NSUInteger kMaxMeshDrawsPerFrame = 8192;
 constexpr NSUInteger kMeshDrawBufferSize = kMaxMeshDrawsPerFrame * sizeof(MeshDrawUniform);
 // lights buffer layout: 16B header + 256-float LUT at +16, lights at +1040
 constexpr NSUInteger kLightsHeaderBytes = 16 + 256 * sizeof(float);
-constexpr NSUInteger kMaxLightsPerFrame = 512;
+constexpr NSUInteger kMaxLightsPerFrame = 1024;
 constexpr NSUInteger kLightsBufferSize = kLightsHeaderBytes + kMaxLightsPerFrame * 48;
 constexpr NSUInteger kCameraBufferSize = 24 * sizeof(float);
 
