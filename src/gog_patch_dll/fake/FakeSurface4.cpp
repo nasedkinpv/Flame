@@ -35,7 +35,10 @@ FakeSurface4::FakeSurface4(LPDDSURFACEDESC2 pDesc) {
     } else {
         this->fC_isModSurf = false;
         if ((dwFlags & 0x1000) == 0) gog_assert_failed("FakeSurface4::FakeSurface4:210");
-        if (desc.ddpfPixelFormat.dwRGBBitCount != 32) gog_assert_failed("FakeSurface4::FakeSurface4:211");
+        const bool isBump16 = desc.ddpfPixelFormat.dwRGBBitCount == 16 &&
+                              (desc.ddpfPixelFormat.dwFlags & DDPF_BUMPDUDV) != 0;
+        if (desc.ddpfPixelFormat.dwRGBBitCount != 32 && !isBump16)
+            gog_assert_failed("FakeSurface4::FakeSurface4:211");
     }
     memcpy(&this->f14_desc, &desc, sizeof(this->f14_desc));
     if ((this->f14_desc.ddsCaps.dwCaps & 0x30000000) != 0) gog_assert_failed("FakeSurface4::FakeSurface4:216");
