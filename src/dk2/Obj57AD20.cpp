@@ -254,6 +254,17 @@ void emitFrameLights(uint32_t *lightData) {
 
 // SEH-guarded: level transitions leave stale cesurf/devTex pointers behind,
 // and this three-hop chain must degrade to "no texture", never fault.
+// devTex is only sometimes our FakeTexture (the legacy SetTexture path made
+// it); terrain atlas pages carry a game-side object there whose +0x10 reads
+// as garbage. Trust the pointer only when its vtable is literally ours.
+bool isOurFakeTexture(void *p) {
+    static const void *vtbl = [] {
+        gog::FakeTexture probe(nullptr, nullptr);
+        return *reinterpret_cast<void **>(&probe);
+    }();
+    return p && *reinterpret_cast<void **>(p) == vtbl;
+}
+
 struct ResolveStats {
     uint32_t calls, nullSurface, noCandidates, cesurfNull, devNull, fakeHit, rawHit, faults;
 };
@@ -292,7 +303,7 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
             if (!handle->cesurf) { ++g_resolveStats.cesurfNull; continue; }
             auto *dd = reinterpret_cast<dk2::CEngineDDSurface *>(handle->cesurf);
             auto *fake = reinterpret_cast<gog::FakeTexture *>(dd->devTex);
-            if (fake) {
+            if (fake && isOurFakeTexture(fake)) {
                 ++g_resolveStats.fakeHit;
                 *bridgeIdOut = fake->bridgeId();
                 *bridgeSurfaceOut = fake->bridgeSurface();
