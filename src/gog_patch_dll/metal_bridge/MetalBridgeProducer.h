@@ -50,8 +50,9 @@ void endFrame();
 struct DK2MMeshVertexData;  // = DK2MMeshVertex from the protocol header
 bool meshRegister(uint32_t meshId, const void *vertices, uint32_t vertexCount,
                   const uint16_t *indices, uint32_t indexCount);
-// Per-frame camera (column-major world->clip 4x4).
-void cameraSet(const float viewProj[16]);
+// Per-frame camera (column-major world->clip 4x4) + piecewise depth params
+// {z_mul2, z_add2, z_add3, z_mul3*F, far_threshold, depth_cap}.
+void cameraSet(const float viewProj[16], const float depthParams[6]);
 // Per-frame light list + the engine's 256-entry falloff LUT + ambient.
 void lightsSet(const void *lights, uint32_t lightCount,
                float ambientR, float ambientG, float ambientB,

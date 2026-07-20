@@ -1450,11 +1450,17 @@ public:
         stagedMesh_.insert(stagedMesh_.end(), bytes, bytes + size);
     }
 
-    void cameraSet(const float viewProj[16]) {
+    void cameraSet(const float viewProj[16], const float depthParams[6]) {
         DK2MCameraSetCommand command = {};
         command.header.type = DK2M_COMMAND_CAMERA_SET;
         command.header.size = sizeof(command);
         std::memcpy(command.view_proj, viewProj, sizeof(command.view_proj));
+        command.z_mul2 = depthParams[0];
+        command.z_add2 = depthParams[1];
+        command.z_add3 = depthParams[2];
+        command.z_mul3_f = depthParams[3];
+        command.far_threshold = depthParams[4];
+        command.depth_cap = depthParams[5];
         if (!active_) {
             if (stagedCamera_) return;
             stagedCamera_ = true;
@@ -1842,7 +1848,9 @@ bool meshRegister(uint32_t meshId, const void *vertices, uint32_t vertexCount,
     return producer.meshRegister(meshId, vertices, vertexCount, indices, indexCount);
 }
 
-void cameraSet(const float viewProj[16]) { producer.cameraSet(viewProj); }
+void cameraSet(const float viewProj[16], const float depthParams[6]) {
+    producer.cameraSet(viewProj, depthParams);
+}
 
 void lightsSet(const void *lights, uint32_t lightCount, float ambientR, float ambientG,
                float ambientB, const float falloffLut[256]) {

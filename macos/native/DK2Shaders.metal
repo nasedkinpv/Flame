@@ -222,6 +222,11 @@ struct DK2MeshDrawUniform {
 
 struct DK2MeshCamera {
     float4x4 viewProj;   // column-major world -> clip
+    float zMul2, zAdd2;      // near-branch linear depth
+    float zAdd3, zMul3F;     // far-branch hyperbolic depth
+    float farThreshold;      // branch switch (view z above -> far branch)
+    float depthCap;          // maximum depth value
+    float pad0, pad1;
 };
 
 struct DK2MeshLightsHeader {
@@ -292,6 +297,16 @@ vertex DK2RasterVertex dk2_vertex_mesh(device const DK2MeshVertexIn *vertices [[
     }
     DK2RasterVertex result;
     result.position = camera.viewProj * float4(positionWorld, 1.0f);
+    // Replicate the engine's piecewise depth exactly: the matrix row only
+    // covers the far (hyperbolic) branch, near geometry uses the linear one.
+    {
+        const float viewZ = result.position.w;
+        float depth = camera.farThreshold < viewZ
+            ? camera.zAdd3 - camera.zMul3F / viewZ
+            : camera.zMul2 * viewZ + camera.zAdd2;
+        depth = min(depth, camera.depthCap);
+        result.position.z = depth * viewZ;
+    }
     result.color = float4(saturate(lit) * tint.rgb, base.a * tint.a);
     result.texCoord = float2(inputVertex.u, inputVertex.v);
     result.texCoord1 = result.texCoord;

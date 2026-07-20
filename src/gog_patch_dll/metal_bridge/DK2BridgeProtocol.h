@@ -209,10 +209,16 @@ typedef struct DK2MMeshRegisterCommand {
     uint32_t flags;
 } DK2MMeshRegisterCommand;
 
-// Per-frame camera: world -> clip transform (column-major 4x4).
+// Per-frame camera: world -> clip transform (column-major 4x4) plus the
+// engine's piecewise depth mapping (near: z_mul2*z + z_add2; far:
+// z_add3 - z_mul3_f/z; capped at depth_cap; switch at far_threshold).
 typedef struct DK2MCameraSetCommand {
     DK2MCommandHeader header;
     float view_proj[16];
+    float z_mul2, z_add2;
+    float z_add3, z_mul3_f;
+    float far_threshold, depth_cap;
+    float pad0, pad1;
 } DK2MCameraSetCommand;
 
 // World-space point light, matching DK2's per-vertex accumulation model

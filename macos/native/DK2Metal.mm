@@ -859,7 +859,7 @@ constexpr NSUInteger kMeshDrawBufferSize = kMaxMeshDrawsPerFrame * sizeof(MeshDr
 constexpr NSUInteger kLightsHeaderBytes = 16 + 256 * sizeof(float);
 constexpr NSUInteger kMaxLightsPerFrame = 512;
 constexpr NSUInteger kLightsBufferSize = kLightsHeaderBytes + kMaxLightsPerFrame * 48;
-constexpr NSUInteger kCameraBufferSize = 16 * sizeof(float);
+constexpr NSUInteger kCameraBufferSize = 24 * sizeof(float);
 
 MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
     switch (d3dFunction) {
@@ -2122,7 +2122,7 @@ static void *renderWorker(void *context) {
                     DK2MCameraSetCommand camera;
                     std::memcpy(&camera, snapshot->bytes.data() + commandOffset, sizeof(camera));
                     std::memcpy(_cameraBuffers[slot].contents, camera.view_proj,
-                                sizeof(camera.view_proj));
+                                24 * sizeof(float));
                 } else if (view.type == DK2M_COMMAND_LIGHTS_SET &&
                            view.size >= sizeof(DK2MLightsSetCommand)) {
                     DK2MLightsSetCommand lightsCommand;
@@ -2300,11 +2300,12 @@ static void *renderWorker(void *context) {
                         uniform.tint = meshDebug ? 0xFFFFFFFFu : inlineDraw.tint;
                         uniform.flags = inlineDraw.flags | (meshDebug ? 8u : 0u);
                         uniform.pad = 0;
-                        id<MTLRenderPipelineState> pipeline = _meshOpaquePipeline;
-                        if (!meshDebug && (alphaBlendEnabled || (inlineDraw.flags & 2u))) {
-                            pipeline = sourceBlend == 2 && destinationBlend == 2
-                                           ? _meshAdditivePipeline : _meshAlphaPipeline;
-                        }
+                        // opaque unless the draw itself is flagged blended: mesh
+                        // commands sit at the frame head and must not inherit
+                        // whatever blend state the previous frame replay left on
+                        id<MTLRenderPipelineState> pipeline =
+                            (!meshDebug && (inlineDraw.flags & 2u))
+                                ? _meshAlphaPipeline : _meshOpaquePipeline;
                         [encoder setRenderPipelineState:pipeline];
                         const uint32_t effectiveZFunction = meshDebug ? 8 : (zEnabled ? zFunction : 8);
                         const uint32_t effectiveZWrite = meshDebug ? 0 : (zEnabled && zWriteEnabled ? 1 : 0);

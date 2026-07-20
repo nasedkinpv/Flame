@@ -179,7 +179,14 @@ void emitMeshCamera() {
     for (int c = 0; c < 4; ++c)
         for (int r = 0; r < 4; ++r)
             columnMajor[c * 4 + r] = R[r][c];
-    gog::metal_bridge::cameraSet(columnMajor);
+    // piecewise depth: near = zMul2*z + zAdd2, far = zAdd3 - zMul3*F/z,
+    // switch where fd2[5] < z, capped at fd2[3] - replicated in the shader
+    const float depthParams[6] = {
+        dk2::g_zMul2_77F490, dk2::g_zAdd2_77F4D0,
+        zAdd3, zMul3 * F,
+        *reinterpret_cast<const float *>(0x0066FE3C),
+        *reinterpret_cast<const float *>(0x0066FE34)};
+    gog::metal_bridge::cameraSet(columnMajor, depthParams);
 }
 
 // Each emitter call carries only its spatially selected light subset, so
