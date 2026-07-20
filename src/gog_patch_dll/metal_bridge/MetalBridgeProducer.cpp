@@ -131,6 +131,7 @@ public:
         }
         // Inline buckets accumulated during prepare flush into the fresh
         // frame directly (active_ is already set at this point).
+        flushPendingLights();
         flushInlineBuckets();
         // Mesh commands staged during the game's prepare phase (sceneEmit runs
         // before BeginScene, i.e. between frames) flush into the frame head:
@@ -271,6 +272,7 @@ public:
 
     void finish() {
         if (!active_) return;
+        flushPendingLights();
         flushInlineBuckets();
         const auto overlayStarted = PhaseClock::now();
         emitOverlay();
@@ -1465,6 +1467,10 @@ public:
         ++commandCount_;
     }
 
+    // Light lists arrive per mesh (each emitter call carries its spatially
+    // selected subset), so callers send a growing per-frame union: keep only
+    // the LAST payload and emit it once per frame - the host applies a single
+    // lights buffer to every mesh draw of the frame anyway.
     void lightsSet(const void *lights, uint32_t lightCount, float ambientR,
                    float ambientG, float ambientB, const float falloffLut[256]) {
         const uint32_t lutBytes = 256u * sizeof(float);
@@ -1477,20 +1483,24 @@ public:
         command.ambient_r = ambientR;
         command.ambient_g = ambientG;
         command.ambient_b = ambientB;
-        if (!active_) {
-            if (stagedLights_) return;
-            stagedLights_ = true;
-            stageBytes(&command, sizeof(command));
-            stageBytes(falloffLut, lutBytes);
-            if (lightBytes) stageBytes(lights, lightBytes);
-            ++stagedMeshCommandCount_;
-            return;
+        pendingLights_.clear();
+        pendingLights_.reserve(size);
+        const auto *cmdBytes = reinterpret_cast<const uint8_t *>(&command);
+        pendingLights_.insert(pendingLights_.end(), cmdBytes, cmdBytes + sizeof(command));
+        const auto *lutBytesPtr = reinterpret_cast<const uint8_t *>(falloffLut);
+        pendingLights_.insert(pendingLights_.end(), lutBytesPtr, lutBytesPtr + lutBytes);
+        if (lightBytes) {
+            const auto *lightBytesPtr = static_cast<const uint8_t *>(lights);
+            pendingLights_.insert(pendingLights_.end(), lightBytesPtr, lightBytesPtr + lightBytes);
         }
-        if (used_ + size > DK2M_SLOT_CAPACITY) return;
-        append(&command, sizeof(command));
-        append(falloffLut, lutBytes);
-        if (lightBytes) append(lights, lightBytes);
+    }
+
+    void flushPendingLights() {
+        if (pendingLights_.empty() || !active_) return;
+        if (used_ + pendingLights_.size() > DK2M_SLOT_CAPACITY) return;
+        append(pendingLights_.data(), static_cast<uint32_t>(pendingLights_.size()));
         ++commandCount_;
+        pendingLights_.clear();
     }
 
     void frameSize(uint32_t *width, uint32_t *height) const {
@@ -1705,6 +1715,7 @@ private:
     // mesh commands issued between frames (game prepare phase), flushed by begin()
     std::vector<uint8_t> stagedMesh_;
     std::vector<uint32_t> stagedMeshTextures_;
+    std::vector<uint8_t> pendingLights_;
     uint32_t stagedMeshCommandCount_ = 0;
     bool stagedCamera_ = false;
     bool stagedLights_ = false;

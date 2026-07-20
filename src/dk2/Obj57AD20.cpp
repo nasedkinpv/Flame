@@ -180,19 +180,38 @@ void emitMeshCamera() {
     gog::metal_bridge::cameraSet(columnMajor);
 }
 
+// Each emitter call carries only its spatially selected light subset, so
+// accumulate a per-frame union (deduped by light pointer) and resend the
+// growing list; the producer keeps only the last (fullest) payload.
 void emitFrameLights(uint32_t *lightData) {
     const auto *lut = reinterpret_cast<const float *>(0x007818A0);
+    static std::vector<const SceneLightForGpu *> seen;
+    static std::vector<DK2MLight> scratch;
+    static uint32_t lastFrame = 0xFFFFFFFFu;
+    uint32_t frameW = 0, frameH = 0;
+    gog::metal_bridge::frameSize(&frameW, &frameH);
+    const uint32_t stamp = GetTickCount() / 16u;  // frame-ish granularity
+    if (stamp != lastFrame) {
+        lastFrame = stamp;
+        seen.clear();
+        scratch.clear();
+    }
     if (!lightData) {
-        gog::metal_bridge::lightsSet(nullptr, 0, 0.0f, 0.0f, 0.0f, lut);
+        gog::metal_bridge::lightsSet(scratch.data(), static_cast<uint32_t>(scratch.size()),
+                                     0.0f, 0.0f, 0.0f, lut);
         return;
     }
     const int32_t total = static_cast<int32_t>(lightData[0]) + static_cast<int32_t>(lightData[1]);
-    static std::vector<DK2MLight> scratch;
-    scratch.clear();
     const auto lights = reinterpret_cast<const SceneLightForGpu *const *>(
             reinterpret_cast<const uint8_t *>(lightData) + 0x38);
     for (int32_t i = 0; i < total && i < 512; ++i) {
         if (!lights[i]) continue;
+        bool known = false;
+        for (const auto *p : seen) {
+            if (p == lights[i]) { known = true; break; }
+        }
+        if (known || scratch.size() >= 512) continue;
+        seen.push_back(lights[i]);
         const SceneLightForGpu &s = *lights[i];
         DK2MLight light = {};
         light.px = s.position.x;
