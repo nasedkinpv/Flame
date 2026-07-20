@@ -2034,8 +2034,22 @@ static void *renderWorker(void *context) {
             std::unordered_map<uint32_t, MeshPlacement> meshPlacements;
             [encoder setArgumentTable:_argumentTables[slot][boundArgumentTableBank]
                              atStages:MTLRenderStageVertex | MTLRenderStageFragment];
+            // Two passes over the stream: mesh-pipeline commands encode FIRST
+            // (opaque, z-tested - hoisting them is order-safe versus other 3D
+            // draws), so the legacy stream - including the game's HUD quads
+            // drawn late with depth off - always lands on top. Without this,
+            // scene-phase mesh buckets flushed at frame finish painted the
+            // terrain over the UI.
+            for (int meshPass = 1; meshPass >= 0; --meshPass) {
             for (const CommandView &view : _commandViews) {
                 const size_t commandOffset = view.offset;
+                const bool isMeshCommand =
+                    view.type == DK2M_COMMAND_MESH_REGISTER ||
+                    view.type == DK2M_COMMAND_CAMERA_SET ||
+                    view.type == DK2M_COMMAND_LIGHTS_SET ||
+                    view.type == DK2M_COMMAND_DRAW_MESH ||
+                    view.type == DK2M_COMMAND_DRAW_MESH_INLINE;
+                if (isMeshCommand != (meshPass == 1)) continue;
                 if (view.type == DK2M_COMMAND_SET_TEXTURE &&
                     view.size == sizeof(DK2MSetTextureCommand)) {
                     DK2MSetTextureCommand binding;
@@ -2505,6 +2519,7 @@ static void *renderWorker(void *context) {
                         ++metrics.invalidDraws;
                     }
                 }
+            }
             }
             gBridgeFramesRendered.fetch_add(1, std::memory_order_relaxed);
         }
