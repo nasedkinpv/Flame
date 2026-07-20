@@ -76,6 +76,9 @@ uint32_t frameCounter();
 void ensureTexture(DWORD textureId, IDirectDrawSurface4 *surface);
 // Bridge id for a surface with no FakeTexture (synthetic id namespace).
 uint32_t ensureSurfaceTexture(IDirectDrawSurface4 *surface);
+// Bridge id for a raw BGRA32 CPU buffer (engine surface page).
+uint32_t ensureBufferTexture(const void *key, const void *pixels, uint32_t width,
+                             uint32_t height, uint32_t pitchBytes);
 
 }
 

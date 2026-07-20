@@ -217,6 +217,42 @@ public:
         return textures_.count(textureId) ? textureId : 0;
     }
 
+    // Registers a raw BGRA32 CPU buffer (an engine CEngineSurface page) under
+    // a stable synthetic id keyed by the surface object pointer. Alpha is
+    // forced opaque - atlas pages carry colour, not coverage.
+    uint32_t ensureBufferTexture(const void *key, const void *pixels,
+                                 uint32_t width, uint32_t height, uint32_t pitchBytes) {
+        if (!key || !pixels || !width || !height || width > 4096 || height > 4096 ||
+            pitchBytes < width * 4 || !ensureMapped()) return 0;
+        const auto found = surfaceTextures_.find(reinterpret_cast<uintptr_t>(key));
+        uint32_t textureId;
+        if (found != surfaceTextures_.end()) {
+            textureId = found->second;
+        } else {
+            textureId = nextSyntheticTextureId_++;
+            surfaceTextures_[reinterpret_cast<uintptr_t>(key)] = textureId;
+        }
+        auto existing = textures_.find(textureId);
+        if (existing != textures_.end() && !existing->second.dirty) return textureId;
+        TextureCache cache;
+        cache.width = width;
+        cache.height = height;
+        cache.rowPitch = width * 4;
+        cache.pixels.resize(static_cast<size_t>(cache.rowPitch) * height);
+        const auto *src = static_cast<const uint8_t *>(pixels);
+        for (uint32_t y = 0; y < height; ++y) {
+            uint8_t *dst = cache.pixels.data() + static_cast<size_t>(y) * cache.rowPitch;
+            std::memcpy(dst, src + static_cast<size_t>(y) * pitchBytes, cache.rowPitch);
+            for (uint32_t x = 0; x < width; ++x) dst[x * 4 + 3] = 0xFF;
+        }
+        if (existing != textures_.end()) {
+            updateTexture(existing->second, std::move(cache));
+        } else {
+            textures_.emplace(textureId, std::move(cache));
+        }
+        return textureId;
+    }
+
     // Capture-only registration for the GPU mesh path: same cache upkeep as
     // texture(), but never touches bound stage state and never emits a
     // SET_TEXTURE - mesh draws carry their texture id in the command itself.
@@ -1907,6 +1943,11 @@ void ensureTexture(DWORD textureId, IDirectDrawSurface4 *surface) {
 
 uint32_t ensureSurfaceTexture(IDirectDrawSurface4 *surface) {
     return producer.ensureSurfaceTexture(surface);
+}
+
+uint32_t ensureBufferTexture(const void *key, const void *pixels, uint32_t width,
+                             uint32_t height, uint32_t pitchBytes) {
+    return producer.ensureBufferTexture(key, pixels, width, height, pitchBytes);
 }
 
 void setGameTickTiming(uint32_t tickMicroseconds) {

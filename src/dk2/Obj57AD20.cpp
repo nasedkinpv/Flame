@@ -1,6 +1,7 @@
 #include "dk2/Obj57AD20.h"
 
 #include "dk2/CEngineDDSurface.h"
+#include "dk2/CEngineSurfaceBase.h"
 #include "dk2/MyCESurfHandle.h"
 #include "dk2/MyCESurfScale.h"
 #include "dk2/MyScaledSurface.h"
@@ -312,11 +313,31 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
             // No lazily-created FakeTexture (the GPU path bypasses legacy
             // SetTexture, so it never gets made) - hand the raw DD surface
             // back for synthetic-id registration.
-            if (dd->surfCreated && dd->ddSurf) {
-                ++g_resolveStats.rawHit;
-                *bridgeIdOut = 0;
-                *bridgeSurfaceOut = dd->ddSurf;
-                return 1;
+            // Not a DD-backed surface (terrain atlas pages are plain CPU
+            // CEngineSurface objects): capture through the base-class
+            // virtuals, which every subclass implements.
+            auto *base = reinterpret_cast<dk2::CEngineSurfaceBase *>(handle->cesurf);
+            const uint32_t bytesPerPixel = base->fC_desc
+                ? *reinterpret_cast<const uint32_t *>(
+                      reinterpret_cast<const uint8_t *>(base->fC_desc) + 8)
+                : 0;
+            if (bytesPerPixel == 4 && base->width > 0 && base->height > 0) {
+                void *pixels = base->v_lockBuf();
+                if (pixels) {
+                    ++g_resolveStats.rawHit;
+                    const uint32_t id = gog::metal_bridge::ensureBufferTexture(
+                        base, pixels,
+                        static_cast<uint32_t>(base->width),
+                        static_cast<uint32_t>(base->height),
+                        static_cast<uint32_t>(base->lineWidth) * 4u);
+                    base->v_unlockBuf(reinterpret_cast<int>(pixels));
+                    if (id) {
+                        *bridgeIdOut = id;
+                        *bridgeSurfaceOut = nullptr;
+                        return 2;  // already registered, no ensureTexture needed
+                    }
+                    continue;
+                }
             }
             ++g_resolveStats.devNull;
         }
@@ -334,7 +355,8 @@ uint32_t resolveBridgeTextureId(dk2::MyScaledSurface *surface) {
     }
     uint32_t bridgeId = 0;
     void *bridgeSurface = nullptr;
-    if (!resolveBridgeTextureIdGuarded(surface, &bridgeId, &bridgeSurface)) {
+    const uint32_t resolveMode = resolveBridgeTextureIdGuarded(surface, &bridgeId, &bridgeSurface);
+    if (!resolveMode) {
         if (badSurfaces.size() < 4096) badSurfaces.push_back(surface);
         return 0;
     }
@@ -352,6 +374,7 @@ uint32_t resolveBridgeTextureId(dk2::MyScaledSurface *surface) {
                         g_resolveStats.devNull, g_resolveStats.fakeHit,
                         g_resolveStats.rawHit, g_resolveStats.faults, retZero, retNonzero, sampleId);
     }
+    if (resolveMode == 2) return bridgeId;  // buffer texture already registered
     if (bridgeId) {
         // capture-only registration: never disturbs stage-0 binding state
         gog::metal_bridge::ensureTexture(
