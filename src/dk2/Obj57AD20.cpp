@@ -269,10 +269,17 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
 }
 
 uint32_t resolveBridgeTextureId(dk2::MyScaledSurface *surface) {
+    static std::vector<const void *> badSurfaces;
+    for (const void *bad : badSurfaces) {
+        if (bad == surface) return 0;
+    }
     uint32_t bridgeId = 0;
     void *bridgeSurface = nullptr;
-    if (!resolveBridgeTextureIdGuarded(surface, &bridgeId, &bridgeSurface) || !bridgeId)
+    if (!resolveBridgeTextureIdGuarded(surface, &bridgeId, &bridgeSurface)) {
+        if (badSurfaces.size() < 4096) badSurfaces.push_back(surface);
         return 0;
+    }
+    if (!bridgeId) return 0;
     // capture-only registration: never disturbs stage-0 binding state
     gog::metal_bridge::ensureTexture(
         bridgeId, static_cast<IDirectDrawSurface4 *>(bridgeSurface));
@@ -332,9 +339,17 @@ bool drawEntryOnGpu(MeshEntry &entry, dk2::MyScaledSurface *surface,
     const float vS = *reinterpret_cast<const float *>(0x0076F340);
     const float uO = *reinterpret_cast<const float *>(0x0077F480);
     const float vO = *reinterpret_cast<const float *>(0x0077F3D8);
+    // Negative cache: a bad entry pointer would otherwise fault (and ride
+    // Wine's fragile WOW64 SEH dispatch) on every single frame - fault once,
+    // remember, and fall back instantly afterwards.
+    static std::vector<const void *> badEntries;
+    for (const void *bad : badEntries) {
+        if (bad == entry.vertices) return false;
+    }
     uint32_t vertexCount = 0;
     if (!copyEntryGuarded(entry, indexCount, &vertexCount, vertices, 256, indices,
                           uvScale, uS, vS, uO, vO)) {
+        if (badEntries.size() < 4096) badEntries.push_back(entry.vertices);
         static bool loggedBadEntry = false;
         if (!loggedBadEntry) {
             loggedBadEntry = true;

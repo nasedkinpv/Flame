@@ -1104,6 +1104,12 @@ private:
         // freed surface page-faults (this was the deterministic level-load
         // crash once the stack finally resolved cleanly). A dead surface just
         // means "no capture", never a dead process.
+        // negative cache first: re-faulting through Wine's WOW64 SEH dispatch
+        // every frame provokes its known 7BF2123D instability - fault once
+        // per dead surface, then refuse straight away.
+        for (const void *dead : deadSurfaces_) {
+            if (dead == surface) return false;
+        }
         __try {
             DDSURFACEDESC2 desc = {};
             desc.dwSize = sizeof(desc);
@@ -1113,6 +1119,7 @@ private:
             surface->Unlock(nullptr);
             return valid;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
+            if (deadSurfaces_.size() < 4096) deadSurfaces_.push_back(surface);
             static bool loggedDeadSurface = false;
             if (!loggedDeadSurface) {
                 loggedDeadSurface = true;
@@ -1724,6 +1731,7 @@ private:
     std::vector<uint8_t> stagedMesh_;
     std::vector<uint32_t> stagedMeshTextures_;
     std::vector<uint8_t> pendingLights_;
+    std::vector<const void *> deadSurfaces_;
     uint32_t stagedMeshCommandCount_ = 0;
     bool stagedCamera_ = false;
     bool stagedLights_ = false;
