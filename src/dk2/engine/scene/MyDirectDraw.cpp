@@ -3,6 +3,7 @@
 //
 #include "dk2_functions.h"
 #include "dk2_globals.h"
+#include "patches/logging.h"
 #include "dk2/CEngineDDSurface.h"
 #include "dk2/MyDblNamedSurface.h"
 #include "dk2/SurfHashList.h"
@@ -256,6 +257,11 @@ int __cdecl dk2::static_MyDirectDraw_devTexture_init(MyDirectDraw *mydd) {
             MyDirectDraw_instance_devTexture.flags &= ~0x30u;
         } else {
             if ((MyDirectDraw_instance_devTexture.flags & 0x30) != 0) {
+                // ponytail: breadcrumb logs bracketing the 16-bit bump atlas
+                // setup - the deterministic 088F0004 heap fault lands between
+                // "prepareScreen success" and the bump CreateSurface, and these
+                // pin down which call actually dies. Remove once solved.
+                patch::log::dbg("bump16: alloc SurfHashList2");
                 SurfHashList2 *v15 = (SurfHashList2 *) MyHeap_alloc(sizeof(SurfHashList2));
                 SurfHashList2 *v20;
                 if (v15) {
@@ -275,7 +281,9 @@ int __cdecl dk2::static_MyDirectDraw_devTexture_init(MyDirectDraw *mydd) {
                     v20 = NULL;
                 }
                 g_pSurfHashList2 = v20;
+                patch::log::dbg("bump16: SurfHashList2(unk16) ctor enter");
                 v14 = v20->constructor(&MyCEngineSurfDesc_unk16_instance, 2, 2) & 1;
+                patch::log::dbg("bump16: SurfHashList2(unk16) ctor done v14=%d", v14);
             }
             if (!g_isSupports_16bit) {
                 MyDirectDraw_instance_devTexture.flags &= ~0x30u;
@@ -300,6 +308,7 @@ int __cdecl dk2::static_MyDirectDraw_devTexture_init(MyDirectDraw *mydd) {
             v26 = NULL;
         }
         pSurfHashList2_2 = v26;
+        patch::log::dbg("bump16: SurfHashList2(argb32) ctor enter");
         if (((unsigned __int8) v26->constructor(&MyCEngineSurfDesc_argb32_instance, 32, 512) & (unsigned __int8) v14) ==
             0) {
             SurfHashList2_initialized = 1;
