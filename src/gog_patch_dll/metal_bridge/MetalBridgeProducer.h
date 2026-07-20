@@ -69,6 +69,8 @@ void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCou
                     uint32_t flags, float ambientR, float ambientG, float ambientB);
 // Last begun frame's dimensions (stable during the game's prepare phase).
 void frameSize(uint32_t *width, uint32_t *height);
+// Capture-only texture registration for mesh draws (no stage-state binding).
+void ensureTexture(DWORD textureId, IDirectDrawSurface4 *surface);
 
 }
 

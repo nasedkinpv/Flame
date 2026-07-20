@@ -210,9 +210,8 @@ uint32_t resolveBridgeTextureId(dk2::MyScaledSurface *surface) {
     auto *dd = reinterpret_cast<dk2::CEngineDDSurface *>(surface->surfh->cesurf);
     auto *fake = reinterpret_cast<gog::FakeTexture *>(dd->devTex);
     if (!fake) return 0;
-    // register/refresh the pixels with the producer without disturbing draw
-    // state: setTexture also captures the surface into the texture cache
-    gog::metal_bridge::setTexture(0, fake->bridgeId(), fake->bridgeSurface());
+    // capture-only registration: never disturbs stage-0 binding state
+    gog::metal_bridge::ensureTexture(fake->bridgeId(), fake->bridgeSurface());
     return fake->bridgeId();
 }
 

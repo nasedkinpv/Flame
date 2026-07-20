@@ -194,6 +194,33 @@ public:
         if (active_) emitTexture(stage, textureId);
     }
 
+    // Capture-only registration for the GPU mesh path: same cache upkeep as
+    // texture(), but never touches bound stage state and never emits a
+    // SET_TEXTURE - mesh draws carry their texture id in the command itself.
+    void ensureTexture(DWORD textureId, IDirectDrawSurface4 *surface) {
+        if (!textureId || !ensureMapped()) return;
+        auto found = textures_.find(textureId);
+        if (found == textures_.end()) {
+            TextureCache cache;
+            if (!captureTexture(surface, cache)) {
+                static bool loggedCaptureFailure = false;
+                if (!loggedCaptureFailure) {
+                    loggedCaptureFailure = true;
+                    gog_debugf("Metal bridge: mesh texture %u capture failed (surface=%p)",
+                               textureId, surface);
+                }
+                return;
+            }
+            textures_.emplace(textureId, std::move(cache));
+        } else if (found->second.dirty) {
+            TextureCache updated;
+            if (captureTexture(surface, updated)) {
+                updateTexture(found->second, std::move(updated));
+            }
+        }
+        if (surface) surfaceTextures_[reinterpret_cast<uintptr_t>(surface)] = textureId;
+    }
+
     void textureDirty(IDirectDrawSurface4 *surface, const DDSURFACEDESC2 *lockedDesc) {
         if (!surface) return;
         const auto surfaceEntry = surfaceTextures_.find(reinterpret_cast<uintptr_t>(surface));
@@ -1738,6 +1765,10 @@ void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCou
 }
 
 void frameSize(uint32_t *width, uint32_t *height) { producer.frameSize(width, height); }
+
+void ensureTexture(DWORD textureId, IDirectDrawSurface4 *surface) {
+    producer.ensureTexture(textureId, surface);
+}
 
 void setGameTickTiming(uint32_t tickMicroseconds) {
     producer.gameTickTiming(tickMicroseconds);
