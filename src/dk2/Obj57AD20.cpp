@@ -254,10 +254,16 @@ void emitFrameLights(uint32_t *lightData) {
 
 // SEH-guarded: level transitions leave stale cesurf/devTex pointers behind,
 // and this three-hop chain must degrade to "no texture", never fault.
+struct ResolveStats {
+    uint32_t calls, nullSurface, noCandidates, cesurfNull, devNull, fakeHit, rawHit, faults;
+};
+ResolveStats g_resolveStats = {};
+
 uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
                                        uint32_t *bridgeIdOut, void **bridgeSurfaceOut) {
     __try {
-        if (!surface) return 0;
+        ++g_resolveStats.calls;
+        if (!surface) { ++g_resolveStats.nullSurface; return 0; }
         // Candidate handles in preference order: the base handle, its current
         // reduction, then the scaled set. Reduction levels are the engine's
         // software mip-mapping; the GPU side mip-maps natively, so ANY
@@ -278,14 +284,16 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
                 }
             }
         }
+        if (!candidateCount) ++g_resolveStats.noCandidates;
         for (int i = 0; i < candidateCount; ++i) {
             dk2::MyCESurfHandle *handle = candidates[i];
             // the engine creates cesurf lazily at paint time; do the same
             if (!handle->cesurf) handle->create();
-            if (!handle->cesurf) continue;
+            if (!handle->cesurf) { ++g_resolveStats.cesurfNull; continue; }
             auto *dd = reinterpret_cast<dk2::CEngineDDSurface *>(handle->cesurf);
             auto *fake = reinterpret_cast<gog::FakeTexture *>(dd->devTex);
             if (fake) {
+                ++g_resolveStats.fakeHit;
                 *bridgeIdOut = fake->bridgeId();
                 *bridgeSurfaceOut = fake->bridgeSurface();
                 return 1;
@@ -294,13 +302,16 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
             // SetTexture, so it never gets made) - hand the raw DD surface
             // back for synthetic-id registration.
             if (dd->surfCreated && dd->ddSurf) {
+                ++g_resolveStats.rawHit;
                 *bridgeIdOut = 0;
                 *bridgeSurfaceOut = dd->ddSurf;
                 return 1;
             }
+            ++g_resolveStats.devNull;
         }
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ++g_resolveStats.faults;
         return 0;
     }
 }
@@ -315,6 +326,17 @@ uint32_t resolveBridgeTextureId(dk2::MyScaledSurface *surface) {
     if (!resolveBridgeTextureIdGuarded(surface, &bridgeId, &bridgeSurface)) {
         if (badSurfaces.size() < 4096) badSurfaces.push_back(surface);
         return 0;
+    }
+    static DWORD lastStatsTick = 0;
+    const DWORD statsTick = GetTickCount();
+    if (statsTick - lastStatsTick > 3000) {
+        lastStatsTick = statsTick;
+        patch::log::dbg("mesh tex resolve: calls=%u nullSurf=%u noCand=%u cesurfNull=%u "
+                        "devNull=%u fakeHit=%u rawHit=%u faults=%u",
+                        g_resolveStats.calls, g_resolveStats.nullSurface,
+                        g_resolveStats.noCandidates, g_resolveStats.cesurfNull,
+                        g_resolveStats.devNull, g_resolveStats.fakeHit,
+                        g_resolveStats.rawHit, g_resolveStats.faults);
     }
     if (bridgeId) {
         // capture-only registration: never disturbs stage-0 binding state
