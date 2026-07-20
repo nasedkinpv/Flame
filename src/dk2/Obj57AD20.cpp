@@ -283,10 +283,19 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
             if (!handle->cesurf) continue;
             auto *dd = reinterpret_cast<dk2::CEngineDDSurface *>(handle->cesurf);
             auto *fake = reinterpret_cast<gog::FakeTexture *>(dd->devTex);
-            if (!fake) continue;
-            *bridgeIdOut = fake->bridgeId();
-            *bridgeSurfaceOut = fake->bridgeSurface();
-            return 1;
+            if (fake) {
+                *bridgeIdOut = fake->bridgeId();
+                *bridgeSurfaceOut = fake->bridgeSurface();
+                return 1;
+            }
+            // No lazily-created FakeTexture (the GPU path bypasses legacy
+            // SetTexture, so it never gets made) - hand the raw DD surface
+            // back for synthetic-id registration.
+            if (dd->surfCreated && dd->ddSurf) {
+                *bridgeIdOut = 0;
+                *bridgeSurfaceOut = dd->ddSurf;
+                return 1;
+            }
         }
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -305,11 +314,18 @@ uint32_t resolveBridgeTextureId(dk2::MyScaledSurface *surface) {
         if (badSurfaces.size() < 4096) badSurfaces.push_back(surface);
         return 0;
     }
-    if (!bridgeId) return 0;
-    // capture-only registration: never disturbs stage-0 binding state
-    gog::metal_bridge::ensureTexture(
-        bridgeId, static_cast<IDirectDrawSurface4 *>(bridgeSurface));
-    return bridgeId;
+    if (bridgeId) {
+        // capture-only registration: never disturbs stage-0 binding state
+        gog::metal_bridge::ensureTexture(
+            bridgeId, static_cast<IDirectDrawSurface4 *>(bridgeSurface));
+        return bridgeId;
+    }
+    if (bridgeSurface) {
+        // surface without a FakeTexture: synthetic-id registration
+        return gog::metal_bridge::ensureSurfaceTexture(
+            static_cast<IDirectDrawSurface4 *>(bridgeSurface));
+    }
+    return 0;
 }
 
 // SEH-guarded raw copy out of a MeshEntry: not every entry reaching

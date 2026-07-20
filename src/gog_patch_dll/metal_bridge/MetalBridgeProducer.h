@@ -74,6 +74,8 @@ void frameSize(uint32_t *width, uint32_t *height);
 uint32_t frameCounter();
 // Capture-only texture registration for mesh draws (no stage-state binding).
 void ensureTexture(DWORD textureId, IDirectDrawSurface4 *surface);
+// Bridge id for a surface with no FakeTexture (synthetic id namespace).
+uint32_t ensureSurfaceTexture(IDirectDrawSurface4 *surface);
 
 }
 

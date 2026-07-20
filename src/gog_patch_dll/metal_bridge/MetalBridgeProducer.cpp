@@ -200,6 +200,23 @@ public:
         if (active_) emitTexture(stage, textureId);
     }
 
+    // Assigns (and captures) a bridge texture id for a raw surface that never
+    // went through the legacy SetTexture path - terrain cache pages under the
+    // GPU mesh path never get a lazily-created FakeTexture, so their id comes
+    // from this synthetic namespace instead.
+    uint32_t ensureSurfaceTexture(IDirectDrawSurface4 *surface) {
+        if (!surface || !ensureMapped()) return 0;
+        const auto found = surfaceTextures_.find(reinterpret_cast<uintptr_t>(surface));
+        uint32_t textureId;
+        if (found != surfaceTextures_.end()) {
+            textureId = found->second;
+        } else {
+            textureId = nextSyntheticTextureId_++;
+        }
+        ensureTexture(textureId, surface);
+        return textures_.count(textureId) ? textureId : 0;
+    }
+
     // Capture-only registration for the GPU mesh path: same cache upkeep as
     // texture(), but never touches bound stage state and never emits a
     // SET_TEXTURE - mesh draws carry their texture id in the command itself.
@@ -1732,6 +1749,7 @@ private:
     std::vector<uint32_t> stagedMeshTextures_;
     std::vector<uint8_t> pendingLights_;
     std::vector<const void *> deadSurfaces_;
+    uint32_t nextSyntheticTextureId_ = 0x40000000u;
     uint32_t stagedMeshCommandCount_ = 0;
     bool stagedCamera_ = false;
     bool stagedLights_ = false;
@@ -1885,6 +1903,10 @@ uint32_t frameCounter() { return producer.frameCounter(); }
 
 void ensureTexture(DWORD textureId, IDirectDrawSurface4 *surface) {
     producer.ensureTexture(textureId, surface);
+}
+
+uint32_t ensureSurfaceTexture(IDirectDrawSurface4 *surface) {
+    return producer.ensureSurfaceTexture(surface);
 }
 
 void setGameTickTiming(uint32_t tickMicroseconds) {
