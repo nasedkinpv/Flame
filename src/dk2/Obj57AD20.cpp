@@ -310,14 +310,20 @@ bool drawEntryOnGpu(MeshEntry &entry, dk2::MyScaledSurface *surface,
     if (!loggedFirstEntry) {
         loggedFirstEntry = true;
         patch::log::dbg("mesh gpu probe: v0.color=(%f %f %f) ambient=(%f %f %f) "
-                        "alphaTerm=%08X texId=%u verts=%u packed0=%08X",
+                        "alphaTerm=%08X texId=%u verts=%u packed0=%08X uv0=(%f %f) "
+                        "uvTables=(%f %f %f %f)",
                         static_cast<double>(entry.vertices[0].color.x),
                         static_cast<double>(entry.vertices[0].color.y),
                         static_cast<double>(entry.vertices[0].color.z),
                         static_cast<double>(ambient.x),
                         static_cast<double>(ambient.y),
                         static_cast<double>(ambient.z),
-                        alphaTerm, textureId, vertexCount, vertices[0].base_color);
+                        alphaTerm, textureId, vertexCount, vertices[0].base_color,
+                        static_cast<double>(vertices[0].u), static_cast<double>(vertices[0].v),
+                        static_cast<double>(*reinterpret_cast<const float *>(0x00779368)),
+                        static_cast<double>(*reinterpret_cast<const float *>(0x0076F340)),
+                        static_cast<double>(*reinterpret_cast<const float *>(0x0077F480)),
+                        static_cast<double>(*reinterpret_cast<const float *>(0x0077F3D8)));
     }
     emitMeshCamera();
     emitFrameLights(lightData);

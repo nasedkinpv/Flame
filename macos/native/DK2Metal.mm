@@ -2256,7 +2256,8 @@ static void *renderWorker(void *context) {
                         const NSUInteger baseVertex = meshVertexOffset / kMeshVertexStride;
                         meshVertexOffset += vertexBytes;
                         indexOffset = alignedIndexOffset + indexBytes;
-                        const TextureBinding binding = inlineDraw.texture_id
+                        static const bool meshNoTexture = getenv("DK2_MESH_NO_TEXTURE") != nullptr;
+                        const TextureBinding binding = (!meshNoTexture && inlineDraw.texture_id)
                             ? resolveTextureBinding(inlineDraw.texture_id)
                             : TextureBinding{static_cast<uint16_t>(boundArgumentTableBank), 0};
                         auto *uniforms =
