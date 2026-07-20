@@ -45,6 +45,12 @@ struct OverlayTileState {
     uint32_t version = 1;
     uint32_t sentVersion = 0;
     uint32_t acknowledgedVersion = 0;
+    // generation of parityCache_[0]/[1] this tile was last unmatted against;
+    // 0 means "never processed" and never matches a real touched generation
+    // (markTilesTouched skips 0 on wraparound), so a freshly-sized tile array
+    // is naturally dirty everywhere on its first pass.
+    uint32_t lastBlackGen = 0;
+    uint32_t lastWhiteGen = 0;
 };
 
 struct CursorSnapshot {
@@ -379,7 +385,7 @@ public:
         }
         TextureCache &cache = parityCache_[parity];
 
-        RECT refreshed;
+        RECT touched;  // the sub-rect of cache.pixels actually written this call
         if (tracked && !cache.pixels.empty()) {
             // partial path: everything outside the drawn region is the clear
             // colour; only refresh the previous and current drawn areas
@@ -392,7 +398,7 @@ public:
             if (!dimsOk) {
                 surface->Unlock(nullptr);
                 if (!captureTexture(surface, cache)) return;
-                parityRefresh_[parity] = {0, 0, (LONG)cache.width, (LONG)cache.height};
+                touched = {0, 0, (LONG)cache.width, (LONG)cache.height};
             } else {
                 RECT refresh = parityDrawn_[parity].right > 0
                         ? (haveDrawn ? unionRect(parityDrawn_[parity], drawn) : parityDrawn_[parity])
@@ -425,21 +431,27 @@ public:
                 }
                 surface->Unlock(nullptr);
                 parityDrawn_[parity] = haveDrawn ? drawn : RECT{0, 0, 0, 0};
-                parityRefresh_[parity] = refresh;
+                touched = refresh;
             }
         } else {
             if (!captureTexture(surface, cache)) return;
             parityDrawn_[parity] = {0, 0, (LONG)cache.width, (LONG)cache.height};
-            parityRefresh_[parity] = {0, 0, (LONG)cache.width, (LONG)cache.height};
+            touched = {0, 0, (LONG)cache.width, (LONG)cache.height};
         }
-        refreshed = parityRefresh_[parity];
+        markTilesTouched(parityTileGen_[parity], touched);
+        if (cursor.visible) {
+            // stripCursor only actually edits pixels when cursor.matteWhite
+            // matches this parity and geometry lines up, but marking the
+            // rect unconditionally is cheap and keeps this correct even if
+            // stripCursor's own guard changes later.
+            markTilesTouched(parityTileGen_[parity], cursor.rect);
+        }
         stripCursor(cache, cursor, parity != 0);
 
         TextureCache &other = parityCache_[1 - parity];
         if (!other.pixels.empty() && other.width == cache.width &&
             other.height == cache.height && other.rowPitch == cache.rowPitch) {
-            const RECT process = unionRect(refreshed, parityRefresh_[1 - parity]);
-            updateOverlay(parityCache_[0], parityCache_[1], process, cursor);
+            updateOverlay(parityCache_[0], parityCache_[1], cursor);
         }
     }
 
@@ -852,7 +864,13 @@ private:
         }
     }
 
-    void markOverlayRect(const RECT &rect) {
+    // Marks every tile touched by `rect` as freshly written in generation
+    // array `gen` (parityTileGen_[0] for cache[0]="black", [1] for "white").
+    // updateOverlay() compares these against each OverlayTileState's last-
+    // processed generation to decide which tiles actually need re-unmatting,
+    // instead of inferring it from a single accumulated bounding rect that
+    // can miss a tile whose two parity frames' dirty windows don't overlap.
+    void markTilesTouched(std::vector<uint32_t> &gen, const RECT &rect) {
         if (!overlayTileColumns_ || !overlayTileRows_) return;
         const uint32_t left = (uint32_t)std::clamp<LONG>(rect.left, 0, (LONG)overlay_.width);
         const uint32_t right = (uint32_t)std::clamp<LONG>(rect.right, 0, (LONG)overlay_.width);
@@ -863,60 +881,16 @@ private:
         const uint32_t lastTileX = (right - 1) / kOverlayTileSize;
         const uint32_t firstTileY = top / kOverlayTileSize;
         const uint32_t lastTileY = (bottom - 1) / kOverlayTileSize;
-        for (uint32_t tileY = firstTileY; tileY <= lastTileY; ++tileY)
-            for (uint32_t tileX = firstTileX; tileX <= lastTileX; ++tileX)
-                overlayChanged_[static_cast<size_t>(tileY) * overlayTileColumns_ + tileX] = 1;
-    }
-
-    void restoreCompositedCursor() {
-        const uint32_t width = (uint32_t)std::max<LONG>(0,
-            compositedCursorRect_.right - compositedCursorRect_.left);
-        const uint32_t height = (uint32_t)std::max<LONG>(0,
-            compositedCursorRect_.bottom - compositedCursorRect_.top);
-        if (!width || !height || cursorUnderlay_.size() != static_cast<size_t>(width) * height * 4)
-            return;
-        for (uint32_t row = 0; row < height; ++row)
-            std::memcpy(overlay_.pixels.data() +
-                            static_cast<size_t>(compositedCursorRect_.top + row) * overlay_.rowPitch +
-                            compositedCursorRect_.left * 4,
-                        cursorUnderlay_.data() + static_cast<size_t>(row) * width * 4,
-                        static_cast<size_t>(width) * 4);
-        markOverlayRect(compositedCursorRect_);
-        compositedCursorRect_ = {};
-        cursorUnderlay_.clear();
-    }
-
-    void compositeCursor(const CursorSnapshot &cursor) {
-        if (!cursor.visible || cursor.pixels.empty()) return;
-        RECT clipped = {
-            std::clamp<LONG>(cursor.rect.left, 0, (LONG)overlay_.width),
-            std::clamp<LONG>(cursor.rect.top, 0, (LONG)overlay_.height),
-            std::clamp<LONG>(cursor.rect.right, 0, (LONG)overlay_.width),
-            std::clamp<LONG>(cursor.rect.bottom, 0, (LONG)overlay_.height)};
-        if (clipped.right <= clipped.left || clipped.bottom <= clipped.top) return;
-        const uint32_t width = clipped.right - clipped.left;
-        const uint32_t height = clipped.bottom - clipped.top;
-        cursorUnderlay_.resize(static_cast<size_t>(width) * height * 4);
-        for (uint32_t row = 0; row < height; ++row) {
-            uint8_t *destination = overlay_.pixels.data() +
-                                   static_cast<size_t>(clipped.top + row) * overlay_.rowPitch +
-                                   clipped.left * 4;
-            std::memcpy(cursorUnderlay_.data() + static_cast<size_t>(row) * width * 4,
-                        destination, static_cast<size_t>(width) * 4);
-            const uint32_t sourceY = clipped.top + row - cursor.rect.top;
-            for (uint32_t column = 0; column < width; ++column) {
-                const uint32_t sourceX = clipped.left + column - cursor.rect.left;
-                const uint8_t *source = cursor.pixels.data() +
-                    (static_cast<size_t>(sourceY) * cursor.width + sourceX) * 4;
-                if (source[3]) std::memcpy(destination + column * 4, source, 4);
+        for (uint32_t tileY = firstTileY; tileY <= lastTileY; ++tileY) {
+            for (uint32_t tileX = firstTileX; tileX <= lastTileX; ++tileX) {
+                uint32_t &g = gen[static_cast<size_t>(tileY) * overlayTileColumns_ + tileX];
+                if (++g == 0) g = 1;  // skip 0, reserved for "never touched"
             }
         }
-        compositedCursorRect_ = clipped;
-        markOverlayRect(clipped);
     }
 
-    void updateOverlay(const TextureCache &black, const TextureCache &white, RECT process,
-                       const CursorSnapshot &cursor) {
+    void updateOverlay(const TextureCache &black, const TextureCache &white,
+                       const CursorSnapshot &) {
         if (overlay_.width != black.width || overlay_.height != black.height ||
             overlay_.rowPitch != black.rowPitch) {
             overlay_.width = black.width;
@@ -926,45 +900,45 @@ private:
             overlayTileColumns_ = (black.width + kOverlayTileSize - 1) / kOverlayTileSize;
             overlayTileRows_ = (black.height + kOverlayTileSize - 1) / kOverlayTileSize;
             overlayTiles_.assign(static_cast<size_t>(overlayTileColumns_) * overlayTileRows_, {});
-            overlayChanged_.resize(overlayTiles_.size());
-            overlayLine_.resize(black.rowPitch);
+            parityTileGen_[0].assign(overlayTiles_.size(), 0);
+            parityTileGen_[1].assign(overlayTiles_.size(), 0);
             overlayForceFull_ = true;
-            process = {0, 0, (LONG)black.width, (LONG)black.height};
+            // Both caches were just (re)captured in full at this new size:
+            // touch every tile in both generation arrays once, so the loop
+            // below finds every tile dirty against the freshly-reset (0)
+            // lastBlackGen/lastWhiteGen on this very first pass.
+            const RECT full = {0, 0, (LONG)black.width, (LONG)black.height};
+            markTilesTouched(parityTileGen_[0], full);
+            markTilesTouched(parityTileGen_[1], full);
         }
 
-        const uint32_t xBegin = (uint32_t)std::clamp<LONG>(process.left, 0, (LONG)black.width);
-        const uint32_t xEnd = (uint32_t)std::clamp<LONG>(process.right, 0, (LONG)black.width);
-        const uint32_t yBegin = (uint32_t)std::clamp<LONG>(process.top, 0, (LONG)black.height);
-        const uint32_t yEnd = (uint32_t)std::clamp<LONG>(process.bottom, 0, (LONG)black.height);
-        std::fill(overlayChanged_.begin(), overlayChanged_.end(), 0);
-        restoreCompositedCursor();
-        for (uint32_t y = yBegin; y < yEnd; ++y) {
-            const uint8_t *blackRow = black.pixels.data() + static_cast<size_t>(y) * black.rowPitch;
-            const uint8_t *whiteRow = white.pixels.data() + static_cast<size_t>(y) * white.rowPitch;
-            uint8_t *overlayRow = overlay_.pixels.data() + static_cast<size_t>(y) * overlay_.rowPitch;
-            unmatteOverlaySpan(blackRow + static_cast<size_t>(xBegin) * 4,
-                               whiteRow + static_cast<size_t>(xBegin) * 4,
-                               overlayLine_.data() + static_cast<size_t>(xBegin) * 4,
-                               xEnd - xBegin);
-            const uint32_t tileY = y / kOverlayTileSize;
-            const uint32_t firstTileX = xBegin / kOverlayTileSize;
-            const uint32_t endTileX = (xEnd + kOverlayTileSize - 1) / kOverlayTileSize;
-            for (uint32_t tileX = firstTileX; tileX < endTileX; ++tileX) {
-                const uint32_t tileLeft = tileX * kOverlayTileSize;
-                const uint32_t copyLeft = std::max(tileLeft, xBegin);
-                const uint32_t copyRight = std::min(tileLeft + kOverlayTileSize, xEnd);
-                const size_t bytes = static_cast<size_t>(copyRight - copyLeft) * 4;
-                if (std::memcmp(overlayRow + static_cast<size_t>(copyLeft) * 4,
-                                overlayLine_.data() + static_cast<size_t>(copyLeft) * 4,
-                                bytes) == 0) continue;
-                std::memcpy(overlayRow + static_cast<size_t>(copyLeft) * 4,
-                            overlayLine_.data() + static_cast<size_t>(copyLeft) * 4, bytes);
-                overlayChanged_[static_cast<size_t>(tileY) * overlayTileColumns_ + tileX] = 1;
+        // Per-tile generation compare replaces the old single accumulated
+        // "process" rect: a tile is only skipped when NEITHER cache changed
+        // it since we last unmatted it, so two parity frames whose dirty
+        // windows don't overlap can no longer leave a tile stuck stale.
+        for (uint32_t tileY = 0; tileY < overlayTileRows_; ++tileY) {
+            const uint32_t yBegin = tileY * kOverlayTileSize;
+            const uint32_t yEnd = std::min(yBegin + kOverlayTileSize, black.height);
+            for (uint32_t tileX = 0; tileX < overlayTileColumns_; ++tileX) {
+                const size_t tile = static_cast<size_t>(tileY) * overlayTileColumns_ + tileX;
+                const uint32_t blackGen = parityTileGen_[0][tile];
+                const uint32_t whiteGen = parityTileGen_[1][tile];
+                OverlayTileState &state = overlayTiles_[tile];
+                if (blackGen == state.lastBlackGen && whiteGen == state.lastWhiteGen) continue;
+
+                const uint32_t xBegin = tileX * kOverlayTileSize;
+                const uint32_t xEnd = std::min(xBegin + kOverlayTileSize, black.width);
+                for (uint32_t y = yBegin; y < yEnd; ++y) {
+                    unmatteOverlaySpan(
+                        black.pixels.data() + static_cast<size_t>(y) * black.rowPitch + static_cast<size_t>(xBegin) * 4,
+                        white.pixels.data() + static_cast<size_t>(y) * white.rowPitch + static_cast<size_t>(xBegin) * 4,
+                        overlay_.pixels.data() + static_cast<size_t>(y) * overlay_.rowPitch + static_cast<size_t>(xBegin) * 4,
+                        xEnd - xBegin);
+                }
+                state.lastBlackGen = blackGen;
+                state.lastWhiteGen = whiteGen;
+                if (++state.version == 0) state.version = 1;
             }
-        }
-        for (size_t tile = 0; tile < overlayTiles_.size(); ++tile) {
-            if (!overlayChanged_[tile]) continue;
-            if (++overlayTiles_[tile].version == 0) overlayTiles_[tile].version = 1;
         }
     }
 
@@ -1329,17 +1303,14 @@ private:
     bool cursorCaptureLogged_ = false;
     bool cursorCaptureFailureLogged_ = false;
     uint64_t lastCursorGeometry_ = 0;
-    RECT compositedCursorRect_ = {};
-    std::vector<uint8_t> cursorUnderlay_;
     RECT parityDrawn_[2] = {};
-    RECT parityRefresh_[2] = {};
     RECT drawnRect_ = {};
     bool drawnValid_ = false;
     bool drawnFull_ = false;
     bool clearedThisFrame_ = false;
     std::vector<OverlayTileState> overlayTiles_;
-    std::vector<uint8_t> overlayChanged_;
-    std::vector<uint8_t> overlayLine_;
+    // per-parity-cache, per-tile write generation; see markTilesTouched()
+    std::vector<uint32_t> parityTileGen_[2];
     uint32_t overlayTileColumns_ = 0;
     uint32_t overlayTileRows_ = 0;
     uint32_t overlayConsumerSession_ = 0;
