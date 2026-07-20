@@ -131,9 +131,11 @@ float debiasColour(float value) {
 }
 
 uint32_t packBaseColor(const dk2::Vec3f &colour) {
+    // Per-vertex colours are plain 0..255 floats - the float-bias encoding
+    // lives in the ambient globals only (the CPU path subtracts the bias once
+    // from the accumulated sum). Debiasing both painted GPU meshes black.
     auto clampByte = [](float v) -> uint32_t {
-        const float d = debiasColour(v);
-        return d <= 0.0f ? 0u : (d >= 255.0f ? 255u : static_cast<uint32_t>(d));
+        return v <= 0.0f ? 0u : (v >= 255.0f ? 255u : static_cast<uint32_t>(v));
     };
     return (clampByte(colour.x) << 16) | (clampByte(colour.y) << 8) | clampByte(colour.z);
 }
@@ -187,7 +189,8 @@ void emitFrameLights(uint32_t *lightData) {
     scratch.clear();
     const auto lights = reinterpret_cast<const SceneLightForGpu *const *>(
             reinterpret_cast<const uint8_t *>(lightData) + 0x38);
-    for (int32_t i = 0; i < total; ++i) {
+    for (int32_t i = 0; i < total && i < 512; ++i) {
+        if (!lights[i]) continue;
         const SceneLightForGpu &s = *lights[i];
         DK2MLight light = {};
         light.px = s.position.x;
