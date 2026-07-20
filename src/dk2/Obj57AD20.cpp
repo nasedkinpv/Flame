@@ -328,15 +328,18 @@ uint32_t resolveBridgeTextureId(dk2::MyScaledSurface *surface) {
         return 0;
     }
     static DWORD lastStatsTick = 0;
+    static uint32_t retZero = 0, retNonzero = 0, sampleId = 0;
+    if (bridgeId) { ++retNonzero; if (!sampleId) sampleId = bridgeId; }
+    else ++retZero;
     const DWORD statsTick = GetTickCount();
     if (statsTick - lastStatsTick > 3000) {
         lastStatsTick = statsTick;
         patch::log::dbg("mesh tex resolve: calls=%u nullSurf=%u noCand=%u cesurfNull=%u "
-                        "devNull=%u fakeHit=%u rawHit=%u faults=%u",
+                        "devNull=%u fakeHit=%u rawHit=%u faults=%u retZero=%u retNonzero=%u sample=%u",
                         g_resolveStats.calls, g_resolveStats.nullSurface,
                         g_resolveStats.noCandidates, g_resolveStats.cesurfNull,
                         g_resolveStats.devNull, g_resolveStats.fakeHit,
-                        g_resolveStats.rawHit, g_resolveStats.faults);
+                        g_resolveStats.rawHit, g_resolveStats.faults, retZero, retNonzero, sampleId);
     }
     if (bridgeId) {
         // capture-only registration: never disturbs stage-0 binding state
