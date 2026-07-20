@@ -640,10 +640,62 @@ private:
         return true;
     }
 
+    // DDPIXELFORMAT is a union: for DDPF_BUMPDUDV/BUMPLUMINANCE surfaces the
+    // fields conventionally read as RGB masks instead hold
+    // dwBumpDuBitMask/dwBumpDvBitMask/dwBumpLuminanceBitMask (same offsets).
+    static constexpr DWORD kDDPF_BUMPLUMINANCE = 0x00040000;
+    static constexpr DWORD kDDPF_BUMPDUDV = 0x00080000;
+
+    static int maskShift(DWORD mask) {
+        if (!mask) return 0;
+        int shift = 0;
+        while ((mask & 1u) == 0) { mask >>= 1; ++shift; }
+        return shift;
+    }
+
+    static int maskBits(DWORD mask) {
+        int bits = 0;
+        while (mask) { bits += mask & 1u; mask >>= 1; }
+        return bits;
+    }
+
+    // Signed bump component (Du/Dv, arbitrary bit width) -> unsigned-biased
+    // byte, matching the shader's `sample*2-1` convention for recovering the
+    // signed [-1,1] range from a plain unorm texture read.
+    static uint8_t signedBumpComponentToByte(uint32_t raw, DWORD mask) {
+        if (!mask) return 128;
+        const int shift = maskShift(mask);
+        const int bits = maskBits(mask);
+        int32_t value = static_cast<int32_t>((raw & mask) >> shift);
+        const int32_t half = 1 << (bits - 1);
+        if (value >= half) value -= (half << 1);  // sign-extend
+        // ponytail: shift-based rescale to 8 bits, not full bit replication -
+        // a few LSBs of precision on a 5-bit bump channel is not visible.
+        const int32_t scaled = bits >= 8 ? (value >> (bits - 8)) : (value << (8 - bits));
+        return static_cast<uint8_t>(scaled + 128);
+    }
+
+    static uint8_t unsignedComponentToByte(uint32_t raw, DWORD mask) {
+        if (!mask) return 0;
+        const int shift = maskShift(mask);
+        const int bits = maskBits(mask);
+        const uint32_t value = (raw & mask) >> shift;
+        return bits >= 8 ? static_cast<uint8_t>(value >> (bits - 8))
+                         : static_cast<uint8_t>(value << (8 - bits));
+    }
+
     static bool copyTexture(const DDSURFACEDESC2 &desc, TextureCache &texture) {
+        // DX7-era environment bump mapping (D3DFMT_V8U8 / D3DFMT_L6V5U5) uses
+        // 16bpp surfaces with DDPF_BUMPDUDV[|BUMPLUMINANCE] instead of
+        // DDPF_RGB. These used to be silently rejected here (dwRGBBitCount ==
+        // 32 only), so a bump-mapped stage's texture never uploaded and
+        // sampled as the shared white fallback instead - which is exactly
+        // what turns bump-mapped water/lava into a flat plain colour.
+        const bool isBump16 = desc.ddpfPixelFormat.dwRGBBitCount == 16 &&
+                              (desc.ddpfPixelFormat.dwFlags & kDDPF_BUMPDUDV) != 0;
         bool valid = desc.lpSurface && desc.dwWidth && desc.dwHeight &&
-                     desc.dwWidth <= 8192 && desc.dwHeight <= 8192 &&
-                     desc.ddpfPixelFormat.dwRGBBitCount == 32 && desc.lPitch >= 0;
+                     desc.dwWidth <= 8192 && desc.dwHeight <= 8192 && desc.lPitch >= 0 &&
+                     (desc.ddpfPixelFormat.dwRGBBitCount == 32 || isBump16);
         const uint64_t rowPitch = static_cast<uint64_t>(desc.dwWidth) * 4;
         const uint64_t dataSize = rowPitch * desc.dwHeight;
         if (dataSize > DK2M_SLOT_CAPACITY - sizeof(DK2MTextureUpdateCommand)) valid = false;
@@ -654,6 +706,28 @@ private:
         texture.rowPitch = static_cast<uint32_t>(rowPitch);
         texture.pixels.resize(static_cast<size_t>(dataSize));
         const auto *source = static_cast<const uint8_t *>(desc.lpSurface);
+
+        if (isBump16) {
+            const DWORD duMask = desc.ddpfPixelFormat.dwRBitMask;
+            const DWORD dvMask = desc.ddpfPixelFormat.dwGBitMask;
+            const bool hasLuminance = (desc.ddpfPixelFormat.dwFlags & kDDPF_BUMPLUMINANCE) != 0;
+            const DWORD lumMask = desc.ddpfPixelFormat.dwBBitMask;
+            for (uint32_t y = 0; y < texture.height; ++y) {
+                const auto *row = source + static_cast<size_t>(y) * desc.lPitch;
+                uint8_t *destination = texture.pixels.data() + static_cast<size_t>(y) * texture.rowPitch;
+                for (uint32_t x = 0; x < texture.width; ++x) {
+                    uint16_t raw;
+                    std::memcpy(&raw, row + x * 2, sizeof(raw));
+                    uint8_t *pixel = destination + x * 4;
+                    pixel[0] = signedBumpComponentToByte(raw, duMask);
+                    pixel[1] = signedBumpComponentToByte(raw, dvMask);
+                    pixel[2] = hasLuminance ? unsignedComponentToByte(raw, lumMask) : 128;
+                    pixel[3] = 0xFF;
+                }
+            }
+            return true;
+        }
+
         for (uint32_t y = 0; y < texture.height; ++y) {
             uint8_t *destination = texture.pixels.data() + static_cast<size_t>(y) * texture.rowPitch;
             std::memcpy(destination, source + static_cast<size_t>(y) * desc.lPitch, texture.rowPitch);

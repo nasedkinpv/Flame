@@ -785,6 +785,27 @@ struct DrawUniform {
     uint32_t alphaOp1;
     uint32_t alphaArg1_1;
     uint32_t alphaArg2_1;
+    uint32_t textureIndex2;
+    uint32_t colorOp2;
+    uint32_t colorArg1_2;
+    uint32_t colorArg2_2;
+    uint32_t alphaOp2;
+    uint32_t alphaArg1_2;
+    uint32_t alphaArg2_2;
+    // D3DTOP_BUMPENVMAP[LUMINANCE] parameters - see DK2Shaders.metal's
+    // dk2_apply_bump_env. One set per stage that can perturb the next.
+    float bumpEnvMat0_00;
+    float bumpEnvMat0_01;
+    float bumpEnvMat0_10;
+    float bumpEnvMat0_11;
+    float bumpEnvLScale0;
+    float bumpEnvLOffset0;
+    float bumpEnvMat1_00;
+    float bumpEnvMat1_01;
+    float bumpEnvMat1_10;
+    float bumpEnvMat1_11;
+    float bumpEnvLScale1;
+    float bumpEnvLOffset1;
 };
 
 constexpr NSUInteger kVertexBufferSize = 2 * 1024 * 1024;
@@ -814,7 +835,7 @@ constexpr uint32_t kD3DRenderStateCullMode = 22;
 constexpr uint32_t kD3DRenderStateZFunc = 23;
 constexpr uint32_t kD3DRenderStateAlphaBlendEnable = 27;
 constexpr uint32_t kD3DRenderStateTextureFactor = 60;
-static_assert(sizeof(DrawUniform) == 68);
+static_assert(sizeof(DrawUniform) == 144);
 
 MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
     switch (d3dFunction) {
@@ -1802,6 +1823,7 @@ static void *renderWorker(void *context) {
             auto *drawUniforms = static_cast<DrawUniform *>(_drawBuffers[slot].contents);
             TextureBinding currentTextureBinding = {0, 0};
             TextureBinding currentTextureBinding1 = {0, 0};
+            TextureBinding currentTextureBinding2 = {0, 0};
             NSUInteger nextSlot[kTextureArgumentTablesPerFrame];
             for (NSUInteger bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) nextSlot[bank] = 1;
             uint32_t boundArgumentTableBank = 0;
@@ -1817,6 +1839,12 @@ static void *renderWorker(void *context) {
             // colorOp/alphaOp default to D3DTOP_DISABLE (1): a draw that never
             // sets stage-1 state renders exactly as before (single texture).
             uint32_t textureStage1[7] = {0, 1, 2, 1, 1, 2, 1};
+            uint32_t textureStage2[7] = {0, 1, 2, 1, 1, 2, 1};
+            // D3DTSS_BUMPENVMAT00/01/10/11 = states 7/8/9/10, BUMPENVLSCALE/
+            // LOFFSET = states 22/23. Indexed [stage][0..3] = matrix,
+            // [stage][4] = LScale, [stage][5] = LOffset. Identity/neutral
+            // defaults so an unused bump stage is inert if ever read.
+            float bumpEnv[2][6] = {{1, 0, 0, 1, 1, 0}, {1, 0, 0, 1, 1, 0}};
             _frameTextureBindings.clear();
             // Binds `textureId` into `bank` specifically and records it, or
             // returns nullopt if that one bank has no free slot left (the
@@ -1893,6 +1921,10 @@ static void *renderWorker(void *context) {
                         currentTextureBinding1 = binding.texture_id
                             ? resolveTextureBindingInBank(binding.texture_id, currentTextureBinding.bank)
                             : TextureBinding{currentTextureBinding.bank, 0};
+                    } else if (binding.stage == 2) {
+                        currentTextureBinding2 = binding.texture_id
+                            ? resolveTextureBindingInBank(binding.texture_id, currentTextureBinding.bank)
+                            : TextureBinding{currentTextureBinding.bank, 0};
                     }
                 } else if (view.type == DK2M_COMMAND_RENDER_STATE &&
                            view.size == sizeof(DK2MRenderStateCommand)) {
@@ -1918,12 +1950,22 @@ static void *renderWorker(void *context) {
                     if (state.state >= 1 && state.state <= 6) {
                         if (state.stage == 0) textureStage0[state.state] = state.value;
                         else if (state.stage == 1) textureStage1[state.state] = state.value;
+                        else if (state.stage == 2) textureStage2[state.state] = state.value;
+                    } else if (state.state >= 7 && state.state <= 10 && state.stage <= 1) {
+                        // D3DTSS_BUMPENVMAT00/01/10/11: only stage 0/1 can carry a
+                        // bump op (stage 2 is always terminal).
+                        float value;
+                        std::memcpy(&value, &state.value, sizeof(value));
+                        bumpEnv[state.stage][state.state - 7] = value;
+                    } else if ((state.state == 22 || state.state == 23) && state.stage <= 1) {
+                        // D3DTSS_BUMPENVLSCALE=22, D3DTSS_BUMPENVLOFFSET=23.
+                        float value;
+                        std::memcpy(&value, &state.value, sizeof(value));
+                        bumpEnv[state.stage][state.state == 22 ? 4 : 5] = value;
                     } else {
                         // ponytail: one-shot NSLog per distinct (stage, state) the
-                        // combiner doesn't model (e.g. D3DTSS_TEXCOORDINDEX=11,
-                        // D3DTSS_BUMPENVMAT*=10/12/13/14, TEXTURETRANSFORMFLAGS=24).
-                        // Water/env-mapped draws are the prime suspect for actually
-                        // relying on one of these - log first sighting to confirm.
+                        // combiner still doesn't model (e.g. D3DTSS_TEXCOORDINDEX=11,
+                        // MAGFILTER/MINFILTER=16/17, TEXTURETRANSFORMFLAGS=24).
                         static std::unordered_set<uint32_t> seenStageStates;
                         const uint32_t key = (state.stage << 16) | state.state;
                         if (seenStageStates.insert(key).second) {
@@ -1999,6 +2041,37 @@ static void *renderWorker(void *context) {
                             uniform.alphaArg2_1 = 1;
                             ++metrics.bindingOverflows;
                         }
+                        // Stage 2: same bank-match rule as stage 1.
+                        if (currentTextureBinding2.bank == currentTextureBinding.bank) {
+                            uniform.textureIndex2 = currentTextureBinding2.slot;
+                            uniform.colorOp2 = textureStage2[1];
+                            uniform.colorArg1_2 = textureStage2[2];
+                            uniform.colorArg2_2 = textureStage2[3];
+                            uniform.alphaOp2 = textureStage2[4];
+                            uniform.alphaArg1_2 = textureStage2[5];
+                            uniform.alphaArg2_2 = textureStage2[6];
+                        } else {
+                            uniform.textureIndex2 = 0;
+                            uniform.colorOp2 = 1;    // D3DTOP_DISABLE
+                            uniform.colorArg1_2 = 2;
+                            uniform.colorArg2_2 = 1;
+                            uniform.alphaOp2 = 1;    // D3DTOP_DISABLE
+                            uniform.alphaArg1_2 = 2;
+                            uniform.alphaArg2_2 = 1;
+                            ++metrics.bindingOverflows;
+                        }
+                        uniform.bumpEnvMat0_00 = bumpEnv[0][0];
+                        uniform.bumpEnvMat0_01 = bumpEnv[0][1];
+                        uniform.bumpEnvMat0_10 = bumpEnv[0][2];
+                        uniform.bumpEnvMat0_11 = bumpEnv[0][3];
+                        uniform.bumpEnvLScale0 = bumpEnv[0][4];
+                        uniform.bumpEnvLOffset0 = bumpEnv[0][5];
+                        uniform.bumpEnvMat1_00 = bumpEnv[1][0];
+                        uniform.bumpEnvMat1_01 = bumpEnv[1][1];
+                        uniform.bumpEnvMat1_10 = bumpEnv[1][2];
+                        uniform.bumpEnvMat1_11 = bumpEnv[1][3];
+                        uniform.bumpEnvLScale1 = bumpEnv[1][4];
+                        uniform.bumpEnvLOffset1 = bumpEnv[1][5];
                         const NSUInteger vertexType = draw.fvf == DK2M_FVF_VERTEX1C ? 0 : 1;
                         id<MTLRenderPipelineState> pipeline = _opaquePipelines[vertexType];
                         if (alphaBlendEnabled) {

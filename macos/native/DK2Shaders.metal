@@ -43,6 +43,31 @@ struct DK2DrawUniform {
     uint alphaOp1;
     uint alphaArg1_1;
     uint alphaArg2_1;
+    // Stage 2. Same default-disabled convention as stage 1.
+    uint textureIndex2;
+    uint colorOp2;
+    uint colorArg1_2;
+    uint colorArg2_2;
+    uint alphaOp2;
+    uint alphaArg1_2;
+    uint alphaArg2_2;
+    // D3DTOP_BUMPENVMAP / D3DTOP_BUMPENVMAPLUMINANCE parameters, one set per
+    // stage that can carry that op (stage 2 is always last, so it never
+    // perturbs a further stage). Classic DX7 environment-bump-mapped water:
+    // stage N samples a signed bump texture and uses these to offset stage
+    // N+1's texture coordinates instead of contributing a colour itself.
+    float bumpEnvMat0_00;
+    float bumpEnvMat0_01;
+    float bumpEnvMat0_10;
+    float bumpEnvMat0_11;
+    float bumpEnvLScale0;
+    float bumpEnvLOffset0;
+    float bumpEnvMat1_00;
+    float bumpEnvMat1_01;
+    float bumpEnvMat1_10;
+    float bumpEnvMat1_11;
+    float bumpEnvLScale1;
+    float bumpEnvLOffset1;
 };
 
 struct DK2RasterVertex {
@@ -50,6 +75,7 @@ struct DK2RasterVertex {
     float4 color;
     float2 texCoord;
     float2 texCoord1;
+    float2 texCoord2;
     uint textureIndex [[flat]];
     uint colorOp [[flat]];
     uint colorArg1 [[flat]];
@@ -65,10 +91,29 @@ struct DK2RasterVertex {
     uint alphaOp1 [[flat]];
     uint alphaArg1_1 [[flat]];
     uint alphaArg2_1 [[flat]];
+    uint textureIndex2 [[flat]];
+    uint colorOp2 [[flat]];
+    uint colorArg1_2 [[flat]];
+    uint colorArg2_2 [[flat]];
+    uint alphaOp2 [[flat]];
+    uint alphaArg1_2 [[flat]];
+    uint alphaArg2_2 [[flat]];
+    float bumpEnvMat0_00 [[flat]];
+    float bumpEnvMat0_01 [[flat]];
+    float bumpEnvMat0_10 [[flat]];
+    float bumpEnvMat0_11 [[flat]];
+    float bumpEnvLScale0 [[flat]];
+    float bumpEnvLOffset0 [[flat]];
+    float bumpEnvMat1_00 [[flat]];
+    float bumpEnvMat1_01 [[flat]];
+    float bumpEnvMat1_10 [[flat]];
+    float bumpEnvMat1_11 [[flat]];
+    float bumpEnvLScale1 [[flat]];
+    float bumpEnvLOffset1 [[flat]];
 };
 
 DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffuse,
-                                float2 texCoord, float2 texCoord1,
+                                float2 texCoord, float2 texCoord1, float2 texCoord2,
                                 thread const DK2DrawUniform &draw) {
     const float reciprocalW = abs(rhw) > 0.000001f ? rhw : 1.0f;
     const float clipW = 1.0f / reciprocalW;
@@ -82,6 +127,7 @@ DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffu
                           float((diffuse >> 24) & 0xFF)) / 255.0f;
     result.texCoord = texCoord;
     result.texCoord1 = texCoord1;
+    result.texCoord2 = texCoord2;
     result.textureIndex = draw.textureIndex;
     result.colorOp = draw.colorOp;
     result.colorArg1 = draw.colorArg1;
@@ -97,6 +143,25 @@ DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffu
     result.alphaOp1 = draw.alphaOp1;
     result.alphaArg1_1 = draw.alphaArg1_1;
     result.alphaArg2_1 = draw.alphaArg2_1;
+    result.textureIndex2 = draw.textureIndex2;
+    result.colorOp2 = draw.colorOp2;
+    result.colorArg1_2 = draw.colorArg1_2;
+    result.colorArg2_2 = draw.colorArg2_2;
+    result.alphaOp2 = draw.alphaOp2;
+    result.alphaArg1_2 = draw.alphaArg1_2;
+    result.alphaArg2_2 = draw.alphaArg2_2;
+    result.bumpEnvMat0_00 = draw.bumpEnvMat0_00;
+    result.bumpEnvMat0_01 = draw.bumpEnvMat0_01;
+    result.bumpEnvMat0_10 = draw.bumpEnvMat0_10;
+    result.bumpEnvMat0_11 = draw.bumpEnvMat0_11;
+    result.bumpEnvLScale0 = draw.bumpEnvLScale0;
+    result.bumpEnvLOffset0 = draw.bumpEnvLOffset0;
+    result.bumpEnvMat1_00 = draw.bumpEnvMat1_00;
+    result.bumpEnvMat1_01 = draw.bumpEnvMat1_01;
+    result.bumpEnvMat1_10 = draw.bumpEnvMat1_10;
+    result.bumpEnvMat1_11 = draw.bumpEnvMat1_11;
+    result.bumpEnvLScale1 = draw.bumpEnvLScale1;
+    result.bumpEnvLOffset1 = draw.bumpEnvLOffset1;
     return result;
 }
 
@@ -108,7 +173,7 @@ vertex DK2RasterVertex dk2_vertex_1c(device const DK2Vertex1C *vertices [[buffer
     const DK2DrawUniform draw = draws[drawID];
     const float2 uv = float2(inputVertex.u, inputVertex.v);
     return dk2_make_vertex(inputVertex.x, inputVertex.y, inputVertex.z, inputVertex.rhw,
-                           inputVertex.diffuse, uv, uv, draw);
+                           inputVertex.diffuse, uv, uv, uv, draw);
 }
 
 vertex DK2RasterVertex dk2_vertex_2c(device const DK2Vertex2C *vertices [[buffer(0)]],
@@ -121,6 +186,7 @@ vertex DK2RasterVertex dk2_vertex_2c(device const DK2Vertex2C *vertices [[buffer
                            inputVertex.diffuse,
                            float2(inputVertex.texCoord[0][0], inputVertex.texCoord[0][1]),
                            float2(inputVertex.texCoord[1][0], inputVertex.texCoord[1][1]),
+                           float2(inputVertex.texCoord[2][0], inputVertex.texCoord[2][1]),
                            draw);
 }
 
@@ -195,36 +261,97 @@ float dk2_alpha_op(uint op, float4 a, float4 b, float4 diffuse,
     }
 }
 
+// D3DTOP_BUMPENVMAP (22) / D3DTOP_BUMPENVMAPLUMINANCE (23): this stage's own
+// texture is a signed bump map (Du, Dv in its r/g channels, already stored
+// unsigned-biased as 2*x-1 so the usual [0,1] sampling recovers [-1,1]). It
+// contributes no colour of its own - instead it offsets the NEXT stage's
+// texture coordinates through the 2x2 BUMPENVMAT, and (LUMINANCE variant
+// only) scales the next stage's result by its own blue/"L" channel. Returns
+// true if `op` was actually a bump op (caller should skip the normal combine
+// for this stage in that case).
+bool dk2_apply_bump_env(uint op, float4 bumpTexColor,
+                        float m00, float m01, float m10, float m11,
+                        float lscale, float loffset,
+                        thread float2 &nextTexCoord, thread float &pendingLuminance) {
+    if (op != 22 && op != 23) return false;
+    const float2 duv = bumpTexColor.rg * 2.0 - 1.0;
+    nextTexCoord += float2(m00 * duv.x + m10 * duv.y, m01 * duv.x + m11 * duv.y);
+    if (op == 23) pendingLuminance = saturate(bumpTexColor.b * lscale + loffset);
+    return true;
+}
+
 fragment float4 dk2_fragment(DK2RasterVertex input [[stage_in]],
                              array<texture2d<float>, 128> textures [[texture(0)]],
                              sampler textureSampler [[sampler(0)]]) {
-    const float4 textureColor = textures[input.textureIndex].sample(textureSampler, input.texCoord);
     const float4 factor = dk2_unpack_color(input.textureFactor);
     float4 current = input.color;
+    float2 texCoord1 = input.texCoord1;
+    float2 texCoord2 = input.texCoord2;
+    float pendingLuminance = -1.0;  // < 0 means "no pending luminance factor"
+
+    // Stage 0.
     {
-        const float4 colorArg1 = dk2_texture_arg(input.colorArg1, textureColor, current, input.color, factor);
-        const float4 colorArg2 = dk2_texture_arg(input.colorArg2, textureColor, current, input.color, factor);
-        const float4 alphaArg1 = dk2_texture_arg(input.alphaArg1, textureColor, current, input.color, factor);
-        const float4 alphaArg2 = dk2_texture_arg(input.alphaArg2, textureColor, current, input.color, factor);
-        current = float4(
-            dk2_color_op(input.colorOp, colorArg1, colorArg2,
-                         input.color, textureColor, factor, current),
-            dk2_alpha_op(input.alphaOp, alphaArg1, alphaArg2,
-                         input.color, textureColor, factor, current));
+        const float4 textureColor = textures[input.textureIndex].sample(textureSampler, input.texCoord);
+        if (!dk2_apply_bump_env(input.colorOp, textureColor,
+                                input.bumpEnvMat0_00, input.bumpEnvMat0_01,
+                                input.bumpEnvMat0_10, input.bumpEnvMat0_11,
+                                input.bumpEnvLScale0, input.bumpEnvLOffset0,
+                                texCoord1, pendingLuminance)) {
+            const float4 colorArg1 = dk2_texture_arg(input.colorArg1, textureColor, current, input.color, factor);
+            const float4 colorArg2 = dk2_texture_arg(input.colorArg2, textureColor, current, input.color, factor);
+            const float4 alphaArg1 = dk2_texture_arg(input.alphaArg1, textureColor, current, input.color, factor);
+            const float4 alphaArg2 = dk2_texture_arg(input.alphaArg2, textureColor, current, input.color, factor);
+            current = float4(
+                dk2_color_op(input.colorOp, colorArg1, colorArg2,
+                             input.color, textureColor, factor, current),
+                dk2_alpha_op(input.alphaOp, alphaArg1, alphaArg2,
+                             input.color, textureColor, factor, current));
+        }
     }
+
     // Stage 1: colorOp1/alphaOp1 default to D3DTOP_DISABLE (1), which just
     // returns `current` unchanged below, so a draw that never sets stage-1
     // state (the overwhelming majority) costs one extra texture sample
     // through a texture the game never bound (index 0 = the shared white
     // texture) and is otherwise a no-op.
-    const float4 textureColor1 = textures[input.textureIndex1].sample(textureSampler, input.texCoord1);
-    const float4 colorArg1_1 = dk2_texture_arg(input.colorArg1_1, textureColor1, current, input.color, factor);
-    const float4 colorArg2_1 = dk2_texture_arg(input.colorArg2_1, textureColor1, current, input.color, factor);
-    const float4 alphaArg1_1 = dk2_texture_arg(input.alphaArg1_1, textureColor1, current, input.color, factor);
-    const float4 alphaArg2_1 = dk2_texture_arg(input.alphaArg2_1, textureColor1, current, input.color, factor);
-    return float4(
-        dk2_color_op(input.colorOp1, colorArg1_1, colorArg2_1,
-                     input.color, textureColor1, factor, current),
-        dk2_alpha_op(input.alphaOp1, alphaArg1_1, alphaArg2_1,
-                     input.color, textureColor1, factor, current));
+    {
+        const float4 textureColor1 = textures[input.textureIndex1].sample(textureSampler, texCoord1);
+        if (!dk2_apply_bump_env(input.colorOp1, textureColor1,
+                                input.bumpEnvMat1_00, input.bumpEnvMat1_01,
+                                input.bumpEnvMat1_10, input.bumpEnvMat1_11,
+                                input.bumpEnvLScale1, input.bumpEnvLOffset1,
+                                texCoord2, pendingLuminance)) {
+            const float4 colorArg1_1 = dk2_texture_arg(input.colorArg1_1, textureColor1, current, input.color, factor);
+            const float4 colorArg2_1 = dk2_texture_arg(input.colorArg2_1, textureColor1, current, input.color, factor);
+            const float4 alphaArg1_1 = dk2_texture_arg(input.alphaArg1_1, textureColor1, current, input.color, factor);
+            const float4 alphaArg2_1 = dk2_texture_arg(input.alphaArg2_1, textureColor1, current, input.color, factor);
+            current = float4(
+                dk2_color_op(input.colorOp1, colorArg1_1, colorArg2_1,
+                             input.color, textureColor1, factor, current),
+                dk2_alpha_op(input.alphaOp1, alphaArg1_1, alphaArg2_1,
+                             input.color, textureColor1, factor, current));
+            if (pendingLuminance >= 0.0) {
+                current.rgb *= pendingLuminance;
+                pendingLuminance = -1.0;
+            }
+        }
+    }
+
+    // Stage 2: same default-disabled convention. Always terminal (no stage 3
+    // to perturb), so D3DTOP_BUMPENVMAP here would be a no-op in hardware too.
+    {
+        const float4 textureColor2 = textures[input.textureIndex2].sample(textureSampler, texCoord2);
+        const float4 colorArg1_2 = dk2_texture_arg(input.colorArg1_2, textureColor2, current, input.color, factor);
+        const float4 colorArg2_2 = dk2_texture_arg(input.colorArg2_2, textureColor2, current, input.color, factor);
+        const float4 alphaArg1_2 = dk2_texture_arg(input.alphaArg1_2, textureColor2, current, input.color, factor);
+        const float4 alphaArg2_2 = dk2_texture_arg(input.alphaArg2_2, textureColor2, current, input.color, factor);
+        current = float4(
+            dk2_color_op(input.colorOp2, colorArg1_2, colorArg2_2,
+                         input.color, textureColor2, factor, current),
+            dk2_alpha_op(input.alphaOp2, alphaArg1_2, alphaArg2_2,
+                         input.color, textureColor2, factor, current));
+        if (pendingLuminance >= 0.0) current.rgb *= pendingLuminance;
+    }
+
+    return current;
 }
