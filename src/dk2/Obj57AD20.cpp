@@ -465,18 +465,28 @@ int copyEntryGuarded(const MeshEntry &entry, uint32_t indexCount,
 // Emit one MeshEntry through the bridge's inline world-space path. The UV
 // stage-0 scale/offset tables were just written by __renderFun_setSceneObject2E
 // for this very scene object, so reading them here matches writeVertex1C.
-bool drawEntryOnGpu(MeshEntry &entry, dk2::MyScaledSurface *surface,
+bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
+                    dk2::MyScaledSurface *surface,
                     const dk2::Vec3f &ambient, uint32_t *lightData) {
     if (!entry.triangleCount || !entry.vertices || !entry.triangleIndices) return false;
     const uint32_t indexCount = static_cast<uint32_t>(entry.triangleCount) * 3u;
     // uint8 indices bound both buffers: at most 256 vertices, 255*3 indices
     static DK2MMeshVertex vertices[256];
     static uint16_t indices[765];
+    // The UV scale/offset tables are per scene-object STAGE SLOT: find the
+    // slot our surface's handle occupies instead of assuming slot 0
+    // (multi-texture objects put it elsewhere, shifting every UV).
+    int stageSlot = 0;
+    if (scene && surface && surface->surfh) {
+        for (int i = 0; i < 4 && i < scene->surfhCount; ++i) {
+            if (scene->surfh_x4[i] == surface->surfh) { stageSlot = i; break; }
+        }
+    }
     const float uvScale = *reinterpret_cast<const float *>(0x0066FB58);
-    const float uS = *reinterpret_cast<const float *>(0x00779368);
-    const float vS = *reinterpret_cast<const float *>(0x0076F340);
-    const float uO = *reinterpret_cast<const float *>(0x0077F480);
-    const float vO = *reinterpret_cast<const float *>(0x0077F3D8);
+    const float uS = reinterpret_cast<const float *>(0x00779368)[stageSlot];
+    const float vS = reinterpret_cast<const float *>(0x0076F340)[stageSlot];
+    const float uO = reinterpret_cast<const float *>(0x0077F480)[stageSlot];
+    const float vO = reinterpret_cast<const float *>(0x0077F3D8)[stageSlot];
     // Negative cache: a bad entry pointer would otherwise fault (and ride
     // Wine's fragile WOW64 SEH dispatch) on every single frame - fault once,
     // remember, and fall back instantly afterwards.
@@ -772,7 +782,7 @@ int *dk2::Obj57AD20::sub_57B6D0(
             vec_14.y + g_vec_760A98.y + surface->vec.y,
             vec_14.z + g_vec_760A98.z + surface->vec.z};
 
-    if (meshGpuActive() && drawEntryOnGpu(entry, surface, ambient, lightData)) {
+    if (meshGpuActive() && drawEntryOnGpu(scene, entry, surface, ambient, lightData)) {
         return applyIndxs_sub_58AC20();
     }
 

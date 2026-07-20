@@ -862,7 +862,7 @@ constexpr NSUInteger kDrawBufferSize = kMaxDrawsPerFrame * sizeof(DrawUniform);
 // are already resident in _textures regardless of bank count), so budget
 // generously rather than re-tune this by trial and error per scene.
 constexpr NSUInteger kTextureBindingsPerArgumentTable = 128;
-constexpr NSUInteger kTextureArgumentTablesPerFrame = 24;
+constexpr NSUInteger kTextureArgumentTablesPerFrame = 48;
 constexpr uint32_t kD3DRenderStateZEnable = 7;
 constexpr uint32_t kD3DRenderStateZWriteEnable = 14;
 constexpr uint32_t kD3DRenderStateSourceBlend = 19;
