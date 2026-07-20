@@ -2095,13 +2095,18 @@ static void *renderWorker(void *context) {
                             const NSTimeInterval now = CACurrentMediaTime();
                             if (now - lastLogged > 1.0) {
                                 lastLogged = now;
-                                NSLog(@"DIAG blend draw: colorOp0=%u tex0=%u colorOp1=%u tex1=%u "
+                                NSLog(@"DIAG blend draw: colorOp0=%u alphaOp0=%u colorArg1_0=%u "
+                                      "colorArg2_0=%u alphaArg1_0=%u alphaArg2_0=%u tex0=%u "
+                                      "colorOp1=%u tex1=%u "
                                       "colorOp2=%u alphaOp2=%u colorArg1_2=%u colorArg2_2=%u "
                                       "alphaArg1_2=%u alphaArg2_2=%u tex2=%u "
                                       "mat0=(%.3f %.3f %.3f %.3f) mat1=(%.3f %.3f %.3f %.3f) "
                                       "lscale1=%.3f loffset1=%.3f alphaBlendEnabled=%d "
-                                      "srcBlend=%u destBlend=%u",
-                                      uniform.colorOp, uniform.textureIndex,
+                                      "srcBlend=%u destBlend=%u zWrite=%d",
+                                      uniform.colorOp, uniform.alphaOp,
+                                      uniform.colorArg1, uniform.colorArg2,
+                                      uniform.alphaArg1, uniform.alphaArg2,
+                                      uniform.textureIndex,
                                       uniform.colorOp1, uniform.textureIndex1,
                                       uniform.colorOp2, uniform.alphaOp2,
                                       uniform.colorArg1_2, uniform.colorArg2_2,
@@ -2112,7 +2117,8 @@ static void *renderWorker(void *context) {
                                       uniform.bumpEnvMat1_00, uniform.bumpEnvMat1_01,
                                       uniform.bumpEnvMat1_10, uniform.bumpEnvMat1_11,
                                       uniform.bumpEnvLScale1, uniform.bumpEnvLOffset1,
-                                      alphaBlendEnabled, sourceBlend, destinationBlend);
+                                      alphaBlendEnabled, sourceBlend, destinationBlend,
+                                      zWriteEnabled);
                             }
                         }
                         const NSUInteger vertexType = draw.fvf == DK2M_FVF_VERTEX1C ? 0 : 1;
