@@ -2279,7 +2279,9 @@ static void *renderWorker(void *context) {
                                   inlineDraw.ambient_r, inlineDraw.ambient_g, inlineDraw.ambient_b,
                                   v0[0], v0[1], v0[2], c0);
                         }
-                        static const bool meshNoTexture = getenv("DK2_MESH_NO_TEXTURE") != nullptr;
+                        static const bool meshDebug = getenv("DK2_MESH_DEBUG") != nullptr;
+                        static const bool meshNoTexture = meshDebug ||
+                            getenv("DK2_MESH_NO_TEXTURE") != nullptr;
                         const TextureBinding binding = (!meshNoTexture && inlineDraw.texture_id)
                             ? resolveTextureBinding(inlineDraw.texture_id)
                             : TextureBinding{static_cast<uint16_t>(boundArgumentTableBank), 0};
@@ -2295,19 +2297,20 @@ static void *renderWorker(void *context) {
                         uniform.ambient[2] = inlineDraw.ambient_b;
                         uniform.ambient[3] = 0.0f;
                         uniform.textureIndex = binding.slot;
-                        uniform.tint = inlineDraw.tint;
-                        uniform.flags = inlineDraw.flags;
+                        uniform.tint = meshDebug ? 0xFFFFFFFFu : inlineDraw.tint;
+                        uniform.flags = inlineDraw.flags | (meshDebug ? 8u : 0u);
                         uniform.pad = 0;
                         id<MTLRenderPipelineState> pipeline = _meshOpaquePipeline;
-                        if (alphaBlendEnabled || (inlineDraw.flags & 2u)) {
+                        if (!meshDebug && (alphaBlendEnabled || (inlineDraw.flags & 2u))) {
                             pipeline = sourceBlend == 2 && destinationBlend == 2
                                            ? _meshAdditivePipeline : _meshAlphaPipeline;
                         }
                         [encoder setRenderPipelineState:pipeline];
-                        const uint32_t effectiveZFunction = zEnabled ? zFunction : 8;
-                        const uint32_t effectiveZWrite = zEnabled && zWriteEnabled ? 1 : 0;
+                        const uint32_t effectiveZFunction = meshDebug ? 8 : (zEnabled ? zFunction : 8);
+                        const uint32_t effectiveZWrite = meshDebug ? 0 : (zEnabled && zWriteEnabled ? 1 : 0);
                         [encoder setDepthStencilState:_depthStates[effectiveZFunction][effectiveZWrite]];
-                        [encoder setCullMode:cullMode == 1 ? MTLCullModeNone : MTLCullModeBack];
+                        [encoder setCullMode:meshDebug ? MTLCullModeNone
+                                                       : (cullMode == 1 ? MTLCullModeNone : MTLCullModeBack)];
                         [encoder setFrontFacingWinding:cullMode == 3 ? MTLWindingClockwise
                                                                     : MTLWindingCounterClockwise];
                         if (boundArgumentTableBank != binding.bank) {
