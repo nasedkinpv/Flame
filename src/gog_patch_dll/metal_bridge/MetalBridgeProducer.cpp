@@ -712,6 +712,17 @@ private:
             const DWORD dvMask = desc.ddpfPixelFormat.dwGBitMask;
             const bool hasLuminance = (desc.ddpfPixelFormat.dwFlags & kDDPF_BUMPLUMINANCE) != 0;
             const DWORD lumMask = desc.ddpfPixelFormat.dwBBitMask;
+            // ponytail: one-shot per-process log of the actual masks seen, so a
+            // wrong bit-layout guess (V8U8 vs L6V5U5, mask order) shows up as
+            // data instead of having to be reverse-engineered from a screenshot.
+            static bool loggedBumpFormat = false;
+            if (!loggedBumpFormat) {
+                loggedBumpFormat = true;
+                gog_debugf("Metal bridge: bump surface %ux%u flags=0x%08x du_mask=0x%04x "
+                           "dv_mask=0x%04x lum_mask=0x%04x has_luminance=%d",
+                           desc.dwWidth, desc.dwHeight, desc.ddpfPixelFormat.dwFlags,
+                           duMask, dvMask, lumMask, hasLuminance ? 1 : 0);
+            }
             for (uint32_t y = 0; y < texture.height; ++y) {
                 const auto *row = source + static_cast<size_t>(y) * desc.lPitch;
                 uint8_t *destination = texture.pixels.data() + static_cast<size_t>(y) * texture.rowPitch;
