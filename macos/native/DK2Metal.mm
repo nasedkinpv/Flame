@@ -14,6 +14,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <memory>
+#include <optional>
 #include <pthread.h>
 #include <sched.h>
 #include <string>
@@ -1792,7 +1793,8 @@ static void *renderWorker(void *context) {
             auto *drawUniforms = static_cast<DrawUniform *>(_drawBuffers[slot].contents);
             TextureBinding currentTextureBinding = {0, 0};
             TextureBinding currentTextureBinding1 = {0, 0};
-            TextureBinding nextTextureBinding = {0, 1};
+            NSUInteger nextSlot[kTextureArgumentTablesPerFrame];
+            for (NSUInteger bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) nextSlot[bank] = 1;
             uint32_t boundArgumentTableBank = 0;
             uint32_t zFunction = 4;
             BOOL zEnabled = YES;
@@ -1807,38 +1809,55 @@ static void *renderWorker(void *context) {
             // sets stage-1 state renders exactly as before (single texture).
             uint32_t textureStage1[7] = {0, 1, 2, 1, 1, 2, 1};
             _frameTextureBindings.clear();
-            // Shared by both stages: a texture bound at stage 1 in one draw
-            // and stage 0 in another still gets exactly one slot. Returns
-            // {0, 0} (the shared white fallback) on a missing/overflowed
-            // texture, exactly like the pre-existing stage-0 path.
-            auto resolveTextureBinding = [&](uint32_t textureId) -> TextureBinding {
-                const auto found = std::find_if(
-                    _frameTextureBindings.begin(), _frameTextureBindings.end(),
-                    [&](const TextureBindingEntry &entry) {
-                        return entry.textureId == textureId;
-                    });
-                if (found != _frameTextureBindings.end()) return found->binding;
-                if (nextTextureBinding.bank >= kTextureArgumentTablesPerFrame) {
-                    // A missing binding must never inherit the previous draw's
-                    // texture. White preserves vertex colour and makes
-                    // capacity failures deterministic.
-                    ++metrics.bindingOverflows;
-                    return {0, 0};
-                }
+            // Binds `textureId` into `bank` specifically and records it, or
+            // returns nullopt if that one bank has no free slot left (the
+            // caller decides the fallback - never silently picks another
+            // bank, which is exactly what used to make stage 1's texture
+            // land in a different bank than stage 0's for the same draw).
+            auto allocateInBank = [&](uint32_t textureId, uint16_t bank) -> std::optional<TextureBinding> {
+                if (nextSlot[bank] >= kTextureBindingsPerArgumentTable) return std::nullopt;
                 const auto textureFound = _textures.find(textureId);
                 id<MTLTexture> texture = textureFound == _textures.end() ? nil : textureFound->second;
                 if (!texture) {
                     ++metrics.missingTextures;
-                    return {0, 0};
+                    return std::nullopt;
                 }
-                const TextureBinding binding = nextTextureBinding;
+                const TextureBinding binding = {bank, static_cast<uint16_t>(nextSlot[bank])};
                 _frameTextureBindings.push_back({textureId, binding});
-                [_argumentTables[slot][binding.bank] setTexture:texture.gpuResourceID atIndex:binding.slot];
-                if (++nextTextureBinding.slot == kTextureBindingsPerArgumentTable) {
-                    ++nextTextureBinding.bank;
-                    nextTextureBinding.slot = 1;
-                }
+                [_argumentTables[slot][bank] setTexture:texture.gpuResourceID atIndex:binding.slot];
+                ++nextSlot[bank];
                 return binding;
+            };
+            // Stage 0 (unconstrained): reuse an existing binding in any bank,
+            // else allocate in the first bank with room. A texture that does
+            // not fit anywhere falls back to the shared white slot {0, 0}.
+            auto resolveTextureBinding = [&](uint32_t textureId) -> TextureBinding {
+                const auto found = std::find_if(
+                    _frameTextureBindings.begin(), _frameTextureBindings.end(),
+                    [&](const TextureBindingEntry &entry) { return entry.textureId == textureId; });
+                if (found != _frameTextureBindings.end()) return found->binding;
+                for (uint16_t bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) {
+                    if (const auto binding = allocateInBank(textureId, bank)) return *binding;
+                }
+                ++metrics.bindingOverflows;
+                return {0, 0};
+            };
+            // Stage 1 (bank-constrained to `bank`, which stage 0 already
+            // committed to for this draw): reuse an existing binding in THAT
+            // bank, else allocate a fresh slot in it. If the bank is full,
+            // fall back to white IN THAT SAME BANK ({0, bank} still samples
+            // the shared white texture, never a cross-bank slot) instead of
+            // spilling into a different bank the encoder isn't looking at.
+            auto resolveTextureBindingInBank = [&](uint32_t textureId, uint16_t bank) -> TextureBinding {
+                const auto found = std::find_if(
+                    _frameTextureBindings.begin(), _frameTextureBindings.end(),
+                    [&](const TextureBindingEntry &entry) {
+                        return entry.textureId == textureId && entry.binding.bank == bank;
+                    });
+                if (found != _frameTextureBindings.end()) return found->binding;
+                if (const auto binding = allocateInBank(textureId, bank)) return *binding;
+                ++metrics.bindingOverflows;
+                return {0, bank};
             };
             for (NSUInteger bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) {
                 [_argumentTables[slot][bank]
@@ -1863,7 +1882,8 @@ static void *renderWorker(void *context) {
                             ? resolveTextureBinding(binding.texture_id) : TextureBinding{0, 0};
                     } else if (binding.stage == 1) {
                         currentTextureBinding1 = binding.texture_id
-                            ? resolveTextureBinding(binding.texture_id) : TextureBinding{0, 0};
+                            ? resolveTextureBindingInBank(binding.texture_id, currentTextureBinding.bank)
+                            : TextureBinding{currentTextureBinding.bank, 0};
                     }
                 } else if (view.type == DK2M_COMMAND_RENDER_STATE &&
                            view.size == sizeof(DK2MRenderStateCommand)) {
