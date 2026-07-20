@@ -837,6 +837,29 @@ constexpr uint32_t kD3DRenderStateAlphaBlendEnable = 27;
 constexpr uint32_t kD3DRenderStateTextureFactor = 60;
 static_assert(sizeof(DrawUniform) == 144);
 
+// --- world-space mesh pipeline (protocol v9) ---
+// Mirrors DK2MeshDrawUniform in DK2Shaders.metal: rows of the 3x4 world
+// transform plus material inputs, one per DRAW_MESH instance.
+struct MeshDrawUniform {
+    float world0[4];
+    float world1[4];
+    float world2[4];
+    uint32_t textureIndex;
+    uint32_t tint;
+    uint32_t flags;
+    uint32_t pad;
+};
+static_assert(sizeof(MeshDrawUniform) == 64);
+constexpr NSUInteger kMeshVertexStride = 36;  // sizeof(DK2MMeshVertex)
+constexpr NSUInteger kMeshVertexBufferSize = 4 * 1024 * 1024;
+constexpr NSUInteger kMaxMeshDrawsPerFrame = 8192;
+constexpr NSUInteger kMeshDrawBufferSize = kMaxMeshDrawsPerFrame * sizeof(MeshDrawUniform);
+// lights buffer layout: 16B header + 256-float LUT at +16, lights at +1040
+constexpr NSUInteger kLightsHeaderBytes = 16 + 256 * sizeof(float);
+constexpr NSUInteger kMaxLightsPerFrame = 512;
+constexpr NSUInteger kLightsBufferSize = kLightsHeaderBytes + kMaxLightsPerFrame * 48;
+constexpr NSUInteger kCameraBufferSize = 16 * sizeof(float);
+
 MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
     switch (d3dFunction) {
         case 1: return MTLCompareFunctionNever;
@@ -1315,6 +1338,21 @@ bool inputLogEnabled() {
     id<MTLBuffer> _vertexBuffers[kFramesInFlight];
     id<MTLBuffer> _indexBuffers[kFramesInFlight];
     id<MTLBuffer> _drawBuffers[kFramesInFlight];
+    // world-space mesh pipeline (protocol v9)
+    id<MTLRenderPipelineState> _meshOpaquePipeline;
+    id<MTLRenderPipelineState> _meshAlphaPipeline;
+    id<MTLRenderPipelineState> _meshAdditivePipeline;
+    id<MTLBuffer> _meshVertexBuffers[kFramesInFlight];
+    id<MTLBuffer> _meshDrawBuffers[kFramesInFlight];
+    id<MTLBuffer> _lightsBuffers[kFramesInFlight];
+    id<MTLBuffer> _cameraBuffers[kFramesInFlight];
+    struct MeshBlob {
+        std::vector<uint8_t> vertices;
+        std::vector<uint8_t> indices;
+        uint32_t vertexCount = 0;
+        uint32_t indexCount = 0;
+    };
+    std::unordered_map<uint32_t, MeshBlob> _meshes;
     id<MTL4ArgumentTable>
         _argumentTables[kFramesInFlight][kTextureArgumentTablesPerFrame];
     std::unique_ptr<BridgeReader> _bridge;
@@ -1408,6 +1446,30 @@ bool inputLogEnabled() {
         return nil;
     }
 
+    id<MTLFunction> meshVertexFunction = [library newFunctionWithName:@"dk2_vertex_mesh"];
+    pipelineDescriptor.label = @"DK2 world-space mesh pipeline";
+    pipelineDescriptor.vertexFunction = meshVertexFunction;
+    pipelineDescriptor.colorAttachments[0].blendingEnabled = NO;
+    _meshOpaquePipeline = meshVertexFunction && fragmentFunction
+        ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error] : nil;
+    pipelineDescriptor.colorAttachments[0].blendingEnabled = YES;
+    pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+    pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+    pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+    pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+    _meshAlphaPipeline = meshVertexFunction && fragmentFunction
+        ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error] : nil;
+    pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+    pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
+    pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+    pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
+    _meshAdditivePipeline = meshVertexFunction && fragmentFunction
+        ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error] : nil;
+    if (!_meshOpaquePipeline || !_meshAlphaPipeline || !_meshAdditivePipeline) {
+        fail([NSString stringWithFormat:@"Metal mesh pipeline failed: %@", error.localizedDescription ?: @"library missing"]);
+        return nil;
+    }
+
     for (uint32_t function = 1; function <= 8; ++function) {
         for (uint32_t write = 0; write <= 1; ++write) {
             MTLDepthStencilDescriptor *depthDescriptor = [[MTLDepthStencilDescriptor alloc] init];
@@ -1473,14 +1535,24 @@ bool inputLogEnabled() {
         _indexBuffers[index].label = [NSString stringWithFormat:@"DK2 indices %lu", index];
         _drawBuffers[index].label = [NSString stringWithFormat:@"DK2 draw uniforms %lu", index];
 
-        if (!_vertexBuffers[index] || !_indexBuffers[index] || !_drawBuffers[index]) {
+        _meshVertexBuffers[index] = [_device newBufferWithLength:kMeshVertexBufferSize options:uploadOptions];
+        _meshDrawBuffers[index] = [_device newBufferWithLength:kMeshDrawBufferSize options:uploadOptions];
+        _lightsBuffers[index] = [_device newBufferWithLength:kLightsBufferSize options:uploadOptions];
+        _cameraBuffers[index] = [_device newBufferWithLength:kCameraBufferSize options:uploadOptions];
+        _meshVertexBuffers[index].label = [NSString stringWithFormat:@"DK2 mesh vertices %lu", index];
+        _meshDrawBuffers[index].label = [NSString stringWithFormat:@"DK2 mesh draws %lu", index];
+        _lightsBuffers[index].label = [NSString stringWithFormat:@"DK2 lights %lu", index];
+        _cameraBuffers[index].label = [NSString stringWithFormat:@"DK2 camera %lu", index];
+        if (!_vertexBuffers[index] || !_indexBuffers[index] || !_drawBuffers[index] ||
+            !_meshVertexBuffers[index] || !_meshDrawBuffers[index] ||
+            !_lightsBuffers[index] || !_cameraBuffers[index]) {
             fail(@"Metal dynamic frame buffer creation failed.");
             return nil;
         }
         for (NSUInteger bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) {
             MTL4ArgumentTableDescriptor *tableDescriptor =
                 [[MTL4ArgumentTableDescriptor alloc] init];
-            tableDescriptor.maxBufferBindCount = 2;
+            tableDescriptor.maxBufferBindCount = 7;
             tableDescriptor.maxTextureBindCount = kTextureBindingsPerArgumentTable;
             tableDescriptor.maxSamplerStateBindCount = 1;
             tableDescriptor.initializeBindings = YES;
@@ -1499,14 +1571,18 @@ bool inputLogEnabled() {
         }
     }
 
-    id<MTLAllocation> allocations[kFramesInFlight * 3 + 1];
+    id<MTLAllocation> allocations[kFramesInFlight * 7 + 1];
     for (NSUInteger index = 0; index < kFramesInFlight; ++index) {
-        allocations[index * 3] = _vertexBuffers[index];
-        allocations[index * 3 + 1] = _indexBuffers[index];
-        allocations[index * 3 + 2] = _drawBuffers[index];
+        allocations[index * 7] = _vertexBuffers[index];
+        allocations[index * 7 + 1] = _indexBuffers[index];
+        allocations[index * 7 + 2] = _drawBuffers[index];
+        allocations[index * 7 + 3] = _meshVertexBuffers[index];
+        allocations[index * 7 + 4] = _meshDrawBuffers[index];
+        allocations[index * 7 + 5] = _lightsBuffers[index];
+        allocations[index * 7 + 6] = _cameraBuffers[index];
     }
-    allocations[kFramesInFlight * 3] = _whiteTexture;
-    [_resources addAllocations:allocations count:kFramesInFlight * 3 + 1];
+    allocations[kFramesInFlight * 7] = _whiteTexture;
+    [_resources addAllocations:allocations count:kFramesInFlight * 7 + 1];
     [_resources commit];
     [_resources requestResidency];
     [_queue addResidencySet:_resources];
@@ -1928,10 +2004,33 @@ static void *renderWorker(void *context) {
                 [_argumentTables[slot][bank]
                     setAddress:_drawBuffers[slot].gpuAddress atIndex:1];
                 [_argumentTables[slot][bank]
+                    setAddress:_meshVertexBuffers[slot].gpuAddress atIndex:2];
+                [_argumentTables[slot][bank]
+                    setAddress:_cameraBuffers[slot].gpuAddress atIndex:3];
+                [_argumentTables[slot][bank]
+                    setAddress:_lightsBuffers[slot].gpuAddress atIndex:4];
+                [_argumentTables[slot][bank]
+                    setAddress:_lightsBuffers[slot].gpuAddress + kLightsHeaderBytes atIndex:5];
+                [_argumentTables[slot][bank]
+                    setAddress:_meshDrawBuffers[slot].gpuAddress atIndex:6];
+                [_argumentTables[slot][bank]
                     setTexture:_whiteTexture.gpuResourceID atIndex:0];
                 [_argumentTables[slot][bank]
                     setSamplerState:_sampler.gpuResourceID atIndex:0];
             }
+            // Per-frame mesh state: identity camera and zero lights until the
+            // producer supplies them, plus per-frame placement of referenced
+            // meshes in the mesh vertex/index streams.
+            {
+                float *cam = static_cast<float *>(_cameraBuffers[slot].contents);
+                std::memset(cam, 0, kCameraBufferSize);
+                cam[0] = cam[5] = cam[10] = cam[15] = 1.0f;
+                std::memset(_lightsBuffers[slot].contents, 0, 16);
+            }
+            NSUInteger meshVertexOffset = 0;
+            NSUInteger meshDrawCount = 0;
+            struct MeshPlacement { NSUInteger baseVertex; NSUInteger indexByteOffset; uint32_t indexCount; };
+            std::unordered_map<uint32_t, MeshPlacement> meshPlacements;
             [encoder setArgumentTable:_argumentTables[slot][boundArgumentTableBank]
                              atStages:MTLRenderStageVertex | MTLRenderStageFragment];
             for (const CommandView &view : _commandViews) {
@@ -1997,6 +2096,130 @@ static void *renderWorker(void *context) {
                         if (seenStageStates.insert(key).second) {
                             NSLog(@"DIAG unhandled texture-stage-state: stage=%u state=%u value=%u",
                                   state.stage, state.state, state.value);
+                        }
+                    }
+                } else if (view.type == DK2M_COMMAND_MESH_REGISTER &&
+                           view.size >= sizeof(DK2MMeshRegisterCommand)) {
+                    DK2MMeshRegisterCommand reg;
+                    std::memcpy(&reg, snapshot->bytes.data() + commandOffset, sizeof(reg));
+                    const size_t vertexBytes = static_cast<size_t>(reg.vertex_count) * kMeshVertexStride;
+                    const size_t indexBytes = (static_cast<size_t>(reg.index_count) * 2 + 3) & ~static_cast<size_t>(3);
+                    if (reg.mesh_id && reg.vertex_count && reg.index_count &&
+                        sizeof(reg) + vertexBytes + indexBytes <= view.size) {
+                        MeshBlob &blob = _meshes[reg.mesh_id];
+                        if (blob.vertices.empty()) {
+                            const uint8_t *payload = snapshot->bytes.data() + commandOffset + sizeof(reg);
+                            blob.vertices.assign(payload, payload + vertexBytes);
+                            blob.indices.assign(payload + vertexBytes,
+                                                payload + vertexBytes + static_cast<size_t>(reg.index_count) * 2);
+                            blob.vertexCount = reg.vertex_count;
+                            blob.indexCount = reg.index_count;
+                        }
+                    }
+                } else if (view.type == DK2M_COMMAND_CAMERA_SET &&
+                           view.size == sizeof(DK2MCameraSetCommand)) {
+                    DK2MCameraSetCommand camera;
+                    std::memcpy(&camera, snapshot->bytes.data() + commandOffset, sizeof(camera));
+                    std::memcpy(_cameraBuffers[slot].contents, camera.view_proj,
+                                sizeof(camera.view_proj));
+                } else if (view.type == DK2M_COMMAND_LIGHTS_SET &&
+                           view.size >= sizeof(DK2MLightsSetCommand)) {
+                    DK2MLightsSetCommand lightsCommand;
+                    std::memcpy(&lightsCommand, snapshot->bytes.data() + commandOffset,
+                                sizeof(lightsCommand));
+                    const size_t lutBytes = 256 * sizeof(float);
+                    const size_t lightBytes = static_cast<size_t>(lightsCommand.light_count) * 48;
+                    if (sizeof(lightsCommand) + lutBytes + lightBytes <= view.size) {
+                        const uint32_t count = std::min<uint32_t>(
+                            lightsCommand.light_count, static_cast<uint32_t>(kMaxLightsPerFrame));
+                        auto *dst = static_cast<uint8_t *>(_lightsBuffers[slot].contents);
+                        struct { uint32_t count; float r, g, b; } lightsHeader = {
+                            count, lightsCommand.ambient_r, lightsCommand.ambient_g,
+                            lightsCommand.ambient_b};
+                        std::memcpy(dst, &lightsHeader, sizeof(lightsHeader));
+                        const uint8_t *payload =
+                            snapshot->bytes.data() + commandOffset + sizeof(lightsCommand);
+                        std::memcpy(dst + 16, payload, lutBytes);
+                        std::memcpy(dst + kLightsHeaderBytes, payload + lutBytes,
+                                    static_cast<size_t>(count) * 48);
+                    }
+                } else if (view.type == DK2M_COMMAND_DRAW_MESH &&
+                           view.size == sizeof(DK2MDrawMeshCommand)) {
+                    DK2MDrawMeshCommand meshDraw;
+                    std::memcpy(&meshDraw, snapshot->bytes.data() + commandOffset, sizeof(meshDraw));
+                    const auto meshFound = _meshes.find(meshDraw.mesh_id);
+                    if (meshFound == _meshes.end() || meshFound->second.vertices.empty()) {
+                        ++metrics.invalidDraws;
+                    } else {
+                        MeshBlob &blob = meshFound->second;
+                        auto placed = meshPlacements.find(meshDraw.mesh_id);
+                        if (placed == meshPlacements.end()) {
+                            const NSUInteger vertexBytes = blob.vertices.size();
+                            const NSUInteger indexBytes = blob.indices.size();
+                            const NSUInteger alignedIndexOffset = (indexOffset + 3u) & ~static_cast<NSUInteger>(3u);
+                            if (meshVertexOffset + vertexBytes <= kMeshVertexBufferSize &&
+                                alignedIndexOffset + indexBytes <= kIndexBufferSize) {
+                                std::memcpy(static_cast<uint8_t *>(_meshVertexBuffers[slot].contents) +
+                                                meshVertexOffset,
+                                            blob.vertices.data(), vertexBytes);
+                                std::memcpy(static_cast<uint8_t *>(_indexBuffers[slot].contents) +
+                                                alignedIndexOffset,
+                                            blob.indices.data(), indexBytes);
+                                const MeshPlacement placement = {
+                                    meshVertexOffset / kMeshVertexStride, alignedIndexOffset,
+                                    blob.indexCount};
+                                indexOffset = alignedIndexOffset + ((indexBytes + 3u) & ~static_cast<NSUInteger>(3u));
+                                meshVertexOffset += vertexBytes;
+                                placed = meshPlacements.emplace(meshDraw.mesh_id, placement).first;
+                            }
+                        }
+                        if (placed == meshPlacements.end() || meshDrawCount >= kMaxMeshDrawsPerFrame ||
+                            !snapshot->width || !snapshot->height) {
+                            ++metrics.invalidDraws;
+                        } else {
+                            const TextureBinding binding = meshDraw.texture_id
+                                ? resolveTextureBinding(meshDraw.texture_id)
+                                : TextureBinding{static_cast<uint16_t>(boundArgumentTableBank), 0};
+                            auto *uniforms =
+                                static_cast<MeshDrawUniform *>(_meshDrawBuffers[slot].contents);
+                            MeshDrawUniform &uniform = uniforms[meshDrawCount];
+                            std::memcpy(uniform.world0, meshDraw.world + 0, 16);
+                            std::memcpy(uniform.world1, meshDraw.world + 4, 16);
+                            std::memcpy(uniform.world2, meshDraw.world + 8, 16);
+                            uniform.textureIndex = binding.slot;
+                            uniform.tint = meshDraw.tint;
+                            uniform.flags = meshDraw.flags;
+                            uniform.pad = 0;
+                            id<MTLRenderPipelineState> pipeline = _meshOpaquePipeline;
+                            if (alphaBlendEnabled || (meshDraw.flags & 2u)) {
+                                pipeline = sourceBlend == 2 && destinationBlend == 2
+                                               ? _meshAdditivePipeline : _meshAlphaPipeline;
+                            }
+                            [encoder setRenderPipelineState:pipeline];
+                            const uint32_t effectiveZFunction = zEnabled ? zFunction : 8;
+                            const uint32_t effectiveZWrite = zEnabled && zWriteEnabled ? 1 : 0;
+                            [encoder setDepthStencilState:_depthStates[effectiveZFunction][effectiveZWrite]];
+                            [encoder setCullMode:cullMode == 1 ? MTLCullModeNone : MTLCullModeBack];
+                            [encoder setFrontFacingWinding:cullMode == 3 ? MTLWindingClockwise
+                                                                        : MTLWindingCounterClockwise];
+                            if (boundArgumentTableBank != binding.bank) {
+                                boundArgumentTableBank = binding.bank;
+                                [encoder setArgumentTable:_argumentTables[slot][boundArgumentTableBank]
+                                                 atStages:MTLRenderStageVertex | MTLRenderStageFragment];
+                            }
+                            [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                                indexCount:placed->second.indexCount
+                                                 indexType:MTLIndexTypeUInt16
+                                               indexBuffer:_indexBuffers[slot].gpuAddress +
+                                                           placed->second.indexByteOffset
+                                         indexBufferLength:placed->second.indexCount * 2
+                                             instanceCount:1
+                                                baseVertex:placed->second.baseVertex
+                                              baseInstance:meshDrawCount];
+                            ++meshDrawCount;
+                            ++metrics.drawCalls;
+                            metrics.vertices += blob.vertexCount;
+                            metrics.indices += blob.indexCount;
                         }
                     }
                 } else if (view.type == DK2M_COMMAND_DRAW_INDEXED &&

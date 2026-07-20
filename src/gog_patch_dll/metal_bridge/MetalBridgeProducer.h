@@ -43,6 +43,24 @@ void setGameTickTiming(uint32_t tickMicroseconds);
 void setGameRenderTimings(uint32_t prepareMicroseconds, uint32_t drawMicroseconds);
 void endFrame();
 
+// --- world-space mesh pipeline (protocol v9) ---
+// Register an object-space mesh once; safe to call repeatedly with the same
+// id (later calls are no-ops unless the consumer session changed). Returns
+// false when the bridge is disabled.
+struct DK2MMeshVertexData;  // = DK2MMeshVertex from the protocol header
+bool meshRegister(uint32_t meshId, const void *vertices, uint32_t vertexCount,
+                  const uint16_t *indices, uint32_t indexCount);
+// Per-frame camera (column-major world->clip 4x4).
+void cameraSet(const float viewProj[16]);
+// Per-frame light list + the engine's 256-entry falloff LUT + ambient.
+void lightsSet(const void *lights, uint32_t lightCount,
+               float ambientR, float ambientG, float ambientB,
+               const float falloffLut[256]);
+// One mesh instance; world = row-major 3x4. Depth/blend context comes from
+// the surrounding setRenderState stream, same as drawIndexed.
+void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12],
+              uint32_t tint, uint32_t flags);
+
 }
 
 #endif

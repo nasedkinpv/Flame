@@ -1357,6 +1357,104 @@ private:
         draw(DK2M_FVF_VERTEX1C, vertices, 4, indices, 6, 0);
     }
 
+    // --- world-space mesh pipeline (protocol v9) ---
+    bool meshRegister(uint32_t meshId, const void *vertices, uint32_t vertexCount,
+                      const uint16_t *indices, uint32_t indexCount) {
+        if (!meshId || !vertices || !vertexCount || !indices || !indexCount) return false;
+        MeshState &state = meshes_[meshId];
+        if (!state.blob.empty()) return true;
+        const uint32_t vertexBytes = vertexCount * static_cast<uint32_t>(sizeof(DK2MMeshVertex));
+        const uint32_t indexBytes = (indexCount * static_cast<uint32_t>(sizeof(uint16_t)) + 3u) & ~3u;
+        DK2MMeshRegisterCommand command = {};
+        command.header.type = DK2M_COMMAND_MESH_REGISTER;
+        command.header.size = static_cast<uint32_t>(sizeof(command)) + vertexBytes + indexBytes;
+        command.mesh_id = meshId;
+        command.vertex_count = vertexCount;
+        command.index_count = indexCount;
+        state.blob.resize(command.header.size);
+        std::memcpy(state.blob.data(), &command, sizeof(command));
+        std::memcpy(state.blob.data() + sizeof(command), vertices, vertexBytes);
+        std::memset(state.blob.data() + sizeof(command) + vertexBytes, 0, indexBytes);
+        std::memcpy(state.blob.data() + sizeof(command) + vertexBytes, indices,
+                    indexCount * sizeof(uint16_t));
+        return true;
+    }
+
+    void cameraSet(const float viewProj[16]) {
+        if (!active_ || used_ + sizeof(DK2MCameraSetCommand) > DK2M_SLOT_CAPACITY) return;
+        DK2MCameraSetCommand command = {};
+        command.header.type = DK2M_COMMAND_CAMERA_SET;
+        command.header.size = sizeof(command);
+        std::memcpy(command.view_proj, viewProj, sizeof(command.view_proj));
+        append(&command, sizeof(command));
+        ++commandCount_;
+    }
+
+    void lightsSet(const void *lights, uint32_t lightCount, float ambientR,
+                   float ambientG, float ambientB, const float falloffLut[256]) {
+        if (!active_) return;
+        const uint32_t lutBytes = 256u * sizeof(float);
+        const uint32_t lightBytes = lightCount * static_cast<uint32_t>(sizeof(DK2MLight));
+        const uint32_t size = static_cast<uint32_t>(sizeof(DK2MLightsSetCommand)) + lutBytes + lightBytes;
+        if (used_ + size > DK2M_SLOT_CAPACITY) return;
+        DK2MLightsSetCommand command = {};
+        command.header.type = DK2M_COMMAND_LIGHTS_SET;
+        command.header.size = size;
+        command.light_count = lightCount;
+        command.ambient_r = ambientR;
+        command.ambient_g = ambientG;
+        command.ambient_b = ambientB;
+        append(&command, sizeof(command));
+        append(falloffLut, lutBytes);
+        if (lightBytes) append(lights, lightBytes);
+        ++commandCount_;
+    }
+
+    void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12],
+                  uint32_t tint, uint32_t flags) {
+        if (!active_) return;
+        auto found = meshes_.find(meshId);
+        if (found == meshes_.end() || found->second.blob.empty()) return;
+        MeshState &state = found->second;
+        // (Re)send the registration blob until the consumer acknowledges a
+        // frame that carried it - same ack model as texture uploads, so a
+        // consumer that attaches mid-session still receives every mesh.
+        const uint32_t consumerSession =
+            InterlockedCompareExchange(asLong(&header_->consumer_session), 0, 0);
+        if (consumerSession != meshConsumerSession_) {
+            meshConsumerSession_ = consumerSession;
+            for (auto &entry : meshes_) {
+                entry.second.pending = true;
+                entry.second.lastSentFrame = 0;
+            }
+        }
+        if (state.pending) {
+            const uint32_t consumer =
+                InterlockedCompareExchange(asLong(&header_->consumer_frame), 0, 0);
+            if (state.lastSentFrame && consumer == state.lastSentFrame) {
+                state.pending = false;
+            } else if (state.lastSentFrame != frame_ + 1 &&
+                       used_ + state.blob.size() <= DK2M_SLOT_CAPACITY) {
+                append(state.blob.data(), static_cast<uint32_t>(state.blob.size()));
+                ++commandCount_;
+                state.lastSentFrame = frame_ + 1;
+                if (state.lastSentFrame == 0) state.lastSentFrame = 1;
+            }
+        }
+        if (textureId) emitTexture(0, textureId);
+        if (used_ + sizeof(DK2MDrawMeshCommand) > DK2M_SLOT_CAPACITY) return;
+        DK2MDrawMeshCommand command = {};
+        command.header.type = DK2M_COMMAND_DRAW_MESH;
+        command.header.size = sizeof(command);
+        command.mesh_id = meshId;
+        command.texture_id = textureId;
+        command.flags = flags;
+        command.tint = tint;
+        std::memcpy(command.world, world, sizeof(command.world));
+        append(&command, sizeof(command));
+        ++commandCount_;
+    }
+
     void append(const void *data, uint32_t size) {
         std::memcpy(static_cast<uint8_t *>(view_) + DK2M_SLOT_OFFSET(slotIndex_) + used_, data, size);
         used_ += size;
@@ -1396,6 +1494,13 @@ private:
     uint32_t lastInputHeartbeat_ = 0;
     DWORD lastInputHeartbeatTick_ = 0;
     uint8_t appliedKeys_[32] = {};
+    struct MeshState {
+        std::vector<uint8_t> blob;  // serialized DK2MMeshRegisterCommand + payload
+        bool pending = true;
+        uint32_t lastSentFrame = 0;
+    };
+    std::unordered_map<uint32_t, MeshState> meshes_;
+    uint32_t meshConsumerSession_ = 0;
     std::unordered_map<uint32_t, TextureCache> textures_;
     std::unordered_map<uintptr_t, uint32_t> surfaceTextures_;
     std::unordered_map<uint32_t, uint32_t> renderStates_;
@@ -1512,6 +1617,23 @@ bool getRenderState(DWORD state, DWORD *value) {
 
 void setTextureStageState(DWORD stage, DWORD state, DWORD value) {
     producer.textureStageState(stage, state, value);
+}
+
+bool meshRegister(uint32_t meshId, const void *vertices, uint32_t vertexCount,
+                  const uint16_t *indices, uint32_t indexCount) {
+    return producer.meshRegister(meshId, vertices, vertexCount, indices, indexCount);
+}
+
+void cameraSet(const float viewProj[16]) { producer.cameraSet(viewProj); }
+
+void lightsSet(const void *lights, uint32_t lightCount, float ambientR, float ambientG,
+               float ambientB, const float falloffLut[256]) {
+    producer.lightsSet(lights, lightCount, ambientR, ambientG, ambientB, falloffLut);
+}
+
+void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12], uint32_t tint,
+              uint32_t flags) {
+    producer.drawMesh(meshId, textureId, world, tint, flags);
 }
 
 void setGameTickTiming(uint32_t tickMicroseconds) {

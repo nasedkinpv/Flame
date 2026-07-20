@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 8u
+#define DK2M_VERSION 9u
 #define DK2M_TIMING_QUANTUM_US 8u
 #define DK2M_SLOT_COUNT 3u
 // A 1600x1200 High-Res frame can introduce 9-12 MiB of 128x128 surfaces while
@@ -26,6 +26,19 @@ enum DK2MCommandType {
     DK2M_COMMAND_RENDER_STATE = 5,
     DK2M_COMMAND_TEXTURE_STAGE_STATE = 6,
     DK2M_COMMAND_TEXTURE_UPDATE_RECT = 7,
+    // World-space mesh pipeline (protocol v9): the game registers object-
+    // space meshes once, then per frame sends camera + lights + per-instance
+    // world transforms, and the Metal vertex shader does transform+lighting -
+    // replacing the original engine's per-vertex CPU pipeline.
+    DK2M_COMMAND_MESH_REGISTER = 8,
+    DK2M_COMMAND_CAMERA_SET = 9,
+    DK2M_COMMAND_LIGHTS_SET = 10,
+    DK2M_COMMAND_DRAW_MESH = 11,
+};
+
+enum DK2MDrawMeshFlags {
+    DK2M_DRAW_MESH_LIT = 1u << 0,          // apply point-light accumulation
+    DK2M_DRAW_MESH_ALPHA_BLEND = 1u << 1,  // matches ALPHABLENDENABLE for this draw
 };
 
 enum DK2MInputFlags {
@@ -170,6 +183,65 @@ typedef struct DK2MTextureStageStateCommand {
     uint32_t state;
     uint32_t value;
 } DK2MTextureStageStateCommand;
+
+// Object-space mesh vertex. Matches the layout the DK2 mesh emitters consume
+// (position, normal, UV, per-vertex base colour) so producers can copy
+// straight out of engine data.
+typedef struct DK2MMeshVertex {
+    float px, py, pz;
+    float nx, ny, nz;
+    float u, v;
+    uint32_t base_color;  // ARGB, pre-lighting per-vertex colour
+} DK2MMeshVertex;
+
+// One-time mesh upload; payload = vertex_count DK2MMeshVertex followed by
+// index_count uint16 indices (padded to 4 bytes). The consumer caches the
+// blob by mesh_id for the rest of its session.
+typedef struct DK2MMeshRegisterCommand {
+    DK2MCommandHeader header;
+    uint32_t mesh_id;
+    uint32_t vertex_count;
+    uint32_t index_count;
+    uint32_t flags;
+} DK2MMeshRegisterCommand;
+
+// Per-frame camera: world -> clip transform (column-major 4x4).
+typedef struct DK2MCameraSetCommand {
+    DK2MCommandHeader header;
+    float view_proj[16];
+} DK2MCameraSetCommand;
+
+// World-space point light, matching DK2's per-vertex accumulation model
+// (see Obj57BCB0): contribution = (dist_sq_limit - d2) * falloff_lut[f(d2)]
+// * atten_scale * max(dot(normal, to_light) * facing_scale, 0), clamped.
+typedef struct DK2MLight {
+    float px, py, pz;
+    float r, g, b;
+    float dist_sq_limit;
+    float atten_scale;
+    float facing_scale;
+    float pad0, pad1, pad2;
+} DK2MLight;
+
+// Per-frame light set; payload = 256 floats of the engine falloff LUT
+// (captured from the game) followed by light_count DK2MLight.
+typedef struct DK2MLightsSetCommand {
+    DK2MCommandHeader header;
+    uint32_t light_count;
+    float ambient_r, ambient_g, ambient_b;
+} DK2MLightsSetCommand;
+
+// One mesh instance: row-major 3x4 world transform (rows of [3x3 rot*scale |
+// translation]) plus material inputs. Depth/blend context comes from the
+// surrounding RENDER_STATE stream like every other draw.
+typedef struct DK2MDrawMeshCommand {
+    DK2MCommandHeader header;
+    uint32_t mesh_id;
+    uint32_t texture_id;
+    uint32_t flags;   // DK2MDrawMeshFlags
+    uint32_t tint;    // ARGB modulated over the lit colour
+    float world[12];
+} DK2MDrawMeshCommand;
 #pragma pack(pop)
 
 #define DK2M_FILE_SIZE ((uint32_t)(sizeof(DK2MFileHeader) + DK2M_SLOT_COUNT * DK2M_SLOT_CAPACITY))
