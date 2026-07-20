@@ -197,9 +197,7 @@ void emitFrameLights(uint32_t *lightData) {
     static std::vector<const SceneLightForGpu *> seen;
     static std::vector<DK2MLight> scratch;
     static uint32_t lastFrame = 0xFFFFFFFFu;
-    uint32_t frameW = 0, frameH = 0;
-    gog::metal_bridge::frameSize(&frameW, &frameH);
-    const uint32_t stamp = GetTickCount() / 16u;  // frame-ish granularity
+    const uint32_t stamp = gog::metal_bridge::frameCounter();
     if (stamp != lastFrame) {
         lastFrame = stamp;
         seen.clear();

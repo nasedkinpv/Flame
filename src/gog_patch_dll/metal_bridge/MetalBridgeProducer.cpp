@@ -1514,6 +1514,8 @@ public:
         if (height) *height = height_;
     }
 
+    uint32_t frameCounter() const { return frame_; }
+
     // Opaque z-tested inline draws sharing (texture, tint, flags, ambient)
     // merge into per-state buckets and flush as ONE command each: terrain
     // goes through this path one tile at a time (~4-5K calls/frame), and
@@ -1870,6 +1872,8 @@ void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCou
 }
 
 void frameSize(uint32_t *width, uint32_t *height) { producer.frameSize(width, height); }
+
+uint32_t frameCounter() { return producer.frameCounter(); }
 
 void ensureTexture(DWORD textureId, IDirectDrawSurface4 *surface) {
     producer.ensureTexture(textureId, surface);
