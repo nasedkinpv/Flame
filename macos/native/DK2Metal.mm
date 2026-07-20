@@ -2085,14 +2085,19 @@ static void *renderWorker(void *context) {
                         uniform.bumpEnvMat1_11 = bumpEnv[1][3];
                         uniform.bumpEnvLScale1 = bumpEnv[1][4];
                         uniform.bumpEnvLOffset1 = bumpEnv[1][5];
-                        // ponytail: one-shot log of the actual bump-op/matrix a
-                        // draw is using, so a wrong stage or wrong matrix values
-                        // show up as data instead of a guess from a screenshot.
-                        if (uniform.colorOp == 22 || uniform.colorOp == 23 ||
-                            uniform.colorOp1 == 22 || uniform.colorOp1 == 23) {
-                            static bool loggedBumpDraw = false;
-                            if (!loggedBumpDraw) {
-                                loggedBumpDraw = true;
+                        // ponytail: log the actual bump-op/matrix a draw is using
+                        // every couple seconds (not just once ever - the first
+                        // match tends to be a startup draw before textures are
+                        // uploaded, all falling back to the white slot 0), and
+                        // only once textures actually resolved, so this reflects
+                        // a real steady-state water draw.
+                        if ((uniform.colorOp == 22 || uniform.colorOp == 23 ||
+                             uniform.colorOp1 == 22 || uniform.colorOp1 == 23) &&
+                            uniform.textureIndex != 0 && uniform.textureIndex1 != 0) {
+                            static NSTimeInterval lastLogged = 0;
+                            const NSTimeInterval now = CACurrentMediaTime();
+                            if (now - lastLogged > 2.0) {
+                                lastLogged = now;
                                 NSLog(@"DIAG bump draw: colorOp0=%u tex0=%u colorOp1=%u tex1=%u "
                                       "colorOp2=%u alphaOp2=%u colorArg1_2=%u colorArg2_2=%u "
                                       "alphaArg1_2=%u alphaArg2_2=%u tex2=%u "
