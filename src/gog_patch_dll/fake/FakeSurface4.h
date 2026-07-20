@@ -15,6 +15,9 @@ namespace gog {
         bool fC_isModSurf;
         ULONG f10_lockCounter;
         DDSURFACEDESC2 f14_desc;
+        BYTE *f90_ownedPixels;
+        DWORD f94_ownedPitch;
+        DWORD f98_ownedSize;
     public:
         FakeSurface4(LPDIRECTDRAWSURFACE4 orig_surf, bool isModSurf);
         explicit FakeSurface4(LPDDSURFACEDESC2 pDesc);
@@ -74,7 +77,7 @@ namespace gog {
 
     };
 
-    static_assert(sizeof(FakeSurface4) == 0x90);
+    static_assert(sizeof(FakeSurface4) == 0x9C);
 
 }
 

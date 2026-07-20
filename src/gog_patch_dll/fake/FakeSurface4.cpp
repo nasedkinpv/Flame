@@ -9,6 +9,7 @@
 #include <gog_fake.h>
 #include <gog_debug.h>
 #include <metal_bridge/MetalBridgeProducer.h>
+#include <new>
 
 using namespace gog;
 
@@ -21,6 +22,9 @@ bool isBump16(const DDSURFACEDESC2 &desc) {
 
 
 FakeSurface4::FakeSurface4(LPDIRECTDRAWSURFACE4 orig_surf, bool isModSurf) {
+    this->f90_ownedPixels = nullptr;
+    this->f94_ownedPitch = 0;
+    this->f98_ownedSize = 0;
     this->f8_orig_surf = orig_surf;
     orig_surf->AddRef();
     this->fC_isModSurf = isModSurf;
@@ -34,6 +38,9 @@ FakeSurface4::FakeSurface4(LPDIRECTDRAWSURFACE4 orig_surf, bool isModSurf) {
 
 FakeSurface4::FakeSurface4(LPDDSURFACEDESC2 pDesc) {
     this->f8_orig_surf = nullptr;
+    this->f90_ownedPixels = nullptr;
+    this->f94_ownedPitch = 0;
+    this->f98_ownedSize = 0;
     this->f10_lockCounter = 0;
     static_assert(sizeof(DDSURFACEDESC2) == 0x7C);
     DDSURFACEDESC2 desc;
@@ -53,21 +60,35 @@ FakeSurface4::FakeSurface4(LPDDSURFACEDESC2 pDesc) {
     if ((this->f14_desc.dwFlags & 0x40) != 0) gog_assert_failed("FakeSurface4::FakeSurface4:218");
     if (!this->f14_desc.dwWidth) gog_assert_failed("FakeSurface4::FakeSurface4:219");
     if (!this->f14_desc.dwHeight) gog_assert_failed("FakeSurface4::FakeSurface4:220");
-    DDSURFACEDESC2 backingDesc = this->f14_desc;
     if (metal_bridge::isEnabled() && isBump16(this->f14_desc)) {
-        // Wine's legacy DirectDraw path can create a bump surface, but its
-        // lifetime becomes unsafe when DK2 rebuilds the texture device. Keep
-        // the same 16-bit storage while presenting it to Wine as plain RGB565;
-        // Lock() restores the logical bump format for DK2 and the Metal bridge.
-        backingDesc.ddpfPixelFormat.dwFlags = DDPF_RGB;
-        backingDesc.ddpfPixelFormat.dwFourCC = 0;
-        backingDesc.ddpfPixelFormat.dwRGBBitCount = 16;
-        backingDesc.ddpfPixelFormat.dwRBitMask = 0xF800;
-        backingDesc.ddpfPixelFormat.dwGBitMask = 0x07E0;
-        backingDesc.ddpfPixelFormat.dwBBitMask = 0x001F;
-        backingDesc.ddpfPixelFormat.dwRGBAlphaBitMask = 0;
+        // The Metal bridge consumes bump pixels directly; WineD3D never uses
+        // this surface. Keeping the pixels in a plain CPU buffer avoids making
+        // Wine manage a legacy bump/RGB surrogate and its COM lifetime.
+        const unsigned long long pitch =
+            (static_cast<unsigned long long>(this->f14_desc.dwWidth) * 2u + 3u) & ~3ull;
+        const unsigned long long size = pitch * this->f14_desc.dwHeight;
+        if (!pitch || size > 0xFFFFFFFFull) {
+            gog_assert_failed("FakeSurface4::FakeSurface4:224");
+            return;
+        }
+        this->f90_ownedPixels = static_cast<BYTE *>(operator new(
+            static_cast<size_t>(size), std::nothrow));
+        if (!this->f90_ownedPixels) {
+            gog_assert_failed("FakeSurface4::FakeSurface4:225");
+            return;
+        }
+        this->f94_ownedPitch = static_cast<DWORD>(pitch);
+        this->f98_ownedSize = static_cast<DWORD>(size);
+        memset(this->f90_ownedPixels, 0, this->f98_ownedSize);
+        this->f14_desc.dwFlags |= DDSD_PITCH | DDSD_LPSURFACE;
+        this->f14_desc.lPitch = static_cast<LONG>(this->f94_ownedPitch);
+        this->f14_desc.lpSurface = this->f90_ownedPixels;
+        gog_debugf("Metal bridge: CPU bump surface %ux%u pitch=%u flags=0x%x",
+                   this->f14_desc.dwWidth, this->f14_desc.dwHeight,
+                   this->f94_ownedPitch, this->f14_desc.ddpfPixelFormat.dwFlags);
+        return;
     }
-    HRESULT hr = orig::pIDirectDraw4->CreateSurface(&backingDesc, &this->f8_orig_surf, NULL);
+    HRESULT hr = orig::pIDirectDraw4->CreateSurface(&this->f14_desc, &this->f8_orig_surf, NULL);
     if (FAILED(hr)) {
         gog_assert_failed_hr("FakeSurface4::FakeSurface4:227", hr);
         if (hr == DDERR_INVALIDCAPS) {
@@ -115,6 +136,10 @@ ULONG FakeSurface4::Release(void) {
         this->f8_orig_surf->Release();
         this->f8_orig_surf = nullptr;
     }
+    if (this->f90_ownedPixels) {
+        operator delete(this->f90_ownedPixels);
+        this->f90_ownedPixels = nullptr;
+    }
     operator delete(this);
     return 0;
 }
@@ -129,7 +154,35 @@ HRESULT FakeSurface4::AddOverlayDirtyRect(LPRECT) {
     return DDERR_GENERIC;
 }
 
-HRESULT FakeSurface4::Blt(LPRECT, LPDIRECTDRAWSURFACE4, LPRECT, DWORD, LPDDBLTFX) {
+HRESULT FakeSurface4::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE4 srcSurf_, LPRECT srcRect,
+                          DWORD flags, LPDDBLTFX) {
+    if (this->f90_ownedPixels) {
+        auto *srcSurf = static_cast<FakeSurface4 *>(srcSurf_);
+        if (!srcSurf || !srcSurf->f90_ownedPixels || flags != DDBLT_WAIT)
+            return DDERR_UNSUPPORTED;
+        RECT src = srcRect ? *srcRect : RECT{0, 0,
+            static_cast<LONG>(srcSurf->f14_desc.dwWidth),
+            static_cast<LONG>(srcSurf->f14_desc.dwHeight)};
+        RECT dst = dstRect ? *dstRect : RECT{0, 0,
+            static_cast<LONG>(this->f14_desc.dwWidth),
+            static_cast<LONG>(this->f14_desc.dwHeight)};
+        const LONG width = src.right - src.left;
+        const LONG height = src.bottom - src.top;
+        if (width < 0 || height < 0 || dst.right - dst.left != width ||
+            dst.bottom - dst.top != height || src.left < 0 || src.top < 0 ||
+            dst.left < 0 || dst.top < 0 || src.right > static_cast<LONG>(srcSurf->f14_desc.dwWidth) ||
+            src.bottom > static_cast<LONG>(srcSurf->f14_desc.dwHeight) ||
+            dst.right > static_cast<LONG>(this->f14_desc.dwWidth) ||
+            dst.bottom > static_cast<LONG>(this->f14_desc.dwHeight))
+            return DDERR_INVALIDRECT;
+        for (LONG y = 0; y < height; ++y) {
+            memmove(this->f90_ownedPixels + (dst.top + y) * this->f94_ownedPitch + dst.left * 2,
+                    srcSurf->f90_ownedPixels + (src.top + y) * srcSurf->f94_ownedPitch + src.left * 2,
+                    static_cast<size_t>(width) * 2);
+        }
+        metal_bridge::textureDirty(this);
+        return DD_OK;
+    }
     gog_unused_function_called("FakeSurface4::Blt");
     return DDERR_GENERIC;
 }
@@ -143,6 +196,28 @@ HRESULT FakeSurface4::BltFast(DWORD x, DWORD y, LPDIRECTDRAWSURFACE4 srcSurf_, L
     auto *srcSurf = (FakeSurface4 *) srcSurf_;
     if (!srcSurf) gog_assert_failed("FakeSurface4::BltFast:264");
     if (this->fC_isModSurf) gog_assert_failed("FakeSurface4::BltFast:265");
+    if (this->f90_ownedPixels) {
+        if (!srcSurf || !srcSurf->f90_ownedPixels || (a6 & ~DDBLTFAST_WAIT))
+            return DDERR_UNSUPPORTED;
+        RECT src = srcRect ? *srcRect : RECT{0, 0,
+            static_cast<LONG>(srcSurf->f14_desc.dwWidth),
+            static_cast<LONG>(srcSurf->f14_desc.dwHeight)};
+        const LONG width = src.right - src.left;
+        const LONG height = src.bottom - src.top;
+        if (width < 0 || height < 0 || src.left < 0 || src.top < 0 ||
+            src.right > static_cast<LONG>(srcSurf->f14_desc.dwWidth) ||
+            src.bottom > static_cast<LONG>(srcSurf->f14_desc.dwHeight) ||
+            x + static_cast<DWORD>(width) > this->f14_desc.dwWidth ||
+            y + static_cast<DWORD>(height) > this->f14_desc.dwHeight)
+            return DDERR_INVALIDRECT;
+        for (LONG row = 0; row < height; ++row) {
+            memmove(this->f90_ownedPixels + (y + row) * this->f94_ownedPitch + x * 2,
+                    srcSurf->f90_ownedPixels + (src.top + row) * srcSurf->f94_ownedPitch + src.left * 2,
+                    static_cast<size_t>(width) * 2);
+        }
+        metal_bridge::textureDirty(this);
+        return DD_OK;
+    }
     IDirectDrawSurface4 *srcSurf_1 = nullptr;
     if (srcSurf) srcSurf_1 = srcSurf->f8_orig_surf;
     const bool isOverlay = FakeSurface::instance_cpy &&
@@ -247,12 +322,20 @@ HRESULT FakeSurface4::GetPalette(LPDIRECTDRAWPALETTE *) {
     return DDERR_GENERIC;
 }
 
-HRESULT FakeSurface4::GetPixelFormat(LPDDPIXELFORMAT) {
+HRESULT FakeSurface4::GetPixelFormat(LPDDPIXELFORMAT format) {
+    if (this->f90_ownedPixels && format) {
+        *format = this->f14_desc.ddpfPixelFormat;
+        return DD_OK;
+    }
     gog_unused_function_called("FakeSurface4::GetPixelFormat");
     return DDERR_GENERIC;
 }
 
-HRESULT FakeSurface4::GetSurfaceDesc(LPDDSURFACEDESC2) {
+HRESULT FakeSurface4::GetSurfaceDesc(LPDDSURFACEDESC2 desc) {
+    if (this->f90_ownedPixels && desc) {
+        *desc = this->f14_desc;
+        return DD_OK;
+    }
     gog_unused_function_called("FakeSurface4::GetSurfaceDesc");
     return DDERR_GENERIC;
 }
@@ -267,6 +350,23 @@ HRESULT FakeSurface4::IsLost(void) {
 }
 
 HRESULT FakeSurface4::Lock(LPRECT pRect, LPDDSURFACEDESC2 surf, DWORD a4, HANDLE a5) {
+    if (this->f90_ownedPixels) {
+        if (!surf || this->f10_lockCounter) return DDERR_SURFACEBUSY;
+        *surf = this->f14_desc;
+        if (pRect) {
+            if (pRect->left < 0 || pRect->top < 0 || pRect->right < pRect->left ||
+                pRect->bottom < pRect->top ||
+                pRect->right > static_cast<LONG>(this->f14_desc.dwWidth) ||
+                pRect->bottom > static_cast<LONG>(this->f14_desc.dwHeight))
+                return DDERR_INVALIDRECT;
+            surf->dwWidth = pRect->right - pRect->left;
+            surf->dwHeight = pRect->bottom - pRect->top;
+            surf->lpSurface = this->f90_ownedPixels +
+                pRect->top * this->f94_ownedPitch + pRect->left * 2;
+        }
+        ++this->f10_lockCounter;
+        return DD_OK;
+    }
     const bool isMetalBump = metal_bridge::isEnabled() && isBump16(this->f14_desc);
     const DDPIXELFORMAT logicalFormat = this->f14_desc.ddpfPixelFormat;
     HRESULT hr = this->f8_orig_surf->Lock(pRect, surf, a4, a5);
@@ -316,6 +416,11 @@ HRESULT FakeSurface4::Unlock(LPRECT pRect) {
     IDirectDrawSurface4 *bridgeSurface =
         metal_bridge::isEnabled() && isBump16(this->f14_desc) ? this : this->f8_orig_surf;
     metal_bridge::textureDirty(bridgeSurface, pRect ? nullptr : &this->f14_desc);
+    if (this->f90_ownedPixels) {
+        if (!this->f10_lockCounter) return DDERR_NOTLOCKED;
+        --this->f10_lockCounter;
+        return DD_OK;
+    }
     HRESULT hr = this->f8_orig_surf->Unlock(pRect);
     if (FAILED(hr)) {
         gog_assert_failed_hr("FakeSurface4::Unlock:322", hr);
