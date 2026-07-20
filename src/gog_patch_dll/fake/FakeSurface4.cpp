@@ -26,6 +26,8 @@ FakeSurface4::FakeSurface4(LPDIRECTDRAWSURFACE4 orig_surf, bool isModSurf) {
 }
 
 FakeSurface4::FakeSurface4(LPDDSURFACEDESC2 pDesc) {
+    this->f8_orig_surf = nullptr;
+    this->f10_lockCounter = 0;
     static_assert(sizeof(DDSURFACEDESC2) == 0x7C);
     DDSURFACEDESC2 desc;
     memcpy(&desc, pDesc, sizeof(desc));
@@ -57,15 +59,25 @@ FakeSurface4::FakeSurface4(LPDDSURFACEDESC2 pDesc) {
 }
 
 HRESULT FakeSurface4::QueryInterface(REFIID riid, LPVOID FAR *ppvObj) {
+    if (!ppvObj) return E_POINTER;
+    *ppvObj = nullptr;
     if (IsEqualGUID(IID_IDirectDrawGammaControl, riid)) {
         *ppvObj = FakeGammaControl::instance;
         return DD_OK;
     }
     if (IsEqualGUID(IID_IDirect3DTexture2, riid)) {
-        IDirect3DTexture2 *orig_tex;
+        IDirect3DTexture2 *orig_tex = nullptr;
         HRESULT hr = this->f8_orig_surf->QueryInterface(IID_IDirect3DTexture2, (LPVOID *) &orig_tex);
         if (SUCCEEDED(hr)) {
             *ppvObj = new FakeTexture(orig_tex, this->f8_orig_surf);
+        } else if (metal_bridge::isEnabled()) {
+            // Metal only needs the lockable DirectDraw backing surface. Wine may
+            // legitimately reject IDirect3DTexture2 for 16-bit bump formats.
+            gog_debugf("Metal bridge: virtual texture fallback after QueryInterface failed (hr=0x%x, flags=0x%x, bits=%u)",
+                       hr, this->f14_desc.ddpfPixelFormat.dwFlags,
+                       this->f14_desc.ddpfPixelFormat.dwRGBBitCount);
+            *ppvObj = new FakeTexture(nullptr, this->f8_orig_surf);
+            return DD_OK;
         }
         return hr;
     }
