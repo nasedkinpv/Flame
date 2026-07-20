@@ -1918,6 +1918,18 @@ static void *renderWorker(void *context) {
                     if (state.state >= 1 && state.state <= 6) {
                         if (state.stage == 0) textureStage0[state.state] = state.value;
                         else if (state.stage == 1) textureStage1[state.state] = state.value;
+                    } else {
+                        // ponytail: one-shot NSLog per distinct (stage, state) the
+                        // combiner doesn't model (e.g. D3DTSS_TEXCOORDINDEX=11,
+                        // D3DTSS_BUMPENVMAT*=10/12/13/14, TEXTURETRANSFORMFLAGS=24).
+                        // Water/env-mapped draws are the prime suspect for actually
+                        // relying on one of these - log first sighting to confirm.
+                        static std::unordered_set<uint32_t> seenStageStates;
+                        const uint32_t key = (state.stage << 16) | state.state;
+                        if (seenStageStates.insert(key).second) {
+                            NSLog(@"DIAG unhandled texture-stage-state: stage=%u state=%u value=%u",
+                                  state.stage, state.state, state.value);
+                        }
                     }
                 } else if (view.type == DK2M_COMMAND_DRAW_INDEXED &&
                            view.size >= sizeof(DK2MDrawIndexedCommand)) {
