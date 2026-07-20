@@ -826,7 +826,7 @@ constexpr NSUInteger kDrawBufferSize = kMaxDrawsPerFrame * sizeof(DrawUniform);
 // are already resident in _textures regardless of bank count), so budget
 // generously rather than re-tune this by trial and error per scene.
 constexpr NSUInteger kTextureBindingsPerArgumentTable = 128;
-constexpr NSUInteger kTextureArgumentTablesPerFrame = 16;
+constexpr NSUInteger kTextureArgumentTablesPerFrame = 24;
 constexpr uint32_t kD3DRenderStateZEnable = 7;
 constexpr uint32_t kD3DRenderStateZWriteEnable = 14;
 constexpr uint32_t kD3DRenderStateSourceBlend = 19;
@@ -1866,15 +1866,28 @@ static void *renderWorker(void *context) {
                 return binding;
             };
             // Stage 0 (unconstrained): reuse an existing binding in any bank,
-            // else allocate in the first bank with room. A texture that does
-            // not fit anywhere falls back to the shared white slot {0, 0}.
+            // else allocate in the LEAST-FULL bank with room. Stage 1/2 are
+            // then bank-locked to whatever bank stage 0 picked (see below), so
+            // first-fit here used to pack bank 0 solid (127 textures) almost
+            // immediately, then have every draw whose stage-0 texture already
+            // lived in that now-full bank force stage 1/2 to overflow even
+            // though plenty of total capacity remained in later banks.
+            // Spreading new textures to the emptiest bank keeps headroom in
+            // every bank roughly even, so a draw's stage 1/2 texture is far
+            // more likely to still fit alongside its stage 0 texture.
             auto resolveTextureBinding = [&](uint32_t textureId) -> TextureBinding {
                 const auto found = std::find_if(
                     _frameTextureBindings.begin(), _frameTextureBindings.end(),
                     [&](const TextureBindingEntry &entry) { return entry.textureId == textureId; });
                 if (found != _frameTextureBindings.end()) return found->binding;
+                uint16_t bestBank = 0;
+                NSUInteger bestFree = 0;
                 for (uint16_t bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) {
-                    if (const auto binding = allocateInBank(textureId, bank)) return *binding;
+                    const NSUInteger free = kTextureBindingsPerArgumentTable - nextSlot[bank];
+                    if (free > bestFree) { bestFree = free; bestBank = bank; }
+                }
+                if (bestFree > 0) {
+                    if (const auto binding = allocateInBank(textureId, bestBank)) return *binding;
                 }
                 ++metrics.bindingOverflows;
                 return {0, 0};
