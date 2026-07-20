@@ -162,12 +162,14 @@ void emitMeshCamera() {
     const float ox = 2.0f * Cx / static_cast<float>(w) - 1.0f;
     const float sy = -2.0f * Ay * F / static_cast<float>(h);
     const float oy = 1.0f - 2.0f * Cy / static_cast<float>(h);
+    // sub_594E10 computes out = M^T * v (out_i = sum_c m[c][i] * v_c), so the
+    // view rotation rows here are the matrix COLUMNS.
     float R[4][4] = {};
     for (int c = 0; c < 3; ++c) {
-        R[0][c] = sx * M.m[0][c] + ox * M.m[2][c];
-        R[1][c] = sy * M.m[1][c] + oy * M.m[2][c];
-        R[2][c] = zAdd3 * M.m[2][c];
-        R[3][c] = M.m[2][c];
+        R[0][c] = sx * M.m[c][0] + ox * M.m[c][2];
+        R[1][c] = sy * M.m[c][1] + oy * M.m[c][2];
+        R[2][c] = zAdd3 * M.m[c][2];
+        R[3][c] = M.m[c][2];
     }
     R[0][3] = sx * T.x + ox * T.z;
     R[1][3] = sy * T.y + oy * T.z;
