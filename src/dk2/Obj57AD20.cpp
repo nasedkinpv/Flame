@@ -272,32 +272,16 @@ struct ResolveStats {
 };
 ResolveStats g_resolveStats = {};
 
-uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
+uint32_t resolveBridgeTextureIdGuarded(dk2::MyCESurfHandle *slotHandle,
                                        uint32_t *bridgeIdOut, void **bridgeSurfaceOut) {
     __try {
         ++g_resolveStats.calls;
-        if (!surface) { ++g_resolveStats.nullSurface; return 0; }
-        // Candidate handles in preference order: the base handle, its current
-        // reduction, then the scaled set. Reduction levels are the engine's
-        // software mip-mapping; the GPU side mip-maps natively, so ANY
-        // resolvable level yields a usable texture (highest-res preferred).
-        dk2::MyCESurfHandle *candidates[8] = {};
-        int candidateCount = 0;
-        if (surface->surfh) {
-            candidates[candidateCount++] = surface->surfh;
-            if (surface->surfh->curReduction &&
-                surface->surfh->curReduction != surface->surfh) {
-                candidates[candidateCount++] = surface->surfh->curReduction;
-            }
-        }
-        if (surface->scaledSurfArr) {
-            for (int i = 0; i < 4 && candidateCount < 8; ++i) {
-                if (surface->scaledSurfArr->surfScaledArr[i]) {
-                    candidates[candidateCount++] = surface->scaledSurfArr->surfScaledArr[i];
-                }
-            }
-        }
-        if (!candidateCount) ++g_resolveStats.noCandidates;
+        if (!slotHandle) { ++g_resolveStats.nullSurface; return 0; }
+        // Exactly ONE candidate: the handle occupying the scene object's
+        // stage slot - its holder placement is what the UV tables describe.
+        // Binding any other page (base vs reduction) shows the wrong region.
+        dk2::MyCESurfHandle *candidates[1] = {slotHandle};
+        const int candidateCount = 1;
         for (int i = 0; i < candidateCount; ++i) {
             dk2::MyCESurfHandle *handle = candidates[i];
             // The actual GPU texture is the HOLDER page the handle was packed
@@ -383,16 +367,16 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
     }
 }
 
-uint32_t resolveBridgeTextureId(dk2::MyScaledSurface *surface) {
+uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
     static std::vector<const void *> badSurfaces;
     for (const void *bad : badSurfaces) {
-        if (bad == surface) return 0;
+        if (bad == slotHandle) return 0;
     }
     uint32_t bridgeId = 0;
     void *bridgeSurface = nullptr;
-    const uint32_t resolveMode = resolveBridgeTextureIdGuarded(surface, &bridgeId, &bridgeSurface);
+    const uint32_t resolveMode = resolveBridgeTextureIdGuarded(slotHandle, &bridgeId, &bridgeSurface);
     if (!resolveMode) {
-        if (badSurfaces.size() < 4096) badSurfaces.push_back(surface);
+        if (badSurfaces.size() < 4096) badSurfaces.push_back(slotHandle);
         return 0;
     }
     static DWORD lastStatsTick = 0;
@@ -477,9 +461,20 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     // slot our surface's handle occupies instead of assuming slot 0
     // (multi-texture objects put it elsewhere, shifting every UV).
     int stageSlot = 0;
-    if (scene && surface && surface->surfh) {
+    dk2::MyCESurfHandle *slotHandle = surface ? surface->surfh : nullptr;
+    if (scene) {
         for (int i = 0; i < 4 && i < scene->surfhCount; ++i) {
-            if (scene->surfh_x4[i] == surface->surfh) { stageSlot = i; break; }
+            if (surface && scene->surfh_x4[i] == surface->surfh) {
+                stageSlot = i;
+                slotHandle = scene->surfh_x4[i];
+                break;
+            }
+        }
+        // reduction in effect: the slot holds a different handle entirely -
+        // trust the scene slot, its placement is what the tables map into
+        if (scene->surfhCount == 1 && scene->surfh_x4[0]) {
+            slotHandle = scene->surfh_x4[0];
+            stageSlot = 0;
         }
     }
     const float uvScale = *reinterpret_cast<const float *>(0x0066FB58);
@@ -509,7 +504,7 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     }
     const uint32_t alphaTerm = *reinterpret_cast<const uint32_t *>(0x00779380);
     const uint32_t tint = (alphaTerm & 0xFF000000u) | 0x00FFFFFFu;
-    const uint32_t textureId = resolveBridgeTextureId(surface);
+    const uint32_t textureId = resolveBridgeTextureId(slotHandle);
     // ponytail: one-shot raw-value dump for the missing-mesh hunt (menu
     // columns went from black to invisible across colour fixes). Shows
     // whether vertex colours/ambient are biased and what alpha rides along.
