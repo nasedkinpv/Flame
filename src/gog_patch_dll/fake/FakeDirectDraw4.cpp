@@ -38,7 +38,7 @@ HRESULT FakeDirectDraw4::CreateSurface(LPDDSURFACEDESC2 pDesc, LPDIRECTDRAWSURFA
     if (!pDesc) gog_assert_failed("FakeDirectDraw4::CreateSurface:1053");
     if (a4) gog_assert_failed("FakeDirectDraw4::CreateSurface:1054");
     auto *surf = new FakeSurface4(pDesc);
-    if (!surf->orig()) gog_assert_failed("FakeDirectDraw4::CreateSurface:1056");
+    if (!surf->isValid()) gog_assert_failed("FakeDirectDraw4::CreateSurface:1056");
     *ppSurf = surf;
     return DD_OK;
 }

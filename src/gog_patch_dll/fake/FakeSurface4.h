@@ -23,6 +23,7 @@ namespace gog {
         explicit FakeSurface4(LPDDSURFACEDESC2 pDesc);
 
         inline LPDIRECTDRAWSURFACE4 orig() { return f8_orig_surf; }
+        inline bool isValid() const { return f8_orig_surf || f90_ownedPixels; }
 
         /*** IUnknown methods ***/
         STDMETHOD(QueryInterface) (THIS_ REFIID riid, LPVOID FAR * ppvObj) override;
