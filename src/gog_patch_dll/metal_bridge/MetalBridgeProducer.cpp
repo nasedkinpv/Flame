@@ -1357,6 +1357,7 @@ private:
         draw(DK2M_FVF_VERTEX1C, vertices, 4, indices, 6, 0);
     }
 
+public:
     // --- world-space mesh pipeline (protocol v9) ---
     bool meshRegister(uint32_t meshId, const void *vertices, uint32_t vertexCount,
                       const uint16_t *indices, uint32_t indexCount) {
@@ -1455,6 +1456,7 @@ private:
         ++commandCount_;
     }
 
+private:
     void append(const void *data, uint32_t size) {
         std::memcpy(static_cast<uint8_t *>(view_) + DK2M_SLOT_OFFSET(slotIndex_) + used_, data, size);
         used_ += size;
