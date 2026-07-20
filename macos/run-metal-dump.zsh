@@ -34,8 +34,11 @@ fail() {
 print -- "texture dump -> ${DUMP_DIR}"
 FS_ARG=()
 [[ "${DK2_FULLSCREEN:-1}" == 1 ]] && FS_ARG=(--fullscreen)
+HUD_ARG=()
+[[ "${DK2_METAL_HUD:-1}" == 1 ]] && HUD_ARG=("--runner-env=MTL_HUD_ENABLED=1")
 exec open -W -n "${APP}" --args \
   "${FS_ARG[@]}" \
+  "${HUD_ARG[@]}" \
   "--bridge-file=${BRIDGE_FILE}" \
   "--game-runner=${RUNNER}" \
   "--runner-env=DK2_LEVEL=${LEVEL}" \

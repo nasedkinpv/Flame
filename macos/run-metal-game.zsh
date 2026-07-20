@@ -33,8 +33,17 @@ fail() {
 
 FS_ARG=()
 [[ "${DK2_FULLSCREEN:-1}" == 1 ]] && FS_ARG=(--fullscreen)
+# Apple's Metal HUD (FPS/frame-time overlay). Reads its own env var at first
+# Metal API use, so this only works set BEFORE the process starts using
+# Metal - `open` does not propagate shell env to the launched app, which is
+# why this goes through --runner-env (DK2Metal calls setenv() on itself for
+# every K=V here, at the very top of main(), before NSApplication even
+# starts). Toggle: DK2_METAL_HUD=0 to disable.
+HUD_ARG=()
+[[ "${DK2_METAL_HUD:-1}" == 1 ]] && HUD_ARG=("--runner-env=MTL_HUD_ENABLED=1")
 exec open -W -n "${APP}" --args \
   "${FS_ARG[@]}" \
+  "${HUD_ARG[@]}" \
   "--bridge-file=${BRIDGE_FILE}" \
   "--game-runner=${RUNNER}" \
   "--runner-env=DK2_LEVEL=${LEVEL}" \

@@ -791,12 +791,21 @@ constexpr NSUInteger kVertexBufferSize = 2 * 1024 * 1024;
 constexpr NSUInteger kIndexBufferSize = 512 * 1024;
 constexpr NSUInteger kMaxDrawsPerFrame = 4096;
 constexpr NSUInteger kDrawBufferSize = kMaxDrawsPerFrame * sizeof(DrawUniform);
-// Metal exposes at most 128 textures through one shader argument table. DK2's
-// High-Res menus use well over 160 distinct textures in a frame, so keep two
-// immutable-per-draw banks and switch tables when a draw references the other
-// bank. Slot zero in every bank is the untextured white fallback.
+// Metal exposes at most 128 textures through one shader argument table, so
+// distinct textures needed in one frame are split across several immutable
+// banks, switching the bound table when a draw references a different one.
+// Slot zero in every bank is the untextured white fallback. Two banks (256
+// total) covered DK2's High-Res menus, but full 3D gameplay at high zoom-out
+// with many distinct per-tile reduction-level textures live measurably
+// exceeds that - diagnostics showed binding-overflow climbing into the
+// thousands per ~10s window, meaning draws whose texture didn't fit fell
+// back to a flat white/vertex-colour look (this is what made water and
+// other geometry render as a plain colour). Argument tables are cheap
+// (small GPU-visible descriptor buffers, not the textures themselves, which
+// are already resident in _textures regardless of bank count), so budget
+// generously rather than re-tune this by trial and error per scene.
 constexpr NSUInteger kTextureBindingsPerArgumentTable = 128;
-constexpr NSUInteger kTextureArgumentTablesPerFrame = 2;
+constexpr NSUInteger kTextureArgumentTablesPerFrame = 16;
 constexpr uint32_t kD3DRenderStateZEnable = 7;
 constexpr uint32_t kD3DRenderStateZWriteEnable = 14;
 constexpr uint32_t kD3DRenderStateSourceBlend = 19;
