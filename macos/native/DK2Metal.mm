@@ -2138,6 +2138,14 @@ static void *renderWorker(void *context) {
                             count, lightsCommand.ambient_r, lightsCommand.ambient_g,
                             lightsCommand.ambient_b};
                         std::memcpy(dst, &lightsHeader, sizeof(lightsHeader));
+                        static NSTimeInterval lastLightsLog = 0;
+                        const NSTimeInterval nowLights = CACurrentMediaTime();
+                        if (nowLights - lastLightsLog > 3.0) {
+                            lastLightsLog = nowLights;
+                            NSLog(@"DIAG lights received: count=%u ambient=(%.3f %.3f %.3f)",
+                                  count, lightsCommand.ambient_r, lightsCommand.ambient_g,
+                                  lightsCommand.ambient_b);
+                        }
                         const uint8_t *payload =
                             snapshot->bytes.data() + commandOffset + sizeof(lightsCommand);
                         std::memcpy(dst + 16, payload, lutBytes);
@@ -2256,6 +2264,21 @@ static void *renderWorker(void *context) {
                         const NSUInteger baseVertex = meshVertexOffset / kMeshVertexStride;
                         meshVertexOffset += vertexBytes;
                         indexOffset = alignedIndexOffset + indexBytes;
+                        static NSTimeInterval lastInlineLog = 0;
+                        const NSTimeInterval nowInline = CACurrentMediaTime();
+                        if (nowInline - lastInlineLog > 3.0) {
+                            lastInlineLog = nowInline;
+                            float v0[9];
+                            std::memcpy(v0, payload, sizeof(v0));
+                            uint32_t c0;
+                            std::memcpy(&c0, payload + 32, 4);
+                            NSLog(@"DIAG inline draw received: verts=%u idx=%u flags=%u tex=%u "
+                                  "tint=%08X amb=(%.3f %.3f %.3f) v0.pos=(%.2f %.2f %.2f) v0.col=%08X",
+                                  inlineDraw.vertex_count, inlineDraw.index_count,
+                                  inlineDraw.flags, inlineDraw.texture_id, inlineDraw.tint,
+                                  inlineDraw.ambient_r, inlineDraw.ambient_g, inlineDraw.ambient_b,
+                                  v0[0], v0[1], v0[2], c0);
+                        }
                         static const bool meshNoTexture = getenv("DK2_MESH_NO_TEXTURE") != nullptr;
                         const TextureBinding binding = (!meshNoTexture && inlineDraw.texture_id)
                             ? resolveTextureBinding(inlineDraw.texture_id)

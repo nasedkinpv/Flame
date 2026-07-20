@@ -225,14 +225,32 @@ void emitFrameLights(uint32_t *lightData) {
                                  0.0f, 0.0f, 0.0f, lut);
 }
 
+// SEH-guarded: level transitions leave stale cesurf/devTex pointers behind,
+// and this three-hop chain must degrade to "no texture", never fault.
+uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
+                                       uint32_t *bridgeIdOut, void **bridgeSurfaceOut) {
+    __try {
+        if (!surface || !surface->surfh || !surface->surfh->cesurf) return 0;
+        auto *dd = reinterpret_cast<dk2::CEngineDDSurface *>(surface->surfh->cesurf);
+        auto *fake = reinterpret_cast<gog::FakeTexture *>(dd->devTex);
+        if (!fake) return 0;
+        *bridgeIdOut = fake->bridgeId();
+        *bridgeSurfaceOut = fake->bridgeSurface();
+        return 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 uint32_t resolveBridgeTextureId(dk2::MyScaledSurface *surface) {
-    if (!surface || !surface->surfh || !surface->surfh->cesurf) return 0;
-    auto *dd = reinterpret_cast<dk2::CEngineDDSurface *>(surface->surfh->cesurf);
-    auto *fake = reinterpret_cast<gog::FakeTexture *>(dd->devTex);
-    if (!fake) return 0;
+    uint32_t bridgeId = 0;
+    void *bridgeSurface = nullptr;
+    if (!resolveBridgeTextureIdGuarded(surface, &bridgeId, &bridgeSurface) || !bridgeId)
+        return 0;
     // capture-only registration: never disturbs stage-0 binding state
-    gog::metal_bridge::ensureTexture(fake->bridgeId(), fake->bridgeSurface());
-    return fake->bridgeId();
+    gog::metal_bridge::ensureTexture(
+        bridgeId, static_cast<IDirectDrawSurface4 *>(bridgeSurface));
+    return bridgeId;
 }
 
 // SEH-guarded raw copy out of a MeshEntry: not every entry reaching
