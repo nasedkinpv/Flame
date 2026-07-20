@@ -288,6 +288,22 @@ bool drawEntryOnGpu(MeshEntry &entry, dk2::MyScaledSurface *surface,
     const uint32_t alphaTerm = *reinterpret_cast<const uint32_t *>(0x00779380);
     const uint32_t tint = (alphaTerm & 0xFF000000u) | 0x00FFFFFFu;
     const uint32_t textureId = resolveBridgeTextureId(surface);
+    // ponytail: one-shot raw-value dump for the missing-mesh hunt (menu
+    // columns went from black to invisible across colour fixes). Shows
+    // whether vertex colours/ambient are biased and what alpha rides along.
+    static bool loggedFirstEntry = false;
+    if (!loggedFirstEntry) {
+        loggedFirstEntry = true;
+        patch::log::dbg("mesh gpu probe: v0.color=(%f %f %f) ambient=(%f %f %f) "
+                        "alphaTerm=%08X texId=%u verts=%u packed0=%08X",
+                        static_cast<double>(entry.vertices[0].color.x),
+                        static_cast<double>(entry.vertices[0].color.y),
+                        static_cast<double>(entry.vertices[0].color.z),
+                        static_cast<double>(ambient.x),
+                        static_cast<double>(ambient.y),
+                        static_cast<double>(ambient.z),
+                        alphaTerm, textureId, vertexCount, vertices[0].base_color);
+    }
     emitMeshCamera();
     emitFrameLights(lightData);
     gog::metal_bridge::drawMeshInline(

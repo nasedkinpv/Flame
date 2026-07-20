@@ -1091,13 +1091,27 @@ private:
 
     bool captureTexture(IDirectDrawSurface4 *surface, TextureCache &texture) {
         if (!surface) return false;
-        DDSURFACEDESC2 desc = {};
-        desc.dwSize = sizeof(desc);
-        const HRESULT hr = surface->Lock(nullptr, &desc, DDLOCK_WAIT | DDLOCK_READONLY, nullptr);
-        if (FAILED(hr)) return false;
-        const bool valid = copyTexture(desc, texture);
-        surface->Unlock(nullptr);
-        return valid;
+        // SEH-guarded: level transitions destroy menu surfaces while the game
+        // still passes their FakeTexture to SetTexture once more - Lock on the
+        // freed surface page-faults (this was the deterministic level-load
+        // crash once the stack finally resolved cleanly). A dead surface just
+        // means "no capture", never a dead process.
+        __try {
+            DDSURFACEDESC2 desc = {};
+            desc.dwSize = sizeof(desc);
+            const HRESULT hr = surface->Lock(nullptr, &desc, DDLOCK_WAIT | DDLOCK_READONLY, nullptr);
+            if (FAILED(hr)) return false;
+            const bool valid = copyTexture(desc, texture);
+            surface->Unlock(nullptr);
+            return valid;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            static bool loggedDeadSurface = false;
+            if (!loggedDeadSurface) {
+                loggedDeadSurface = true;
+                gog_debugf("Metal bridge: capture faulted on dead surface %p", surface);
+            }
+            return false;
+        }
     }
 
     uint64_t timerTicks() const {
