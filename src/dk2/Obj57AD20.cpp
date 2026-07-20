@@ -306,12 +306,13 @@ bool drawEntryOnGpu(MeshEntry &entry, dk2::MyScaledSurface *surface,
     // ponytail: one-shot raw-value dump for the missing-mesh hunt (menu
     // columns went from black to invisible across colour fixes). Shows
     // whether vertex colours/ambient are biased and what alpha rides along.
-    static bool loggedFirstEntry = false;
-    if (!loggedFirstEntry) {
-        loggedFirstEntry = true;
+    static DWORD lastProbeTick = 0;
+    const DWORD nowTick = GetTickCount();
+    if (nowTick - lastProbeTick > 3000) {
+        lastProbeTick = nowTick;
         patch::log::dbg("mesh gpu probe: v0.color=(%f %f %f) ambient=(%f %f %f) "
                         "alphaTerm=%08X texId=%u verts=%u packed0=%08X uv0=(%f %f) "
-                        "uvTables=(%f %f %f %f)",
+                        "uvTables=(%f %f %f %f) n0=(%f %f %f)",
                         static_cast<double>(entry.vertices[0].color.x),
                         static_cast<double>(entry.vertices[0].color.y),
                         static_cast<double>(entry.vertices[0].color.z),
@@ -323,7 +324,10 @@ bool drawEntryOnGpu(MeshEntry &entry, dk2::MyScaledSurface *surface,
                         static_cast<double>(*reinterpret_cast<const float *>(0x00779368)),
                         static_cast<double>(*reinterpret_cast<const float *>(0x0076F340)),
                         static_cast<double>(*reinterpret_cast<const float *>(0x0077F480)),
-                        static_cast<double>(*reinterpret_cast<const float *>(0x0077F3D8)));
+                        static_cast<double>(*reinterpret_cast<const float *>(0x0077F3D8)),
+                        static_cast<double>(entry.vertices[0].normal.x),
+                        static_cast<double>(entry.vertices[0].normal.y),
+                        static_cast<double>(entry.vertices[0].normal.z));
     }
     emitMeshCamera();
     emitFrameLights(lightData);
