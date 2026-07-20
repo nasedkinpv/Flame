@@ -2091,7 +2091,8 @@ static void *renderWorker(void *context) {
                         // only once textures actually resolved, so this reflects
                         // a real steady-state water draw.
                         if ((uniform.colorOp == 22 || uniform.colorOp == 23 ||
-                             uniform.colorOp1 == 22 || uniform.colorOp1 == 23)) {
+                             uniform.colorOp1 == 22 || uniform.colorOp1 == 23) &&
+                            uniform.textureIndex != 0 && uniform.textureIndex1 != 0) {
                             static NSTimeInterval lastLogged = 0;
                             const NSTimeInterval now = CACurrentMediaTime();
                             if (now - lastLogged > 2.0) {

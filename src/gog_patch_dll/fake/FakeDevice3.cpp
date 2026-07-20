@@ -212,6 +212,22 @@ HRESULT FakeDevice3::EnumTextureFormats(LPD3DENUMPIXELFORMATSCALLBACK cb, LPVOID
     pixFormat.dwGBitMask = 0xFF00;
     pixFormat.dwRBitMask = 0xFF0000;
     pixFormat.dwRGBAlphaBitMask = 0xFF000000;
+    if (cb(&pixFormat, a3) != 1)
+        return 0;
+    // D3DFMT_V8U8 (DDPF_BUMPDUDV): without this, DK2's bump-format probe in
+    // MyDirectDraw_init never finds a 16bpp bump pixel format, so it never
+    // creates a bump texture at all - EnableBumpMapping's water/lava stage
+    // silently ends up with no texture bound (always the shared white
+    // fallback) instead of failing loudly. MetalBridgeProducer::copyTexture
+    // already decodes this exact layout (dwRBitMask=Du, dwGBitMask=Dv).
+    pixFormat.dwSize = sizeof(DDPIXELFORMAT);
+    pixFormat.dwFlags = 0x00080000;  // DDPF_BUMPDUDV
+    pixFormat.dwFourCC = 0;
+    pixFormat.dwRGBBitCount = 16;    // union: dwBumpBitCount
+    pixFormat.dwRBitMask = 0x00FF;   // union: dwBumpDuBitMask
+    pixFormat.dwGBitMask = 0xFF00;   // union: dwBumpDvBitMask
+    pixFormat.dwBBitMask = 0;        // union: dwBumpLuminanceBitMask (none)
+    pixFormat.dwRGBAlphaBitMask = 0;
     cb(&pixFormat, a3);
     return 0;
 }
