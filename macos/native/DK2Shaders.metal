@@ -250,10 +250,11 @@ float3 dk2_mesh_accumulate_lights(float3 positionWorld, float3 normalWorld, floa
         const float3 d = positionWorld - float3(light.position);
         const float d2 = dot(d, d);
         if (!(d2 < light.distSqLimit)) continue;
-        // Exact port of the engine's float-bit LUT index trick:
-        // encoded = 12582912.0f - (0.499989986f - 16.0f * d2)
-        const float encoded = 12582912.0f - (0.499989986f - 16.0f * d2);
-        const uint index = (as_type<uint>(encoded) & 0x007FFFFFu) - 0x00400000u;
+        // The engine's float-bit LUT index trick (add 12582912, read mantissa)
+        // is just round-to-nearest of (16*d2 - 0.49999) == floor(16*d2).
+        // Metal's fast-math FMA fusion breaks the exact bit pattern, so
+        // compute the index arithmetically instead.
+        const uint index = static_cast<uint>(16.0f * d2);
         if (index >= 256u) continue;
         const float atten = (light.distSqLimit - d2) * header.lut[index] * light.attenScale;
         const float facing = dot(normalWorld, -d) * light.facingScale;

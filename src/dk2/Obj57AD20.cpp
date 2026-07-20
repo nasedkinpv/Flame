@@ -206,6 +206,21 @@ void emitFrameLights(uint32_t *lightData) {
         light.facing_scale = s.facingScale;
         scratch.push_back(light);
     }
+    static bool loggedLights = false;
+    if (!loggedLights && !scratch.empty()) {
+        loggedLights = true;
+        patch::log::dbg("mesh gpu lights: total=%d serialized=%u first pos=(%f %f %f) "
+                        "col=(%f %f %f) limit=%f atten=%f facing=%f lut0=%f lut16=%f",
+                        total, static_cast<uint32_t>(scratch.size()),
+                        static_cast<double>(scratch[0].px), static_cast<double>(scratch[0].py),
+                        static_cast<double>(scratch[0].pz),
+                        static_cast<double>(scratch[0].r), static_cast<double>(scratch[0].g),
+                        static_cast<double>(scratch[0].b),
+                        static_cast<double>(scratch[0].dist_sq_limit),
+                        static_cast<double>(scratch[0].atten_scale),
+                        static_cast<double>(scratch[0].facing_scale),
+                        static_cast<double>(lut[0]), static_cast<double>(lut[16]));
+    }
     gog::metal_bridge::lightsSet(scratch.data(), static_cast<uint32_t>(scratch.size()),
                                  0.0f, 0.0f, 0.0f, lut);
 }
