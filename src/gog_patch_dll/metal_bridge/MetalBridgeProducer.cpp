@@ -1611,7 +1611,7 @@ public:
                         const uint16_t *indices, uint32_t indexCount, uint32_t tint,
                         uint32_t flags, float ambientR, float ambientG, float ambientB) {
         if (!vertices || !vertexCount || !indices || !indexCount) return;
-        if ((flags & 2u) == 0) {  // opaque + z-tested: order-independent, merge
+        if (true) {  // z-tested tiles never overlap each other: merge all states
             uint32_t ambientBits[3];
             std::memcpy(ambientBits, &ambientR, 4);
             std::memcpy(ambientBits + 1, &ambientG, 4);

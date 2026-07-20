@@ -539,7 +539,7 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     // needs debiasing.
     gog::metal_bridge::drawMeshInline(
         textureId, vertices, vertexCount, indices, indexCount, tint,
-        DK2M_DRAW_MESH_LIT,
+        DK2M_DRAW_MESH_LIT | DK2M_DRAW_MESH_ALPHA_BLEND,
         ambient.x / 255.0f,
         ambient.y / 255.0f,
         ambient.z / 255.0f);
