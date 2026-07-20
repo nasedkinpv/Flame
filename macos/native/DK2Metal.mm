@@ -380,6 +380,42 @@ NSString *directory() {
     return dir;
 }
 
+// CPU box-filter mip chain for an already-created mipmapped texture whose
+// level 0 was just replaced. Rect updates leave upper mips stale; static
+// page content changes rarely enough that the next full update refreshes them.
+void fillMipChain(id<MTLTexture> texture, const uint8_t *pixels,
+                  uint32_t width, uint32_t height, uint32_t rowPitch) {
+    if (texture.mipmapLevelCount <= 1) return;
+    std::vector<uint8_t> level((size_t)width * height * 4);
+    for (uint32_t y = 0; y < height; ++y) {
+        std::memcpy(level.data() + (size_t)y * width * 4,
+                    pixels + (size_t)y * rowPitch, (size_t)width * 4);
+    }
+    uint32_t w = width, h = height;
+    for (NSUInteger mip = 1; mip < texture.mipmapLevelCount; ++mip) {
+        const uint32_t nw = std::max(1u, w / 2), nh = std::max(1u, h / 2);
+        std::vector<uint8_t> next((size_t)nw * nh * 4);
+        for (uint32_t y = 0; y < nh; ++y) {
+            const uint32_t sy0 = std::min(y * 2, h - 1), sy1 = std::min(y * 2 + 1, h - 1);
+            for (uint32_t x = 0; x < nw; ++x) {
+                const uint32_t sx0 = std::min(x * 2, w - 1), sx1 = std::min(x * 2 + 1, w - 1);
+                for (int c = 0; c < 4; ++c) {
+                    const unsigned sum = level[((size_t)sy0 * w + sx0) * 4 + c]
+                                       + level[((size_t)sy0 * w + sx1) * 4 + c]
+                                       + level[((size_t)sy1 * w + sx0) * 4 + c]
+                                       + level[((size_t)sy1 * w + sx1) * 4 + c];
+                    next[((size_t)y * nw + x) * 4 + c] = (uint8_t)((sum + 2) / 4);
+                }
+            }
+        }
+        [texture replaceRegion:MTLRegionMake2D(0, 0, nw, nh)
+                   mipmapLevel:mip withBytes:next.data() bytesPerRow:(NSUInteger)nw * 4];
+        level = std::move(next);
+        w = nw;
+        h = nh;
+    }
+}
+
 id<MTLTexture> createMipmapped(id<MTLDevice> device, const uint8_t *bgra,
                                uint32_t width, uint32_t height, uint64_t hash) {
     MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
@@ -1837,11 +1873,14 @@ static void *renderWorker(void *context) {
                         id<MTLTexture> texture = _textures[key];
                         if (!texture || texture.width != textureUpdate.width ||
                             texture.height != textureUpdate.height) {
+                            // Static textures carry a full mip chain: the
+                            // engine's reduction levels are ignored by the GPU
+                            // mesh path, native mip-mapping replaces them.
                             MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
                                 texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                             width:textureUpdate.width
                                                            height:textureUpdate.height
-                                                        mipmapped:NO];
+                                                        mipmapped:YES];
                             descriptor.storageMode = MTLStorageModeShared;
                             descriptor.usage = MTLTextureUsageShaderRead;
                             texture = [_device newTextureWithDescriptor:descriptor];
@@ -1855,6 +1894,8 @@ static void *renderWorker(void *context) {
                         if (texture) {
                             [texture replaceRegion:MTLRegionMake2D(0, 0, textureUpdate.width, textureUpdate.height)
                                        mipmapLevel:0 withBytes:pixels bytesPerRow:textureUpdate.row_pitch];
+                            texhd::fillMipChain(texture, pixels, textureUpdate.width,
+                                         textureUpdate.height, textureUpdate.row_pitch);
                             texdump::dump(pixels, textureUpdate.width, textureUpdate.height,
                                           textureUpdate.row_pitch, textureUpdate.texture_id);
                         }

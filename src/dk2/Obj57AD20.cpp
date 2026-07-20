@@ -2,6 +2,7 @@
 
 #include "dk2/CEngineDDSurface.h"
 #include "dk2/MyCESurfHandle.h"
+#include "dk2/MyCESurfScale.h"
 #include "dk2/MyScaledSurface.h"
 #include "dk2/Obj57BCB0.h"
 #include "dk2/Obj58EF60.h"
@@ -256,13 +257,38 @@ void emitFrameLights(uint32_t *lightData) {
 uint32_t resolveBridgeTextureIdGuarded(dk2::MyScaledSurface *surface,
                                        uint32_t *bridgeIdOut, void **bridgeSurfaceOut) {
     __try {
-        if (!surface || !surface->surfh || !surface->surfh->cesurf) return 0;
-        auto *dd = reinterpret_cast<dk2::CEngineDDSurface *>(surface->surfh->cesurf);
-        auto *fake = reinterpret_cast<gog::FakeTexture *>(dd->devTex);
-        if (!fake) return 0;
-        *bridgeIdOut = fake->bridgeId();
-        *bridgeSurfaceOut = fake->bridgeSurface();
-        return 1;
+        if (!surface) return 0;
+        // Candidate handles in preference order: the base handle, its current
+        // reduction, then the scaled set. Reduction levels are the engine's
+        // software mip-mapping; the GPU side mip-maps natively, so ANY
+        // resolvable level yields a usable texture (highest-res preferred).
+        dk2::MyCESurfHandle *candidates[8] = {};
+        int candidateCount = 0;
+        if (surface->surfh) {
+            candidates[candidateCount++] = surface->surfh;
+            if (surface->surfh->curReduction &&
+                surface->surfh->curReduction != surface->surfh) {
+                candidates[candidateCount++] = surface->surfh->curReduction;
+            }
+        }
+        if (surface->scaledSurfArr) {
+            for (int i = 0; i < 4 && candidateCount < 8; ++i) {
+                if (surface->scaledSurfArr->surfScaledArr[i]) {
+                    candidates[candidateCount++] = surface->scaledSurfArr->surfScaledArr[i];
+                }
+            }
+        }
+        for (int i = 0; i < candidateCount; ++i) {
+            dk2::MyCESurfHandle *handle = candidates[i];
+            if (!handle->cesurf) continue;
+            auto *dd = reinterpret_cast<dk2::CEngineDDSurface *>(handle->cesurf);
+            auto *fake = reinterpret_cast<gog::FakeTexture *>(dd->devTex);
+            if (!fake) continue;
+            *bridgeIdOut = fake->bridgeId();
+            *bridgeSurfaceOut = fake->bridgeSurface();
+            return 1;
+        }
+        return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
