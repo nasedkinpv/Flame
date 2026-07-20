@@ -64,9 +64,20 @@ FakeSurface4::FakeSurface4(LPDDSURFACEDESC2 pDesc) {
         // The Metal bridge consumes bump pixels directly; WineD3D never uses
         // this surface. Keeping the pixels in a plain CPU buffer avoids making
         // Wine manage a legacy bump/RGB surrogate and its COM lifetime.
+        //
+        // Pitch/size deliberately mimic a real driver surface rather than a
+        // tight CPU array. A dword-tight pitch with zero slack after the last
+        // row put the next heap block header directly behind e.g. a 2x2 bump
+        // surface's 8-byte buffer; DK2's 1999-era fill code (written against
+        // drivers whose surfaces always carried padded pitches and trailing
+        // slack) then smashed that header, and the process died later inside
+        // RtlFreeHeap walking the corrupted block (page fault at ntdll
+        // +0x4F3F2 reading a garbage-derived subheap base). Generous pitch
+        // alignment plus one full spare row of slack absorbs those writes the
+        // same way real surface memory always did.
         const unsigned long long pitch =
-            (static_cast<unsigned long long>(this->f14_desc.dwWidth) * 2u + 3u) & ~3ull;
-        const unsigned long long size = pitch * this->f14_desc.dwHeight;
+            (static_cast<unsigned long long>(this->f14_desc.dwWidth) * 2u + 15u) & ~15ull;
+        const unsigned long long size = pitch * (this->f14_desc.dwHeight + 1ull) + 64u;
         if (!pitch || size > 0xFFFFFFFFull) {
             gog_assert_failed("FakeSurface4::FakeSurface4:224");
             return;
