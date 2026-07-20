@@ -77,7 +77,19 @@ FakeSurface4::FakeSurface4(LPDDSURFACEDESC2 pDesc) {
         // same way real surface memory always did.
         const unsigned long long pitch =
             (static_cast<unsigned long long>(this->f14_desc.dwWidth) * 2u + 15u) & ~15ull;
-        const unsigned long long size = pitch * (this->f14_desc.dwHeight + 1ull) + 64u;
+        // Size as if this were a 4-byte/pixel page, not our real 2-byte one.
+        // DK2 fills 128x128 cache pages with family-shared code whose pitch
+        // comes from the 32bpp page family (512), so a 16bpp bump page gets
+        // written with double our pitch - 64KB into what a tight allocation
+        // would make a 33KB buffer. On 1999 hardware that overflow landed in
+        // adjacent video memory and was harmless; on the Wine heap it smashed
+        // block headers and killed the process ~500 allocations later (page
+        // fault at ntdll+0x4F3F2 on a corrupt free-list walk). Rows are still
+        // read back at the correct 2-byte pitch; the extra space just absorbs
+        // the overshoot exactly like real surface memory did.
+        const unsigned long long pitch4 =
+            (static_cast<unsigned long long>(this->f14_desc.dwWidth) * 4u + 15u) & ~15ull;
+        const unsigned long long size = pitch4 * (this->f14_desc.dwHeight + 1ull) + 64u;
         if (!pitch || size > 0xFFFFFFFFull) {
             gog_assert_failed("FakeSurface4::FakeSurface4:224");
             return;
