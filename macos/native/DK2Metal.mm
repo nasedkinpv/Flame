@@ -844,12 +844,13 @@ struct MeshDrawUniform {
     float world0[4];
     float world1[4];
     float world2[4];
+    float ambient[4];
     uint32_t textureIndex;
     uint32_t tint;
     uint32_t flags;
     uint32_t pad;
 };
-static_assert(sizeof(MeshDrawUniform) == 64);
+static_assert(sizeof(MeshDrawUniform) == 80);
 constexpr NSUInteger kMeshVertexStride = 36;  // sizeof(DK2MMeshVertex)
 constexpr NSUInteger kMeshVertexBufferSize = 4 * 1024 * 1024;
 constexpr NSUInteger kMaxMeshDrawsPerFrame = 8192;
@@ -2186,6 +2187,10 @@ static void *renderWorker(void *context) {
                             std::memcpy(uniform.world0, meshDraw.world + 0, 16);
                             std::memcpy(uniform.world1, meshDraw.world + 4, 16);
                             std::memcpy(uniform.world2, meshDraw.world + 8, 16);
+                            uniform.ambient[0] = meshDraw.ambient_r;
+                            uniform.ambient[1] = meshDraw.ambient_g;
+                            uniform.ambient[2] = meshDraw.ambient_b;
+                            uniform.ambient[3] = 0.0f;
                             uniform.textureIndex = binding.slot;
                             uniform.tint = meshDraw.tint;
                             uniform.flags = meshDraw.flags;
@@ -2221,6 +2226,84 @@ static void *renderWorker(void *context) {
                             metrics.vertices += blob.vertexCount;
                             metrics.indices += blob.indexCount;
                         }
+                    }
+                } else if (view.type == DK2M_COMMAND_DRAW_MESH_INLINE &&
+                           view.size >= sizeof(DK2MDrawMeshInlineCommand)) {
+                    DK2MDrawMeshInlineCommand inlineDraw;
+                    std::memcpy(&inlineDraw, snapshot->bytes.data() + commandOffset,
+                                sizeof(inlineDraw));
+                    const size_t vertexBytes =
+                        static_cast<size_t>(inlineDraw.vertex_count) * kMeshVertexStride;
+                    const size_t indexBytes =
+                        (static_cast<size_t>(inlineDraw.index_count) * 2 + 3) & ~static_cast<size_t>(3);
+                    const NSUInteger alignedIndexOffset = (indexOffset + 3u) & ~static_cast<NSUInteger>(3u);
+                    if (!inlineDraw.vertex_count || !inlineDraw.index_count ||
+                        sizeof(inlineDraw) + vertexBytes + indexBytes > view.size ||
+                        meshVertexOffset + vertexBytes > kMeshVertexBufferSize ||
+                        alignedIndexOffset + indexBytes > kIndexBufferSize ||
+                        meshDrawCount >= kMaxMeshDrawsPerFrame ||
+                        !snapshot->width || !snapshot->height) {
+                        ++metrics.invalidDraws;
+                    } else {
+                        const uint8_t *payload =
+                            snapshot->bytes.data() + commandOffset + sizeof(inlineDraw);
+                        std::memcpy(static_cast<uint8_t *>(_meshVertexBuffers[slot].contents) +
+                                        meshVertexOffset,
+                                    payload, vertexBytes);
+                        std::memcpy(static_cast<uint8_t *>(_indexBuffers[slot].contents) +
+                                        alignedIndexOffset,
+                                    payload + vertexBytes, indexBytes);
+                        const NSUInteger baseVertex = meshVertexOffset / kMeshVertexStride;
+                        meshVertexOffset += vertexBytes;
+                        indexOffset = alignedIndexOffset + indexBytes;
+                        const TextureBinding binding = inlineDraw.texture_id
+                            ? resolveTextureBinding(inlineDraw.texture_id)
+                            : TextureBinding{static_cast<uint16_t>(boundArgumentTableBank), 0};
+                        auto *uniforms =
+                            static_cast<MeshDrawUniform *>(_meshDrawBuffers[slot].contents);
+                        MeshDrawUniform &uniform = uniforms[meshDrawCount];
+                        static const float kIdentityRows[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+                        std::memcpy(uniform.world0, kIdentityRows + 0, 16);
+                        std::memcpy(uniform.world1, kIdentityRows + 4, 16);
+                        std::memcpy(uniform.world2, kIdentityRows + 8, 16);
+                        uniform.ambient[0] = inlineDraw.ambient_r;
+                        uniform.ambient[1] = inlineDraw.ambient_g;
+                        uniform.ambient[2] = inlineDraw.ambient_b;
+                        uniform.ambient[3] = 0.0f;
+                        uniform.textureIndex = binding.slot;
+                        uniform.tint = inlineDraw.tint;
+                        uniform.flags = inlineDraw.flags;
+                        uniform.pad = 0;
+                        id<MTLRenderPipelineState> pipeline = _meshOpaquePipeline;
+                        if (alphaBlendEnabled || (inlineDraw.flags & 2u)) {
+                            pipeline = sourceBlend == 2 && destinationBlend == 2
+                                           ? _meshAdditivePipeline : _meshAlphaPipeline;
+                        }
+                        [encoder setRenderPipelineState:pipeline];
+                        const uint32_t effectiveZFunction = zEnabled ? zFunction : 8;
+                        const uint32_t effectiveZWrite = zEnabled && zWriteEnabled ? 1 : 0;
+                        [encoder setDepthStencilState:_depthStates[effectiveZFunction][effectiveZWrite]];
+                        [encoder setCullMode:cullMode == 1 ? MTLCullModeNone : MTLCullModeBack];
+                        [encoder setFrontFacingWinding:cullMode == 3 ? MTLWindingClockwise
+                                                                    : MTLWindingCounterClockwise];
+                        if (boundArgumentTableBank != binding.bank) {
+                            boundArgumentTableBank = binding.bank;
+                            [encoder setArgumentTable:_argumentTables[slot][boundArgumentTableBank]
+                                             atStages:MTLRenderStageVertex | MTLRenderStageFragment];
+                        }
+                        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                            indexCount:inlineDraw.index_count
+                                             indexType:MTLIndexTypeUInt16
+                                           indexBuffer:_indexBuffers[slot].gpuAddress +
+                                                       alignedIndexOffset
+                                     indexBufferLength:inlineDraw.index_count * 2
+                                         instanceCount:1
+                                            baseVertex:baseVertex
+                                          baseInstance:meshDrawCount];
+                        ++meshDrawCount;
+                        ++metrics.drawCalls;
+                        metrics.vertices += inlineDraw.vertex_count;
+                        metrics.indices += inlineDraw.index_count;
                     }
                 } else if (view.type == DK2M_COMMAND_DRAW_INDEXED &&
                            view.size >= sizeof(DK2MDrawIndexedCommand)) {

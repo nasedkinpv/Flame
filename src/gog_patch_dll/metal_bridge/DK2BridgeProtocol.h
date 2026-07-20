@@ -34,6 +34,10 @@ enum DK2MCommandType {
     DK2M_COMMAND_CAMERA_SET = 9,
     DK2M_COMMAND_LIGHTS_SET = 10,
     DK2M_COMMAND_DRAW_MESH = 11,
+    // Inline variant for deformed/animated geometry: world-space vertices
+    // travel with the command every frame (no registry), the GPU still does
+    // projection + lighting. World transform is implicitly identity.
+    DK2M_COMMAND_DRAW_MESH_INLINE = 12,
 };
 
 enum DK2MDrawMeshFlags {
@@ -240,8 +244,22 @@ typedef struct DK2MDrawMeshCommand {
     uint32_t texture_id;
     uint32_t flags;   // DK2MDrawMeshFlags
     uint32_t tint;    // ARGB modulated over the lit colour
+    float ambient_r, ambient_g, ambient_b;  // additive per-draw ambient
     float world[12];
 } DK2MDrawMeshCommand;
+
+// Inline world-space draw; payload = vertex_count DK2MMeshVertex followed by
+// index_count uint16 indices (padded to 4 bytes). Used for deformed geometry
+// whose world-space positions change every frame.
+typedef struct DK2MDrawMeshInlineCommand {
+    DK2MCommandHeader header;
+    uint32_t texture_id;
+    uint32_t flags;   // DK2MDrawMeshFlags
+    uint32_t tint;
+    uint32_t vertex_count;
+    uint32_t index_count;
+    float ambient_r, ambient_g, ambient_b;
+} DK2MDrawMeshInlineCommand;
 #pragma pack(pop)
 
 #define DK2M_FILE_SIZE ((uint32_t)(sizeof(DK2MFileHeader) + DK2M_SLOT_COUNT * DK2M_SLOT_CAPACITY))

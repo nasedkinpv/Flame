@@ -1411,8 +1411,41 @@ public:
         ++commandCount_;
     }
 
+    void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCount,
+                        const uint16_t *indices, uint32_t indexCount, uint32_t tint,
+                        uint32_t flags, float ambientR, float ambientG, float ambientB) {
+        if (!active_ || !vertices || !vertexCount || !indices || !indexCount) return;
+        const uint32_t vertexBytes = vertexCount * static_cast<uint32_t>(sizeof(DK2MMeshVertex));
+        const uint32_t indexBytes = (indexCount * 2u + 3u) & ~3u;
+        const uint32_t size = static_cast<uint32_t>(sizeof(DK2MDrawMeshInlineCommand)) +
+                              vertexBytes + indexBytes;
+        if (used_ + size > DK2M_SLOT_CAPACITY) return;
+        if (textureId) emitTexture(0, textureId);
+        if (used_ + size > DK2M_SLOT_CAPACITY) return;
+        DK2MDrawMeshInlineCommand command = {};
+        command.header.type = DK2M_COMMAND_DRAW_MESH_INLINE;
+        command.header.size = size;
+        command.texture_id = textureId;
+        command.flags = flags;
+        command.tint = tint;
+        command.vertex_count = vertexCount;
+        command.index_count = indexCount;
+        command.ambient_r = ambientR;
+        command.ambient_g = ambientG;
+        command.ambient_b = ambientB;
+        append(&command, sizeof(command));
+        append(vertices, vertexBytes);
+        append(indices, indexCount * 2u);
+        if (indexBytes != indexCount * 2u) {
+            const uint16_t zero = 0;
+            append(&zero, indexBytes - indexCount * 2u);
+        }
+        ++commandCount_;
+    }
+
     void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12],
-                  uint32_t tint, uint32_t flags) {
+                  uint32_t tint, uint32_t flags,
+                  float ambientR, float ambientG, float ambientB) {
         if (!active_) return;
         auto found = meshes_.find(meshId);
         if (found == meshes_.end() || found->second.blob.empty()) return;
@@ -1451,6 +1484,9 @@ public:
         command.texture_id = textureId;
         command.flags = flags;
         command.tint = tint;
+        command.ambient_r = ambientR;
+        command.ambient_g = ambientG;
+        command.ambient_b = ambientB;
         std::memcpy(command.world, world, sizeof(command.world));
         append(&command, sizeof(command));
         ++commandCount_;
@@ -1634,8 +1670,15 @@ void lightsSet(const void *lights, uint32_t lightCount, float ambientR, float am
 }
 
 void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12], uint32_t tint,
-              uint32_t flags) {
-    producer.drawMesh(meshId, textureId, world, tint, flags);
+              uint32_t flags, float ambientR, float ambientG, float ambientB) {
+    producer.drawMesh(meshId, textureId, world, tint, flags, ambientR, ambientG, ambientB);
+}
+
+void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCount,
+                    const uint16_t *indices, uint32_t indexCount, uint32_t tint,
+                    uint32_t flags, float ambientR, float ambientG, float ambientB) {
+    producer.drawMeshInline(textureId, vertices, vertexCount, indices, indexCount,
+                            tint, flags, ambientR, ambientG, ambientB);
 }
 
 void setGameTickTiming(uint32_t tickMicroseconds) {

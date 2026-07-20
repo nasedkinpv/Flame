@@ -213,6 +213,7 @@ struct DK2MeshDrawUniform {
     float4 world0;   // rows of the 3x4 world transform
     float4 world1;
     float4 world2;
+    float4 ambient;  // additive per-draw ambient (rgb), w unused
     uint textureIndex;
     uint tint;
     uint flags;      // DK2M_DRAW_MESH_LIT etc.
@@ -279,9 +280,10 @@ vertex DK2RasterVertex dk2_vertex_mesh(device const DK2MeshVertexIn *vertices [[
                                       dot(draw.world2.xyz, n));
     const float4 base = dk2_unpack_color(inputVertex.baseColor);
     const float4 tint = dk2_unpack_color(draw.tint);
-    float3 lit = base.rgb;
+    float3 lit = base.rgb + draw.ambient.rgb;
     if ((draw.flags & 1u) != 0u) {  // DK2M_DRAW_MESH_LIT
-        lit = dk2_mesh_accumulate_lights(positionWorld, normalWorld, base.rgb,
+        lit = dk2_mesh_accumulate_lights(positionWorld, normalWorld,
+                                         base.rgb + draw.ambient.rgb,
                                          lightsHeader, lights);
     }
     DK2RasterVertex result;
