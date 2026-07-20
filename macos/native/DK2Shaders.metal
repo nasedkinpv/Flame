@@ -31,12 +31,25 @@ struct DK2DrawUniform {
     uint alphaArg1;
     uint alphaArg2;
     uint textureFactor;
+    // Stage 1 (e.g. water/lava env or lightmap combine). colorOp/alphaOp
+    // default to D3DTOP_DISABLE (1) whenever the game never sets stage-1
+    // state, which dk2_color_op/dk2_alpha_op already treat as "pass `current`
+    // through unchanged" - so untouched draws are bit-for-bit identical to
+    // the single-stage path.
+    uint textureIndex1;
+    uint colorOp1;
+    uint colorArg1_1;
+    uint colorArg2_1;
+    uint alphaOp1;
+    uint alphaArg1_1;
+    uint alphaArg2_1;
 };
 
 struct DK2RasterVertex {
     float4 position [[position]];
     float4 color;
     float2 texCoord;
+    float2 texCoord1;
     uint textureIndex [[flat]];
     uint colorOp [[flat]];
     uint colorArg1 [[flat]];
@@ -45,10 +58,18 @@ struct DK2RasterVertex {
     uint alphaArg1 [[flat]];
     uint alphaArg2 [[flat]];
     uint textureFactor [[flat]];
+    uint textureIndex1 [[flat]];
+    uint colorOp1 [[flat]];
+    uint colorArg1_1 [[flat]];
+    uint colorArg2_1 [[flat]];
+    uint alphaOp1 [[flat]];
+    uint alphaArg1_1 [[flat]];
+    uint alphaArg2_1 [[flat]];
 };
 
 DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffuse,
-                                float2 texCoord, thread const DK2DrawUniform &draw) {
+                                float2 texCoord, float2 texCoord1,
+                                thread const DK2DrawUniform &draw) {
     const float reciprocalW = abs(rhw) > 0.000001f ? rhw : 1.0f;
     const float clipW = 1.0f / reciprocalW;
     DK2RasterVertex result;
@@ -60,6 +81,7 @@ DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffu
                           float(diffuse & 0xFF),
                           float((diffuse >> 24) & 0xFF)) / 255.0f;
     result.texCoord = texCoord;
+    result.texCoord1 = texCoord1;
     result.textureIndex = draw.textureIndex;
     result.colorOp = draw.colorOp;
     result.colorArg1 = draw.colorArg1;
@@ -68,6 +90,13 @@ DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffu
     result.alphaArg1 = draw.alphaArg1;
     result.alphaArg2 = draw.alphaArg2;
     result.textureFactor = draw.textureFactor;
+    result.textureIndex1 = draw.textureIndex1;
+    result.colorOp1 = draw.colorOp1;
+    result.colorArg1_1 = draw.colorArg1_1;
+    result.colorArg2_1 = draw.colorArg2_1;
+    result.alphaOp1 = draw.alphaOp1;
+    result.alphaArg1_1 = draw.alphaArg1_1;
+    result.alphaArg2_1 = draw.alphaArg2_1;
     return result;
 }
 
@@ -77,8 +106,9 @@ vertex DK2RasterVertex dk2_vertex_1c(device const DK2Vertex1C *vertices [[buffer
                                      uint drawID [[instance_id]]) {
     const DK2Vertex1C inputVertex = vertices[vertexID];
     const DK2DrawUniform draw = draws[drawID];
+    const float2 uv = float2(inputVertex.u, inputVertex.v);
     return dk2_make_vertex(inputVertex.x, inputVertex.y, inputVertex.z, inputVertex.rhw,
-                           inputVertex.diffuse, float2(inputVertex.u, inputVertex.v), draw);
+                           inputVertex.diffuse, uv, uv, draw);
 }
 
 vertex DK2RasterVertex dk2_vertex_2c(device const DK2Vertex2C *vertices [[buffer(0)]],
@@ -89,7 +119,9 @@ vertex DK2RasterVertex dk2_vertex_2c(device const DK2Vertex2C *vertices [[buffer
     const DK2DrawUniform draw = draws[drawID];
     return dk2_make_vertex(inputVertex.x, inputVertex.y, inputVertex.z, inputVertex.rhw,
                            inputVertex.diffuse,
-                           float2(inputVertex.texCoord[0][0], inputVertex.texCoord[0][1]), draw);
+                           float2(inputVertex.texCoord[0][0], inputVertex.texCoord[0][1]),
+                           float2(inputVertex.texCoord[1][0], inputVertex.texCoord[1][1]),
+                           draw);
 }
 
 float4 dk2_unpack_color(uint value) {
@@ -168,14 +200,31 @@ fragment float4 dk2_fragment(DK2RasterVertex input [[stage_in]],
                              sampler textureSampler [[sampler(0)]]) {
     const float4 textureColor = textures[input.textureIndex].sample(textureSampler, input.texCoord);
     const float4 factor = dk2_unpack_color(input.textureFactor);
-    const float4 current = input.color;
-    const float4 colorArg1 = dk2_texture_arg(input.colorArg1, textureColor, current, input.color, factor);
-    const float4 colorArg2 = dk2_texture_arg(input.colorArg2, textureColor, current, input.color, factor);
-    const float4 alphaArg1 = dk2_texture_arg(input.alphaArg1, textureColor, current, input.color, factor);
-    const float4 alphaArg2 = dk2_texture_arg(input.alphaArg2, textureColor, current, input.color, factor);
+    float4 current = input.color;
+    {
+        const float4 colorArg1 = dk2_texture_arg(input.colorArg1, textureColor, current, input.color, factor);
+        const float4 colorArg2 = dk2_texture_arg(input.colorArg2, textureColor, current, input.color, factor);
+        const float4 alphaArg1 = dk2_texture_arg(input.alphaArg1, textureColor, current, input.color, factor);
+        const float4 alphaArg2 = dk2_texture_arg(input.alphaArg2, textureColor, current, input.color, factor);
+        current = float4(
+            dk2_color_op(input.colorOp, colorArg1, colorArg2,
+                         input.color, textureColor, factor, current),
+            dk2_alpha_op(input.alphaOp, alphaArg1, alphaArg2,
+                         input.color, textureColor, factor, current));
+    }
+    // Stage 1: colorOp1/alphaOp1 default to D3DTOP_DISABLE (1), which just
+    // returns `current` unchanged below, so a draw that never sets stage-1
+    // state (the overwhelming majority) costs one extra texture sample
+    // through a texture the game never bound (index 0 = the shared white
+    // texture) and is otherwise a no-op.
+    const float4 textureColor1 = textures[input.textureIndex1].sample(textureSampler, input.texCoord1);
+    const float4 colorArg1_1 = dk2_texture_arg(input.colorArg1_1, textureColor1, current, input.color, factor);
+    const float4 colorArg2_1 = dk2_texture_arg(input.colorArg2_1, textureColor1, current, input.color, factor);
+    const float4 alphaArg1_1 = dk2_texture_arg(input.alphaArg1_1, textureColor1, current, input.color, factor);
+    const float4 alphaArg2_1 = dk2_texture_arg(input.alphaArg2_1, textureColor1, current, input.color, factor);
     return float4(
-        dk2_color_op(input.colorOp, colorArg1, colorArg2,
-                     input.color, textureColor, factor, current),
-        dk2_alpha_op(input.alphaOp, alphaArg1, alphaArg2,
-                     input.color, textureColor, factor, current));
+        dk2_color_op(input.colorOp1, colorArg1_1, colorArg2_1,
+                     input.color, textureColor1, factor, current),
+        dk2_alpha_op(input.alphaOp1, alphaArg1_1, alphaArg2_1,
+                     input.color, textureColor1, factor, current));
 }

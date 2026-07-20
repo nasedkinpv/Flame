@@ -777,6 +777,13 @@ struct DrawUniform {
     uint32_t alphaArg1;
     uint32_t alphaArg2;
     uint32_t textureFactor;
+    uint32_t textureIndex1;
+    uint32_t colorOp1;
+    uint32_t colorArg1_1;
+    uint32_t colorArg2_1;
+    uint32_t alphaOp1;
+    uint32_t alphaArg1_1;
+    uint32_t alphaArg2_1;
 };
 
 constexpr NSUInteger kVertexBufferSize = 2 * 1024 * 1024;
@@ -797,7 +804,7 @@ constexpr uint32_t kD3DRenderStateCullMode = 22;
 constexpr uint32_t kD3DRenderStateZFunc = 23;
 constexpr uint32_t kD3DRenderStateAlphaBlendEnable = 27;
 constexpr uint32_t kD3DRenderStateTextureFactor = 60;
-static_assert(sizeof(DrawUniform) == 40);
+static_assert(sizeof(DrawUniform) == 68);
 
 MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
     switch (d3dFunction) {
@@ -1784,6 +1791,7 @@ static void *renderWorker(void *context) {
             NSUInteger drawUniformCount = 0;
             auto *drawUniforms = static_cast<DrawUniform *>(_drawBuffers[slot].contents);
             TextureBinding currentTextureBinding = {0, 0};
+            TextureBinding currentTextureBinding1 = {0, 0};
             TextureBinding nextTextureBinding = {0, 1};
             uint32_t boundArgumentTableBank = 0;
             uint32_t zFunction = 4;
@@ -1795,7 +1803,43 @@ static void *renderWorker(void *context) {
             uint32_t cullMode = 1;
             uint32_t textureFactor = 0xFFFFFFFFu;
             uint32_t textureStage0[7] = {0, 4, 2, 0, 4, 2, 0};
+            // colorOp/alphaOp default to D3DTOP_DISABLE (1): a draw that never
+            // sets stage-1 state renders exactly as before (single texture).
+            uint32_t textureStage1[7] = {0, 1, 2, 1, 1, 2, 1};
             _frameTextureBindings.clear();
+            // Shared by both stages: a texture bound at stage 1 in one draw
+            // and stage 0 in another still gets exactly one slot. Returns
+            // {0, 0} (the shared white fallback) on a missing/overflowed
+            // texture, exactly like the pre-existing stage-0 path.
+            auto resolveTextureBinding = [&](uint32_t textureId) -> TextureBinding {
+                const auto found = std::find_if(
+                    _frameTextureBindings.begin(), _frameTextureBindings.end(),
+                    [&](const TextureBindingEntry &entry) {
+                        return entry.textureId == textureId;
+                    });
+                if (found != _frameTextureBindings.end()) return found->binding;
+                if (nextTextureBinding.bank >= kTextureArgumentTablesPerFrame) {
+                    // A missing binding must never inherit the previous draw's
+                    // texture. White preserves vertex colour and makes
+                    // capacity failures deterministic.
+                    ++metrics.bindingOverflows;
+                    return {0, 0};
+                }
+                const auto textureFound = _textures.find(textureId);
+                id<MTLTexture> texture = textureFound == _textures.end() ? nil : textureFound->second;
+                if (!texture) {
+                    ++metrics.missingTextures;
+                    return {0, 0};
+                }
+                const TextureBinding binding = nextTextureBinding;
+                _frameTextureBindings.push_back({textureId, binding});
+                [_argumentTables[slot][binding.bank] setTexture:texture.gpuResourceID atIndex:binding.slot];
+                if (++nextTextureBinding.slot == kTextureBindingsPerArgumentTable) {
+                    ++nextTextureBinding.bank;
+                    nextTextureBinding.slot = 1;
+                }
+                return binding;
+            };
             for (NSUInteger bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) {
                 [_argumentTables[slot][bank]
                     setAddress:_vertexBuffers[slot].gpuAddress atIndex:0];
@@ -1814,44 +1858,12 @@ static void *renderWorker(void *context) {
                     view.size == sizeof(DK2MSetTextureCommand)) {
                     DK2MSetTextureCommand binding;
                     std::memcpy(&binding, snapshot->bytes.data() + commandOffset, sizeof(binding));
-                    if (binding.stage == 0 && binding.texture_id) {
-                        const auto found = std::find_if(
-                            _frameTextureBindings.begin(), _frameTextureBindings.end(),
-                            [&](const TextureBindingEntry &entry) {
-                                return entry.textureId == binding.texture_id;
-                            });
-                        if (found != _frameTextureBindings.end()) {
-                            currentTextureBinding = found->binding;
-                        } else if (nextTextureBinding.bank <
-                                   kTextureArgumentTablesPerFrame) {
-                            const auto textureFound = _textures.find(binding.texture_id);
-                            id<MTLTexture> texture = textureFound == _textures.end()
-                                                       ? nil : textureFound->second;
-                            if (texture) {
-                                currentTextureBinding = nextTextureBinding;
-                                _frameTextureBindings.push_back(
-                                    {binding.texture_id, currentTextureBinding});
-                                [_argumentTables[slot][currentTextureBinding.bank]
-                                    setTexture:texture.gpuResourceID
-                                       atIndex:currentTextureBinding.slot];
-                                if (++nextTextureBinding.slot ==
-                                    kTextureBindingsPerArgumentTable) {
-                                    ++nextTextureBinding.bank;
-                                    nextTextureBinding.slot = 1;
-                                }
-                            } else {
-                                currentTextureBinding = {0, 0};
-                                ++metrics.missingTextures;
-                            }
-                        } else {
-                            // A missing binding must never inherit the previous
-                            // draw's texture. White preserves vertex colour and
-                            // makes capacity failures deterministic.
-                            currentTextureBinding = {0, 0};
-                            ++metrics.bindingOverflows;
-                        }
-                    } else if (binding.stage == 0) {
-                        currentTextureBinding = {0, 0};
+                    if (binding.stage == 0) {
+                        currentTextureBinding = binding.texture_id
+                            ? resolveTextureBinding(binding.texture_id) : TextureBinding{0, 0};
+                    } else if (binding.stage == 1) {
+                        currentTextureBinding1 = binding.texture_id
+                            ? resolveTextureBinding(binding.texture_id) : TextureBinding{0, 0};
                     }
                 } else if (view.type == DK2M_COMMAND_RENDER_STATE &&
                            view.size == sizeof(DK2MRenderStateCommand)) {
@@ -1874,8 +1886,10 @@ static void *renderWorker(void *context) {
                            view.size == sizeof(DK2MTextureStageStateCommand)) {
                     DK2MTextureStageStateCommand state;
                     std::memcpy(&state, snapshot->bytes.data() + commandOffset, sizeof(state));
-                    if (state.stage == 0 && state.state >= 1 && state.state <= 6)
-                        textureStage0[state.state] = state.value;
+                    if (state.state >= 1 && state.state <= 6) {
+                        if (state.stage == 0) textureStage0[state.state] = state.value;
+                        else if (state.stage == 1) textureStage1[state.state] = state.value;
+                    }
                 } else if (view.type == DK2M_COMMAND_DRAW_INDEXED &&
                            view.size >= sizeof(DK2MDrawIndexedCommand)) {
                     DK2MDrawIndexedCommand draw;
@@ -1919,6 +1933,31 @@ static void *renderWorker(void *context) {
                         uniform.alphaArg1 = textureStage0[5];
                         uniform.alphaArg2 = textureStage0[6];
                         uniform.textureFactor = textureFactor;
+                        // Stage 1 shares argument-table banks with stage 0, but
+                        // only one bank is bound to the encoder per draw. If
+                        // this draw's two textures landed in different banks
+                        // (possible once a busy frame has filled bank 0 with
+                        // 127+ distinct textures), disable stage 1 for just
+                        // this draw rather than sample the wrong bank's slot -
+                        // identical to today's single-texture look, never worse.
+                        if (currentTextureBinding1.bank == currentTextureBinding.bank) {
+                            uniform.textureIndex1 = currentTextureBinding1.slot;
+                            uniform.colorOp1 = textureStage1[1];
+                            uniform.colorArg1_1 = textureStage1[2];
+                            uniform.colorArg2_1 = textureStage1[3];
+                            uniform.alphaOp1 = textureStage1[4];
+                            uniform.alphaArg1_1 = textureStage1[5];
+                            uniform.alphaArg2_1 = textureStage1[6];
+                        } else {
+                            uniform.textureIndex1 = 0;
+                            uniform.colorOp1 = 1;    // D3DTOP_DISABLE
+                            uniform.colorArg1_1 = 2;
+                            uniform.colorArg2_1 = 1;
+                            uniform.alphaOp1 = 1;    // D3DTOP_DISABLE
+                            uniform.alphaArg1_1 = 2;
+                            uniform.alphaArg2_1 = 1;
+                            ++metrics.bindingOverflows;
+                        }
                         const NSUInteger vertexType = draw.fvf == DK2M_FVF_VERTEX1C ? 0 : 1;
                         id<MTLRenderPipelineState> pipeline = _opaquePipelines[vertexType];
                         if (alphaBlendEnabled) {
