@@ -2999,8 +2999,14 @@ static void *renderWorker(void *context) {
                     const float centerY = 0.5f * (minY + maxY);
                     const float halfExtentX = std::max(0.5f * (maxX - minX), 1.0f);
                     const float halfExtentY = std::max(0.5f * (maxY - minY), 1.0f);
-                    shadowUniform->screenWidth = static_cast<float>(snapshot->width);
-                    shadowUniform->screenHeight = static_cast<float>(snapshot->height);
+                    // The fragment stage's [[position]] is in RENDER TARGET
+                    // pixels (the drawable, e.g. 4219x3164), not the game's
+                    // logical resolution - using snapshot dims here scaled
+                    // the reconstructed NDC by the backing factor and made
+                    // shadows slide with the camera.
+                    const CGSize targetSize = _layer.drawableSize;
+                    shadowUniform->screenWidth = static_cast<float>(targetSize.width);
+                    shadowUniform->screenHeight = static_cast<float>(targetSize.height);
                     shadowUniform->casterMinZ = minZ;
                     shadowUniform->casterMaxZ = maxZ;
                     shadowUniform->upSign = dk2ShadowUpSign();
