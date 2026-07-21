@@ -7,6 +7,30 @@
 #include "dk2/MyCESurfHandle.h"
 #include "dk2/SurfaceHolder.h"
 #include "dk2/CEngineSurfaceBase.h"
+#include "dk2/CEngineDDSurface.h"
+#include "dk2/MyStringHashMap_MyCESurfHandle_entry.h"
+#include <metal_bridge/MetalBridgeProducer.h>
+
+namespace {
+
+const void *atlasPageKey(dk2::CEngineSurfaceBase *page) {
+    if (page && *(void **) page == (void *) 0x6703C4) {
+        IDirectDrawSurface4 *dd = static_cast<dk2::CEngineDDSurface *>(page)->ddSurf;
+        if (dd) return dd;
+    }
+    return page;
+}
+
+void reportHardwareAtlasRect(dk2::MyCESurfHandle *handle) {
+    if (!handle || !handle->holder_parent || !handle->surfWidth8 || !handle->surfHeight8) return;
+    const char *name =
+        dk2::MyStringHashMap_MyCESurfHandle_instance.entries.buf[handle->mapIdx].name;
+    gog::metal_bridge::reportAtlasRect(
+        atlasPageKey(handle->holder_parent->surf), name, handle->x8, handle->y8,
+        handle->surfWidth8, handle->surfHeight8);
+}
+
+}  // namespace
 
 
 int dk2::SurfHashList2::_probablySort() {
@@ -103,6 +127,15 @@ int dk2::SurfHashList2::_probablySort() {
         }
     }
     if (this->surfh_first) {
+        // Hardware/devTexture atlases are packed by SurfHashList2's original
+        // helpers (deleteHolder/sub_593880), not SurfHashList::expandPut.
+        // At this point every selected reduction has its final page+x/y;
+        // report exactly the handles considered by this sort before the list
+        // is cleared below. Producer-side dedupe makes recurring use cheap.
+        for (MyCESurfHandle *handle = this->surfh_first; handle;
+             handle = handle->nextByHashList) {
+            reportHardwareAtlasRect(handle->curReduction);
+        }
         MyCESurfHandle *f10_nextByHashList;
         do {
             MyCESurfHandle *v28 = this->surfh_first;
