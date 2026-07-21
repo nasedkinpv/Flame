@@ -524,6 +524,9 @@ namespace {
 constexpr NSUInteger kFramesInFlight = 3;
 constexpr NSUInteger kSampleCount = 4;
 std::atomic<uint64_t> gRequestedDrawableSize{0};
+// Game frame size from the bridge (packed WxH); drives the view's letterbox
+// aspect so widescreen game resolutions are not squeezed into 4:3.
+std::atomic<uint64_t> gGameFrameSize{0};
 std::atomic<uint64_t> gRenderedFrames{0};
 std::atomic<uint64_t> gBridgeFramesRendered{0};
 uint64_t gSelfTestFrames = 0;
@@ -1318,7 +1321,12 @@ bool inputLogEnabled() {
 - (void)layout {
     [super layout];
     const CGRect bounds = self.bounds;
-    const CGFloat targetAspect = 4.0 / 3.0;
+    CGFloat targetAspect = 4.0 / 3.0;
+    const uint64_t gameSize = gGameFrameSize.load(std::memory_order_acquire);
+    if (gameSize) {
+        const CGSize size = unpackSize(gameSize);
+        if (size.width > 0 && size.height > 0) targetAspect = size.width / size.height;
+    }
     CGFloat width = CGRectGetWidth(bounds);
     CGFloat height = width / targetAspect;
     if (height > CGRectGetHeight(bounds)) {
@@ -2585,6 +2593,14 @@ static void *renderWorker(void *context) {
 
         ++_frame;
         if (snapshot) _lastBridgeFrame = snapshot->frame;
+        if (snapshot && snapshot->width && snapshot->height) {
+            const uint64_t packed = packSize(CGSizeMake(snapshot->width, snapshot->height));
+            if (gGameFrameSize.exchange(packed, std::memory_order_acq_rel) != packed) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [NSApp.windows.firstObject.contentView setNeedsLayout:YES];
+                });
+            }
+        }
         gRenderedFrames.store(_frame, std::memory_order_release);
         if (newBridgeFrame) {
             metrics.encodeUs = elapsedMicroseconds(encodeStarted, TelemetryClock::now());
