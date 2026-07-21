@@ -78,7 +78,7 @@ UPSTREAM_PREFIX = (
     "flametal:original-compatible", "flametal:net:", "flametal:readsp",
     "flametal:console", "flametal:inspect", "flametal:keep-last-autosaves",
     "flametal:lock-window-size", "flametal:myip", "flametal:single-core",
-    "flametal:skip-launcher",
+    "flametal:skip-launcher", "flametal:alt-resources", "flametal:auto-network",
     "gog:video:", "gog:misc:", "gog:",
     "dk2:",  # the game's own option map (upstream flame_config passthrough)
 )
