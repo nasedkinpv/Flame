@@ -3907,6 +3907,9 @@ static void *renderWorker(void *context) {
             NSUInteger meshVertexOffset = kRetainedMeshVertexCapacity;
             NSUInteger meshIndexOffset = kRetainedMeshIndexCapacity;
             NSUInteger meshDrawCount = 0;
+            static const bool meshDebug = getenv("DK2_MESH_DEBUG") != nullptr;
+            static const bool meshNoTexture = meshDebug ||
+                getenv("DK2_MESH_NO_TEXTURE") != nullptr;
             struct MeshPlacement { NSUInteger baseVertex; NSUInteger indexByteOffset; uint32_t indexCount; };
             struct MeshIndexPlacement { NSUInteger byteOffset; uint32_t indexCount; };
             std::unordered_map<uint32_t, MeshPlacement> meshPlacements;
@@ -4219,7 +4222,7 @@ static void *renderWorker(void *context) {
                                 ++metrics.meshMalformed;
                             }
                         } else {
-                            const TextureBinding binding = meshDraw.texture_id
+                            const TextureBinding binding = (!meshNoTexture && meshDraw.texture_id)
                                 ? resolveTextureBinding(meshDraw.texture_id)
                                 : TextureBinding{static_cast<uint16_t>(boundArgumentTableBank), 0};
                             auto *uniforms =
@@ -4257,6 +4260,14 @@ static void *renderWorker(void *context) {
                                 : (meshDraw.flags & DK2M_DRAW_MESH_ADDITIVE) ? 2u
                                 : (meshDraw.flags & DK2M_DRAW_MESH_ALPHA_BLEND) ? 1u
                                 : 0u;
+                            // The legacy emitter already screen-space culled
+                            // opaque triangles. Mesh draws bypass it, so cull
+                            // their back faces here; blended/cutout geometry
+                            // (notably prison bars) remains two-sided.
+                            const uint32_t effectiveCull =
+                                pipelineKind == 0 &&
+                                !(meshDraw.flags & DK2M_DRAW_MESH_ALPHA_TEST)
+                                    ? 3u : 1u;
                             const bool canInstance =
                                 pipelineKind == 0 && effectiveZWrite != 0;
                             const bool compatible = pendingMeshInstances.active &&
@@ -4270,7 +4281,7 @@ static void *renderWorker(void *context) {
                                 pendingMeshInstances.pipelineKind == pipelineKind &&
                                 pendingMeshInstances.zFunction == effectiveZFunction &&
                                 pendingMeshInstances.zWrite == effectiveZWrite &&
-                                pendingMeshInstances.cull == cullMode &&
+                                pendingMeshInstances.cull == effectiveCull &&
                                 pendingMeshInstances.bank == binding.bank &&
                                 pendingMeshInstances.baseInstance +
                                     pendingMeshInstances.instanceCount == meshDrawCount;
@@ -4287,7 +4298,7 @@ static void *renderWorker(void *context) {
                                 pendingMeshInstances.pipelineKind = pipelineKind;
                                 pendingMeshInstances.zFunction = effectiveZFunction;
                                 pendingMeshInstances.zWrite = effectiveZWrite;
-                                pendingMeshInstances.cull = cullMode;
+                                pendingMeshInstances.cull = effectiveCull;
                                 pendingMeshInstances.bank = binding.bank;
                                 pendingMeshInstances.baseInstance = meshDrawCount;
                                 pendingMeshInstances.instanceCount = 0;
@@ -4372,7 +4383,7 @@ static void *renderWorker(void *context) {
                                 meshVertexOffset / kMeshVertexStride;
                             meshVertexOffset += blob.vertices.size();
 
-                            const TextureBinding binding = meshDraw.texture_id
+                            const TextureBinding binding = (!meshNoTexture && meshDraw.texture_id)
                                 ? resolveTextureBinding(meshDraw.texture_id)
                                 : TextureBinding{
                                       static_cast<uint16_t>(boundArgumentTableBank), 0};
@@ -4420,10 +4431,14 @@ static void *renderWorker(void *context) {
                                 (meshDraw.flags & DK2M_DRAW_MESH_Z_WRITE) != 0;
                             [encoder setDepthStencilState:
                                 _depthStates[effectiveZFunction][effectiveZWrite]];
-                            [encoder setCullMode:cullMode == 1
+                            const bool meshDoubleSided =
+                                (meshDraw.flags & (DK2M_DRAW_MESH_ALPHA_BLEND |
+                                                   DK2M_DRAW_MESH_ADDITIVE |
+                                                   DK2M_DRAW_MESH_ALPHA_TEST |
+                                                   DK2M_DRAW_MESH_MULTIPLY)) != 0;
+                            [encoder setCullMode:meshDoubleSided
                                 ? MTLCullModeNone : MTLCullModeBack];
-                            [encoder setFrontFacingWinding:cullMode == 3
-                                ? MTLWindingClockwise : MTLWindingCounterClockwise];
+                            [encoder setFrontFacingWinding:MTLWindingClockwise];
                             if (boundArgumentTableBank != binding.bank) {
                                 boundArgumentTableBank = binding.bank;
                                 [encoder setArgumentTable:
@@ -4496,9 +4511,6 @@ static void *renderWorker(void *context) {
                                   inlineDraw.ambient_r, inlineDraw.ambient_g, inlineDraw.ambient_b,
                                   v0[0], v0[1], v0[2], c0);
                         }
-                        static const bool meshDebug = getenv("DK2_MESH_DEBUG") != nullptr;
-                        static const bool meshNoTexture = meshDebug ||
-                            getenv("DK2_MESH_NO_TEXTURE") != nullptr;
                         const TextureBinding binding = (!meshNoTexture && inlineDraw.texture_id)
                             ? resolveTextureBinding(inlineDraw.texture_id)
                             : TextureBinding{static_cast<uint16_t>(boundArgumentTableBank), 0};
@@ -4552,10 +4564,14 @@ static void *renderWorker(void *context) {
                             : (meshZEnabled &&
                                (inlineDraw.flags & DK2M_DRAW_MESH_Z_WRITE) != 0);
                         [encoder setDepthStencilState:_depthStates[effectiveZFunction][effectiveZWrite]];
-                        [encoder setCullMode:meshDebug ? MTLCullModeNone
-                                                       : (cullMode == 1 ? MTLCullModeNone : MTLCullModeBack)];
-                        [encoder setFrontFacingWinding:cullMode == 3 ? MTLWindingClockwise
-                                                                    : MTLWindingCounterClockwise];
+                        const bool meshDoubleSided =
+                            (inlineDraw.flags & (DK2M_DRAW_MESH_ALPHA_BLEND |
+                                                 DK2M_DRAW_MESH_ADDITIVE |
+                                                 DK2M_DRAW_MESH_ALPHA_TEST |
+                                                 DK2M_DRAW_MESH_MULTIPLY)) != 0;
+                        [encoder setCullMode:meshDebug || meshDoubleSided
+                            ? MTLCullModeNone : MTLCullModeBack];
+                        [encoder setFrontFacingWinding:MTLWindingClockwise];
                         if (boundArgumentTableBank != binding.bank) {
                             boundArgumentTableBank = binding.bank;
                             [encoder setArgumentTable:_argumentTables[slot][boundArgumentTableBank]
