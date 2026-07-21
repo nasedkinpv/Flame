@@ -226,7 +226,15 @@ namespace dk2 {
 
 }
 
+// True while the main scene walk is drawing; off-scene renders (cursor
+// composition, GUI portraits) see it false. See the CEngineAnimMesh probe.
+bool dk2::g_inMainScenePass = false;
+
 void dk2::draw3dScene() {
+    struct PassFlag {
+        PassFlag() { dk2::g_inMainScenePass = true; }
+        ~PassFlag() { dk2::g_inMainScenePass = false; }
+    } passFlag;
     static uint32_t profileFrame = 0;
     static SceneSplitProfile profile;
     const uint32_t profilePhase = profileFrame++ % 300;

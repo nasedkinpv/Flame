@@ -27,6 +27,7 @@
 // recurring "anim modes:" probe alongside that file's "mesh tex resolve:"
 // and "mesh gpu probe:" probes.
 extern flametal_config::define_flame_option<bool> o_flametal_debugProbes;
+namespace dk2 { extern bool g_inMainScenePass; }  // draw_functions.cpp
 
 namespace {
 
@@ -454,23 +455,20 @@ void dk2::CEngineAnimMesh::fun_5848B0(int mode, SceneObject2E *scene) {
                             g_animGpuHit, g_animGpuMiss);
         }
     }
-    // Cursor mini-scene probe: the Hand of Evil is the anim resource "hand"
-    // rasterized into cursorSurf through some scene other than the main one.
-    // Log each unique scene pointer once so the cursor scene (tiny draw
-    // count, appears when the cursor changes shape) can be identified for
-    // the host-rendered-cursor plan.
-    if (o_flametal_debugProbes.get()) {
-        static void *seenScenes[16] = {};
-        static uint32_t seenCounts[16] = {};
-        for (int i = 0; i < 16; ++i) {
-            if (seenScenes[i] == scene) { ++seenCounts[i]; break; }
-            if (!seenScenes[i]) {
-                seenScenes[i] = scene;
-                seenCounts[i] = 1;
-                patch::log::dbg("anim scene probe: new scene=%p mode=%d this=%p",
-                                (void *) scene, mode, (void *) this);
-                break;
-            }
+    // Cursor render probe, iteration 2: SceneObject2E is per-object, so
+    // unique pointers say nothing. Instead flag anim draws that happen
+    // OUTSIDE the main draw3dScene() window (see g_inMainScenePass): the
+    // Hand of Evil (anim resource "hand") is rasterized into cursorSurf by
+    // some off-scene render, same category as GUI portrait renders. Logs
+    // caller-of-interest candidates for the host-rendered-cursor plan.
+    if (o_flametal_debugProbes.get() && !dk2::g_inMainScenePass) {
+        static DWORD lastOffScene = 0;
+        static uint32_t offSceneDraws = 0;
+        ++offSceneDraws;
+        if (now - lastOffScene > 1000) {
+            lastOffScene = now;
+            patch::log::dbg("off-scene anim draw: mode=%d this=%p scene=%p total=%u",
+                            mode, (void *) this, (void *) scene, offSceneDraws);
         }
     }
 }
