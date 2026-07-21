@@ -143,13 +143,20 @@ int buildShadowMatrix(
     dk2::Mat3x3f rotation;
     rotation.init_rotationMat(0, angle);
 
-    // TODO(verify): 00580B31 reads [esp+0x18], which along this branch was
-    // never written by the original function (uninitialized stack). We
-    // substitute 0.0f deterministically instead of reproducing the garbage
-    // read.
-    const float uninitScale = 0.0f;
+    // CORRECTED (was TODO(verify)): this used to substitute a deterministic
+    // 0.0f here on the theory that 00580B31's read of this stack slot was
+    // uninitialized along this branch. Cross-checking against the sibling
+    // CEngineAnimMesh::sub_5855E0 (0x5855E0..0x585AD0, see
+    // src/dk2/EngineAnimShadows.cpp) resolved it: that function has the exact
+    // same shared-preamble/low-detail-branch shape, and its own
+    // instruction-level (push/pop-offset-normalized) trace proves the
+    // corresponding slot is never anything but matrixDivisor -- there is zero
+    // net stack growth between the store at 0058096A/00580663 and the reload
+    // at 00580B31/00585842 in either function, on either branch. Using 0.0f
+    // here would silently zero out low-detail shadow matrices, which cannot
+    // be right, so this is now matrixDivisor as in the >=3 branch.
     dk2::Mat3x3f scaled;
-    rotation.multiply(&scaled, uninitScale);
+    rotation.multiply(&scaled, matrixDivisor);
     dk2::Mat3x3f scaledTwice;
     scaled.multiply(&scaledTwice, mesh.field_54);
     shadowMatrix = scaledTwice;
@@ -189,8 +196,11 @@ int dk2::CEngineDynamicMesh::shadow_sub_5808E0(CPolyMeshResource *resource, int 
 
     Mat3x3f shadowMatrix;
     const int setupResult = buildShadowMatrix(*this, *resource, lightIndex, shadowMatrix);
-    (void) shadowHandle;
-    (void) setupResult;  // matches the original: EAX here is discarded by callers.
+    (void) setupResult;  // buildShadowMatrix's return value is never stored back
+                         // to the [esp+0x30] slot the real function returns from
+                         // (only shadowHandle is written there); EAX from
+                         // buildShadowMatrix is simply clobbered before the
+                         // function's actual `mov eax,[esp+0x30]; ret 8` epilogue.
 
     // 00580B7F..00580DD1: for every SprsMeshHeader LOD entry of the resource,
     // project its vertices through shadowMatrix into the dk2::g_vec_766A78
@@ -258,5 +268,10 @@ int dk2::CEngineDynamicMesh::shadow_sub_5808E0(CPolyMeshResource *resource, int 
     }
 
     shadows_end_58E470();
-    return setupResult;
+    // CORRECTED (was `return setupResult;`): 00580DDC reloads the return value
+    // from the same stack slot shadowHandle was stored to earlier (verified
+    // via instruction-level stack-offset normalization -- no net esp change
+    // between the store and this reload on either shadowHandle-acquisition
+    // branch), not from wherever buildShadowMatrix happened to leave EAX.
+    return shadowHandle;
 }
