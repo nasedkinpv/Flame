@@ -1,7 +1,13 @@
 #!/bin/zsh
-# Texture-dump session: run-metal-game.zsh flow with DK2_TEXTURE_DUMP enabled
-# on the host (passed via --runner-env, which the host also applies to its own
-# environment before the renderer starts).
+# Named texture-dump session: enables the game-side flametal:TextureDump
+# option (decoded surfaces written once as PNG with their REAL resource
+# names, before atlas compositing) for one run, restoring the config after.
+# Play a level to capture terrain/creature/spell textures; the menu alone
+# yields only menu resources. Output: prefix/drive_c/dk2-texdump ->
+#   ~/Library/Application Support/Dungeon Keeper II/prefix/drive_c/dk2-texdump
+#
+# The legacy host-side page dump (hash-named composited pages) is still
+# available via DK2_TEXTURE_DUMP with run-metal-game.zsh if ever needed.
 set -euo pipefail
 
 readonly SCRIPT_DIR="${0:A:h}"
@@ -10,7 +16,8 @@ readonly RUNNER="${SCRIPT_DIR}/dk2-runner.zsh"
 readonly PREFIX="${DK2_METAL_PREFIX:-${HOME}/Library/Application Support/Dungeon Keeper II/prefix}"
 readonly BRIDGE_FILE="${PREFIX}/drive_c/dk2-metal/frame.bin"
 readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-3}"
-readonly DUMP_DIR="${DK2_TEXTURE_DUMP:-${HOME}/Library/Application Support/Dungeon Keeper II/texture-dump}"
+readonly CONFIG="${PREFIX}/drive_c/GOG Games/Dungeon Keeper 2/flametal/config.toml"
+readonly DUMP_DIR="${PREFIX}/drive_c/dk2-texdump"
 
 if (( $# == 0 )); then
   LEVEL=''
@@ -20,27 +27,30 @@ else
   print -u2 -- "usage: ${0:t} [-LEVEL levelN]"
   exit 2
 fi
-readonly LEVEL
 
-fail() {
-  print -u2 -- "error: $*"
-  exit 1
+[[ -f "${CONFIG}" ]] || { print -u2 -- "no flametal config at ${CONFIG}"; exit 1 }
+
+# Enable the option for this session only. The game rewrites config.toml on
+# exit with every registered option present, so edit the existing key.
+restore_config() {
+  /usr/bin/sed -i '' 's|^TextureDump = .*|TextureDump = ""|' "${CONFIG}" || true
 }
+trap restore_config EXIT INT TERM
+if grep -q '^TextureDump = ' "${CONFIG}"; then
+  /usr/bin/sed -i '' 's|^TextureDump = .*|TextureDump = "C:\\\\dk2-texdump"|' "${CONFIG}"
+else
+  /usr/bin/sed -i '' 's|^\[flametal\]|[flametal]\nTextureDump = "C:\\\\dk2-texdump"|' "${CONFIG}"
+fi
 
-[[ -d "${APP}" ]] || fail "build the Metal host with macos/build-metal-host.zsh"
-[[ -x "${RUNNER}" ]] || fail "missing ${RUNNER}"
-/bin/mkdir -p "${BRIDGE_FILE:h}"
+print -- "named texture dump -> ${DUMP_DIR}"
+print -- "play through the content you want captured, then quit the game"
 
-print -- "texture dump -> ${DUMP_DIR}"
-FS_ARG=()
-[[ "${DK2_FULLSCREEN:-1}" == 1 ]] && FS_ARG=(--fullscreen)
-HUD_ARG=()
-[[ "${DK2_METAL_HUD:-1}" == 1 ]] && HUD_ARG=("--runner-env=MTL_HUD_ENABLED=1")
-exec open -W -n "${APP}" --args \
-  "${FS_ARG[@]}" \
-  "${HUD_ARG[@]}" \
-  "--bridge-file=${BRIDGE_FILE}" \
-  "--game-runner=${RUNNER}" \
-  "--runner-env=DK2_LEVEL=${LEVEL}" \
-  "--runner-env=DK2_SHADOW_LEVEL=${SHADOW_LEVEL}" \
-  "--runner-env=DK2_TEXTURE_DUMP=${DUMP_DIR}"
+DK2_LEVEL="${LEVEL}" DK2_SHADOW_LEVEL="${SHADOW_LEVEL}" \
+  "${APP}/Contents/MacOS/DK2Metal" \
+    --fullscreen \
+    --bridge-file="${BRIDGE_FILE}" \
+    --game-runner="${RUNNER}"
+
+print -- "dump session finished:"
+/bin/ls "${DUMP_DIR}" 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ' | /usr/bin/sed 's/$/ files/'
+print -- "${DUMP_DIR}"
