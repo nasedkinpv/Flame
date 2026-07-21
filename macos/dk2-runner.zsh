@@ -16,9 +16,12 @@
 #     terminal instead of alert dialogs.
 #
 # Configuration comes from the environment (passed via --runner-env= from the
-# host, or exported directly in dev):
+# host, or exported directly in dev). The host composes most of this from
+# ~/Library/Application Support/Dungeon Keeper II/settings.toml (see
+# macos/README.md) before spawning this script -- these vars are its output,
+# not something a player edits directly:
 #   DK2_LEVEL, DK2_SHADOW_LEVEL, DK2_GAME_RES, DK2_WINE_BIN,
-#   DK2_METAL_PREFIX, DK2_WINEDEBUG
+#   DK2_METAL_PREFIX, DK2_WINEDEBUG, DK2_MOVIES, DK2_EXTRA_GAME_ARGS
 # Stays alive until every wine process exits (wineserver -w), which lets the
 # host quit when the game does.
 set -u
@@ -53,6 +56,12 @@ readonly LEVEL="${DK2_LEVEL:-}"
 readonly GAME_RES="${DK2_GAME_RES:-1600x1200}"
 LEVEL_ARGS=()
 [[ -n "${LEVEL}" ]] && LEVEL_ARGS=(-LEVEL "${LEVEL}" -Q)
+# settings.toml [game] movies (default false, i.e. -NoMovies stays on).
+MOVIES_ARGS=(-NoMovies)
+[[ "${DK2_MOVIES:-0}" == 1 ]] && MOVIES_ARGS=()
+# settings.toml [patches] passthrough, composed by the host as
+# "-flametal:Name=value ..." -- zsh word-splits this with ${(z)...} below.
+EXTRA_GAME_ARGS=(${(z)DK2_EXTRA_GAME_ARGS:-})
 
 show_error() {
   /usr/bin/osascript -e "display alert \"Dungeon Keeper II\" message \"$1\" as critical" >/dev/null 2>&1 || true
@@ -120,9 +129,9 @@ if [[ "${DK2_RUNNER_MODE}" == packaged ]]; then
       MVK_CONFIG_LOG_LEVEL='0' \
       "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
         -skip-launcher -game-res="${GAME_RES}" "${LEVEL_ARGS[@]}" \
-        -NoMovies -DisableGamma -Sound -Shadows "${SHADOW_LEVEL}" \
+        "${MOVIES_ARGS[@]}" -DisableGamma -Sound -Shadows "${SHADOW_LEVEL}" \
         -gog:video:HighRes=true -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
-        -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1
+        -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1 "${EXTRA_GAME_ARGS[@]}"
   ) >>"${LOG_FILE}" 2>&1 &
 
   for attempt in {1..1800}; do
@@ -155,9 +164,9 @@ else
     MVK_CONFIG_LOG_LEVEL='0' \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
       -skip-launcher -game-res="${GAME_RES}" "${LEVEL_ARGS[@]}" \
-      -NoMovies -DisableGamma -Sound -Shadows "${SHADOW_LEVEL}" \
+      "${MOVIES_ARGS[@]}" -DisableGamma -Sound -Shadows "${SHADOW_LEVEL}" \
       -gog:video:HighRes=true -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
-      -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1 >>"${LOG_FILE}" 2>&1
+      -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1 "${EXTRA_GAME_ARGS[@]}" >>"${LOG_FILE}" 2>&1
 
   exec env WINEPREFIX="${PREFIX}" "${WINESERVER}" -w
 fi

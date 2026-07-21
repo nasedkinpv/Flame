@@ -13,13 +13,19 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <fstream>
+#include <functional>
+#include <iomanip>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <pthread.h>
 #include <sched.h>
+#include <sstream>
 #include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -29,6 +35,358 @@
 #include <vector>
 
 #import <ImageIO/ImageIO.h>
+
+// toml11 is header-only; this file is the only consumer of it on the macOS
+// side (the Windows-side Flametal DLL has its own separate include of the
+// same header under a __stdcall/thread_local workaround it needs for MSVC --
+// not needed here on clang/arm64, so this is a plain include). The library's
+// `operator"" _toml` user-defined literal (unused here) trips
+// -Wdeprecated-literal-operator under this project's -Werror; silence it
+// locally rather than patching the vendored header.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-literal-operator"
+#include "toml.hpp"
+#pragma clang diagnostic pop
+
+@class DK2MetalView;
+
+// --- settings.toml: the one user-facing config file (see .porting/settings-
+// redesign-plan.md). OS-neutral sections/keys, hand-editable, parsed with
+// toml11 (libs/Toml11-4.4.0/toml.hpp). Precedence: env DK2_* (a debug-only
+// override layer, see macos/README.md) beats settings.toml on every key this
+// namespace manages. [renderer] keys are live-applied (dispatch-source watch
+// on the file); [game]/[patches]/[debug] compose the wine runner's
+// environment at next launch only.
+namespace dk2cfg {
+
+struct Settings {
+    // [game]
+    int shadowLevel = 3;
+    std::string resolution = "1600x1200";
+    bool movies = false;
+    std::string level;
+    // [renderer]
+    bool bloom = true;
+    bool metalShadows = true;
+    float renderScale = 1.0f;
+    bool hdTextures = true;
+    // [patches]
+    bool meshGpuPath = false;
+    bool shadowCache = true;
+    bool debugProbes = false;
+    // [debug]
+    std::string winedebug = "-all";
+};
+
+inline uint32_t floatBits(float f) { uint32_t b; std::memcpy(&b, &f, sizeof(b)); return b; }
+inline float bitsFloat(uint32_t b) { float f; std::memcpy(&f, &b, sizeof(f)); return f; }
+
+// Live renderer knobs, read every frame; settings.toml is the base, an env
+// var present at startup pins the value and the file watcher stops touching it.
+std::atomic<bool> gBloomLive{true};
+std::atomic<bool> gShadowsLive{true};
+std::atomic<bool> gHdTexturesLive{true};
+std::atomic<uint32_t> gRenderScaleBits{floatBits(1.0f)};
+
+bool gEnvBloomSet = false;
+bool gEnvShadowsSet = false;
+bool gEnvScaleSet = false;
+
+std::mutex gMutex;
+Settings gSettings;           // current, guarded by gMutex -- Preferences window reads/writes this
+Settings gLaunchSettings;     // snapshot taken at process start, for the restart-required dirty flag
+std::atomic<bool> gRestartRequired{false};
+
+// Set once the AppKit view exists (after DK2MetalView is defined later in
+// this file); called after every reload so a render_scale change re-requests
+// the drawable size without waiting for an unrelated window resize.
+std::function<void()> gOnApplied;
+
+NSString *supportDirectory() {
+    NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:
+                      @"Library/Application Support/Dungeon Keeper II"];
+    [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES
+                                              attributes:nil error:nil];
+    return dir;
+}
+
+NSString *settingsPath() {
+    return [supportDirectory() stringByAppendingPathComponent:@"settings.toml"];
+}
+
+NSString *prefixFlametalConfigPath() {
+    return [supportDirectory() stringByAppendingPathComponent:
+             @"prefix/drive_c/GOG Games/Dungeon Keeper 2/flametal/config.toml"];
+}
+
+// Migration only, from the prefix's flametal/config.toml [flametal]/[gog]
+// sections -- simple line parsing is enough since this only ever reads the
+// four booleans below and never runs again once settings.toml exists.
+void migrateFromPrefixConfig(Settings &s) {
+    std::ifstream in(prefixFlametalConfigPath().fileSystemRepresentation);
+    if (!in) return;
+    auto trim = [](std::string x) {
+        const size_t a = x.find_first_not_of(" \t\r");
+        if (a == std::string::npos) return std::string();
+        const size_t b = x.find_last_not_of(" \t\r");
+        return x.substr(a, b - a + 1);
+    };
+    std::string line, section;
+    while (std::getline(in, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#') continue;
+        if (line.front() == '[' && line.back() == ']') {
+            section = line.substr(1, line.size() - 2);
+            continue;
+        }
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string key = trim(line.substr(0, eq));
+        const std::string val = trim(line.substr(eq + 1));
+        const bool boolVal = val == "true";
+        if (section == "flametal") {
+            if (key == "MetalShadows") s.metalShadows = boolVal;
+            else if (key == "ShadowCache") s.shadowCache = boolVal;
+            else if (key == "DebugProbes") s.debugProbes = boolVal;
+        } else if (section == "gog") {
+            if (key == "MeshGpuPath") s.meshGpuPath = boolVal;
+        }
+    }
+    NSLog(@"DK2 settings: migrated MetalShadows/ShadowCache/DebugProbes/MeshGpuPath "
+           "from the prefix's flametal/config.toml");
+}
+
+template <typename T>
+T tomlGet(const toml::value &table, const std::string &key, T fallback) {
+    if (!table.is_table()) return fallback;
+    const auto &t = table.as_table();
+    const auto it = t.find(key);
+    if (it == t.end()) return fallback;
+    try {
+        return toml::get<T>(it->second);
+    } catch (const std::exception &) {
+        return fallback;
+    }
+}
+
+const toml::value *tomlSection(const toml::value &root, const std::string &name) {
+    if (!root.is_table()) return nullptr;
+    const auto &t = root.as_table();
+    const auto it = t.find(name);
+    return it == t.end() ? nullptr : &it->second;
+}
+
+std::string tomlBool(bool b) { return b ? "true" : "false"; }
+
+// TOML floats must contain a '.' or exponent -- "1" parses back as an
+// integer, not a float, and toml::get<float> on an integer node throws.
+std::string tomlFloat(float v) {
+    std::ostringstream o;
+    o << std::fixed << std::setprecision(3) << v;
+    std::string s = o.str();
+    const size_t lastNonZero = s.find_last_not_of('0');
+    s.erase(lastNonZero + 1, std::string::npos);
+    if (!s.empty() && s.back() == '.') s += '0';
+    return s;
+}
+
+// The full commented file, values interpolated -- regenerated whenever the
+// Preferences window (or migration, on first run) saves, exactly like
+// flametal_config.cpp's own "config is controlled by X" convention: manual
+// edits to VALUES survive (they are re-read on next launch), manual edits to
+// COMMENTS do not.
+std::string renderSettingsFile(const Settings &s) {
+    std::ostringstream o;
+    o << "# Dungeon Keeper II settings.\n"
+      << "# The single user-facing config file: hand-edit this, or use the native\n"
+      << "# Preferences window (Cmd-,) in the game host. OS-neutral format/sections.\n"
+      << "# Regenerated on every Preferences save -- manual VALUE edits are kept,\n"
+      << "# manual COMMENT edits are not (same convention as flametal/config.toml).\n"
+      << "#\n"
+      << "# Env vars named DK2_* are an undocumented-to-players, debug-only override\n"
+      << "# layer on top of this file (see macos/README.md) -- if one is set in the\n"
+      << "# environment at launch, it wins over the matching key below.\n\n";
+    o << "[game]\n"
+      << "# Dynamic shadow detail, 0 (off) - 3 (full detail, cached silhouettes)\n"
+      << "shadow_level = " << s.shadowLevel << "\n"
+      << "# \"WIDTHxHEIGHT\". Default 1600x1200 is 4:3. Wider values (e.g. 1800x1200)\n"
+      << "# are experimental: the in-game HUD lays out panel backgrounds for 4:3, so\n"
+      << "# wider resolutions show black gaps beside the bottom toolbar.\n"
+      << "resolution = \"" << s.resolution << "\"\n"
+      << "movies = " << tomlBool(s.movies) << "\n"
+      << "# Level file name to load directly, skipping the normal menu. Empty = normal menu.\n"
+      << "level = \"" << s.level << "\"\n\n";
+    o << "[renderer]\n"
+      << "# All four keys in this section apply live (no restart) while the game is running.\n"
+      << "bloom = " << tomlBool(s.bloom) << "\n"
+      << "metal_shadows = " << tomlBool(s.metalShadows) << "\n"
+      << "# Fraction of the display's native backing resolution to render at, 0.375-1.0\n"
+      << "render_scale = " << tomlFloat(s.renderScale) << "\n"
+      << "hd_textures = " << tomlBool(s.hdTextures) << "\n\n";
+    o << "[patches]\n"
+      << "mesh_gpu_path = " << tomlBool(s.meshGpuPath) << "\n"
+      << "shadow_cache = " << tomlBool(s.shadowCache) << "\n"
+      << "debug_probes = " << tomlBool(s.debugProbes) << "\n\n";
+    o << "[debug]\n"
+      << "winedebug = \"" << s.winedebug << "\"\n";
+    return o.str();
+}
+
+bool writeAtomic(const Settings &s) {
+    NSString *path = settingsPath();
+    NSString *tmp = [path stringByAppendingString:@".tmp"];
+    const std::string text = renderSettingsFile(s);
+    {
+        std::ofstream out(tmp.fileSystemRepresentation, std::ios::trunc);
+        if (!out) return false;
+        out << text;
+        if (!out) return false;
+    }
+    if (std::rename(tmp.fileSystemRepresentation, path.fileSystemRepresentation) != 0) {
+        NSLog(@"DK2 settings: failed to replace %@ (%s)", path, std::strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+Settings load() {
+    Settings s;
+    NSString *path = settingsPath();
+    if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+        migrateFromPrefixConfig(s);
+        if (!writeAtomic(s)) {
+            NSLog(@"DK2 settings: failed to create %@; continuing with defaults in memory", path);
+        } else {
+            NSLog(@"DK2 settings: created %@", path);
+        }
+        return s;
+    }
+    try {
+        const toml::value data = toml::parse(std::string(path.fileSystemRepresentation));
+        if (const auto *g = tomlSection(data, "game")) {
+            s.shadowLevel = tomlGet<int>(*g, "shadow_level", s.shadowLevel);
+            s.resolution = tomlGet<std::string>(*g, "resolution", s.resolution);
+            s.movies = tomlGet<bool>(*g, "movies", s.movies);
+            s.level = tomlGet<std::string>(*g, "level", s.level);
+        }
+        if (const auto *r = tomlSection(data, "renderer")) {
+            s.bloom = tomlGet<bool>(*r, "bloom", s.bloom);
+            s.metalShadows = tomlGet<bool>(*r, "metal_shadows", s.metalShadows);
+            s.renderScale = tomlGet<float>(*r, "render_scale", s.renderScale);
+            s.hdTextures = tomlGet<bool>(*r, "hd_textures", s.hdTextures);
+        }
+        if (const auto *p = tomlSection(data, "patches")) {
+            s.meshGpuPath = tomlGet<bool>(*p, "mesh_gpu_path", s.meshGpuPath);
+            s.shadowCache = tomlGet<bool>(*p, "shadow_cache", s.shadowCache);
+            s.debugProbes = tomlGet<bool>(*p, "debug_probes", s.debugProbes);
+        }
+        if (const auto *d = tomlSection(data, "debug")) {
+            s.winedebug = tomlGet<std::string>(*d, "winedebug", s.winedebug);
+        }
+    } catch (const std::exception &e) {
+        NSLog(@"DK2 settings.toml: parse error (%s); using defaults", e.what());
+    }
+    s.shadowLevel = std::clamp(s.shadowLevel, 0, 3);
+    s.renderScale = std::clamp(s.renderScale, 0.375f, 1.0f);
+    return s;
+}
+
+void initEnvOverrides() {
+    gEnvBloomSet = std::getenv("DK2_BLOOM") != nullptr;
+    gEnvShadowsSet = std::getenv("DK2_METAL_SHADOWS") != nullptr;
+    gEnvScaleSet = std::getenv("DK2_RENDER_SCALE") != nullptr;
+}
+
+// Updates only the live-appliable atomics (and the dirty/restart flag); does
+// not touch the environment -- see composeRunnerEnv for that. hd_textures has
+// no env override (env-independent gating, per the settings plan) -- the
+// unrelated DK2_TEXTURE_HD env var only ever selects the HD directory path.
+void applyRendererLive(const Settings &s) {
+    if (!gEnvBloomSet) gBloomLive.store(s.bloom, std::memory_order_relaxed);
+    if (!gEnvShadowsSet) gShadowsLive.store(s.metalShadows, std::memory_order_relaxed);
+    gHdTexturesLive.store(s.hdTextures, std::memory_order_relaxed);
+    if (!gEnvScaleSet) {
+        gRenderScaleBits.store(floatBits(std::clamp(s.renderScale, 0.375f, 1.0f)),
+                               std::memory_order_relaxed);
+    }
+    {
+        std::lock_guard<std::mutex> lock(gMutex);
+        gSettings = s;
+        gRestartRequired.store(
+            s.shadowLevel != gLaunchSettings.shadowLevel ||
+            s.resolution != gLaunchSettings.resolution ||
+            s.movies != gLaunchSettings.movies ||
+            s.level != gLaunchSettings.level ||
+            s.meshGpuPath != gLaunchSettings.meshGpuPath ||
+            s.shadowCache != gLaunchSettings.shadowCache ||
+            s.debugProbes != gLaunchSettings.debugProbes ||
+            s.winedebug != gLaunchSettings.winedebug,
+            std::memory_order_relaxed);
+    }
+    if (gOnApplied) gOnApplied();
+}
+
+void setenvIfUnset(const char *name, const std::string &value) {
+    if (!std::getenv(name)) setenv(name, value.c_str(), 1);
+}
+
+// Composes the wine runner's environment from GAME/PATCHES/DEBUG settings.
+// Only called once, at startup, before the runner process is spawned --
+// game/patches/debug changes made later apply on next launch, per the
+// restart-required dirty flag. setenvIfUnset means anything already in the
+// environment (dev scripts' --runner-env, or a plain exported shell var)
+// keeps winning over settings.toml, matching the env-overrides-file rule.
+void composeRunnerEnv(const Settings &s) {
+    setenvIfUnset("DK2_SHADOW_LEVEL", std::to_string(s.shadowLevel));
+    setenvIfUnset("DK2_GAME_RES", s.resolution);
+    setenvIfUnset("DK2_LEVEL", s.level);
+    setenvIfUnset("DK2_WINEDEBUG", s.winedebug);
+    setenvIfUnset("DK2_MOVIES", s.movies ? "1" : "0");
+    std::ostringstream extra;
+    extra << "-flametal:MetalShadows=" << tomlBool(s.metalShadows)
+          << " -gog:MeshGpuPath=" << tomlBool(s.meshGpuPath)
+          << " -flametal:ShadowCache=" << tomlBool(s.shadowCache)
+          << " -flametal:DebugProbes=" << tomlBool(s.debugProbes);
+    setenvIfUnset("DK2_EXTRA_GAME_ARGS", extra.str());
+}
+
+// Dispatch-source file watcher (the plan's "FSEvents or dispatch source on
+// the file" -- a vnode source needs no extra framework and no run-loop
+// plumbing beyond the main queue the app already pumps). Re-opens on
+// delete/rename because the Preferences window's writer replaces the file
+// via a temp-file rename rather than editing it in place.
+dispatch_source_t gWatchSource;
+
+void armWatcher() {
+    if (gWatchSource) {
+        dispatch_source_cancel(gWatchSource);
+        gWatchSource = nil;
+    }
+    const int fd = open(settingsPath().fileSystemRepresentation, O_EVTONLY);
+    if (fd < 0) return;
+    dispatch_source_t source = dispatch_source_create(
+            DISPATCH_SOURCE_TYPE_VNODE, (uintptr_t)fd,
+            DISPATCH_VNODE_WRITE | DISPATCH_VNODE_DELETE | DISPATCH_VNODE_RENAME,
+            dispatch_get_main_queue());
+    if (!source) { close(fd); return; }
+    dispatch_source_set_cancel_handler(source, ^{ close(fd); });
+    dispatch_source_set_event_handler(source, ^{
+        const unsigned long flags = dispatch_source_get_data(source);
+        if (flags & (DISPATCH_VNODE_DELETE | DISPATCH_VNODE_RENAME)) {
+            // Preferences saves replace the file via temp-file rename, which
+            // orphans this fd's vnode -- close it and watch the new inode.
+            armWatcher();
+            return;
+        }
+        applyRendererLive(load());
+    });
+    gWatchSource = source;
+    dispatch_resume(source);
+}
+
+void startWatching() { armWatcher(); }
+
+}  // namespace dk2cfg
 
 // Texture dump mode: set DK2_TEXTURE_DUMP=1 (or =/abs/path) to write every
 // unique texture crossing the bridge as PNG, keyed by a content hash. The
@@ -380,6 +738,8 @@ NSString *directory() {
             dir = path;
         }
     });
+    // settings.toml [renderer] hd_textures, live-appliable, env-independent.
+    if (!dk2cfg::gHdTexturesLive.load(std::memory_order_relaxed)) return nil;
     return dir;
 }
 
@@ -558,6 +918,9 @@ NSString *gGameRunnerPath = nil;
 bool gStartFullscreen = false;
 bool gBridgeRequired = false;
 std::atomic<DK2MFileHeader *> gInputHeader{nullptr};
+// Set once in -applicationDidFinishLaunching:; lets dk2cfg::gOnApplied re-
+// request layout (drawable size) after a live render_scale change.
+DK2MetalView *gMetalView = nil;
 
 void publishInputState(const DK2MInputState &state) {
     DK2MFileHeader *header = gInputHeader.load(std::memory_order_acquire);
@@ -909,14 +1272,10 @@ constexpr uint32_t kD3DRenderStateTextureFactor = 60;
 static_assert(sizeof(DrawUniform) == 148);
 
 // Subtle bloom on lava/fire/torches: threshold-extract bright pixels, blur at
-// half resolution, add back at low intensity. On by default; DK2_BLOOM=0
-// disables it and restores the original direct-to-drawable resolve exactly.
+// half resolution, add back at low intensity. Backed by settings.toml
+// [renderer] bloom (live-appliable); DK2_BLOOM=0/1 pins it for the process.
 bool dk2BloomEnabled() {
-    static const bool enabled = [] {
-        const char *env = std::getenv("DK2_BLOOM");
-        return !env || std::strcmp(env, "0") != 0;
-    }();
-    return enabled;
+    return dk2cfg::gBloomLive.load(std::memory_order_relaxed);
 }
 
 // --- world-space mesh pipeline (protocol v9) ---
@@ -957,12 +1316,10 @@ constexpr uint32_t kWorldGeometryShadowBit = 1u << 5;
 // rasterized top-down into a small R8Unorm coverage texture covering this
 // frame's caster AABB (+2 world units), then sampled back in dk2_fragment to
 // darken depth-tested world geometry below the casters' ground contact.
+// Backed by settings.toml [renderer] metal_shadows (live-appliable);
+// DK2_METAL_SHADOWS=0/1 pins it for the process.
 bool dk2ShadowsEnabled() {
-    static const bool enabled = [] {
-        const char *env = std::getenv("DK2_METAL_SHADOWS");
-        return !env || std::strcmp(env, "0") != 0;
-    }();
-    return enabled;
+    return dk2cfg::gShadowsLive.load(std::memory_order_relaxed);
 }
 
 // Relative factor of the display's full Retina backing size (i.e.
@@ -978,18 +1335,10 @@ bool dk2ShadowsEnabled() {
 // 2x Retina displays, where it canceled out to 1.0x the backing size, but on
 // 1x external displays (backingScaleFactor 1) it left a factor of 2.0
 // uncanceled, silently rendering at 2x the display's native pixel count.
+// Backed by settings.toml [renderer] render_scale (live-appliable, re-
+// requests the drawable size on change); DK2_RENDER_SCALE pins it.
 float dk2RenderScale() {
-    static const float scale = [] {
-        const char *env = std::getenv("DK2_RENDER_SCALE");
-        float value = 1.0f;
-        if (env) {
-            char *end = nullptr;
-            const float parsed = std::strtof(env, &end);
-            if (end != env && parsed > 0.0f) value = parsed;
-        }
-        return std::clamp(value, 0.375f, 1.0f);
-    }();
-    return scale;
+    return dk2cfg::bitsFloat(dk2cfg::gRenderScaleBits.load(std::memory_order_relaxed));
 }
 
 // Which world axis direction is "up" is not yet settled against the game
@@ -1729,7 +2078,10 @@ bool inputLogEnabled() {
         return nil;
     }
 
-    if (dk2ShadowsEnabled()) {
+    {
+        // Always created regardless of the current metal_shadows setting, so
+        // toggling it back on live (settings.toml/Preferences) does not need
+        // a renderer re-init -- dk2ShadowsEnabled() gates usage, not setup.
         id<MTLFunction> shadowVertexFunction = [library newFunctionWithName:@"dk2_shadow_vertex"];
         id<MTLFunction> shadowFragmentFunction = [library newFunctionWithName:@"dk2_shadow_fragment"];
         MTLRenderPipelineDescriptor *shadowPipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
@@ -1748,13 +2100,12 @@ bool inputLogEnabled() {
             NSLog(@"WARNING: Metal shadow pipeline setup failed (%@); continuing with shadows disabled.",
                   error.localizedDescription ?: @"shadow function(s) missing from DK2Shaders.metallib");
         } else {
-            NSLog(@"DK2 shadows: enabled (coverage=%lux%lu darken=%.2f upSign=%.0f); "
-                  "set DK2_METAL_SHADOWS=0 to disable.",
+            NSLog(@"DK2 shadows: pipeline ready, currently %s (coverage=%lux%lu darken=%.2f "
+                  "upSign=%.0f); settings.toml [renderer] metal_shadows, or DK2_METAL_SHADOWS=0/1.",
+                  dk2ShadowsEnabled() ? "enabled" : "disabled",
                   (unsigned long)kShadowCoverageSize, (unsigned long)kShadowCoverageSize,
                   kShadowDarkenStrength, dk2ShadowUpSign());
         }
-    } else {
-        _shadowsAvailable = NO;
     }
 
     for (uint32_t function = 1; function <= 8; ++function) {
@@ -1780,7 +2131,9 @@ bool inputLogEnabled() {
     samplerDescriptor.supportArgumentBuffers = YES;
     _sampler = [_device newSamplerStateWithDescriptor:samplerDescriptor];
 
-    if (dk2BloomEnabled()) {
+    {
+        // Always created regardless of the current bloom setting (see the
+        // shadow pipeline above for why): dk2BloomEnabled() gates usage.
         // Clamp (not repeat) so the fullscreen bloom passes never sample
         // across the opposite screen edge near the border.
         MTLSamplerDescriptor *bloomSamplerDescriptor = [[MTLSamplerDescriptor alloc] init];
@@ -1840,7 +2193,9 @@ bool inputLogEnabled() {
             // Threshold/intensity are literal constants in DK2Shaders.metal
             // (kDK2BloomThreshold/kDK2BloomIntensity) - kept in sync here as
             // a comment only, this is just a startup confirmation log.
-            NSLog(@"DK2 bloom: enabled (threshold=0.70 intensity=0.35); set DK2_BLOOM=0 to disable.");
+            NSLog(@"DK2 bloom: pipeline ready, currently %s (threshold=0.70 intensity=0.35); "
+                  "settings.toml [renderer] bloom, or DK2_BLOOM=0/1.",
+                  dk2BloomEnabled() ? "enabled" : "disabled");
         }
     }
 
@@ -2104,7 +2459,10 @@ bool inputLogEnabled() {
     // added to _resources (an MTLResidencySet manages residency of actual
     // memory allocations - there is nothing here for it to make resident).
 
-    if (dk2BloomEnabled() && _bloomAvailable) {
+    // Allocated whenever the pipeline exists, independent of the current
+    // bloom setting, so toggling bloom on live (without a resize) has a
+    // target ready: dk2BloomEnabled() gates only per-frame usage below.
+    if (_bloomAvailable) {
         MTLTextureDescriptor *sceneDescriptor = [MTLTextureDescriptor
             texture2DDescriptorWithPixelFormat:_layer.pixelFormat
                                         width:width height:height mipmapped:NO];
@@ -3365,6 +3723,249 @@ static void *renderWorker(void *context) {
 
 @end
 
+// Native AppKit Preferences window (Cmd-,): the only editor for settings.toml
+// besides hand-editing the file. Every control saves immediately (single
+// writer func, atomic replace) -- there is no separate "Apply"/"OK", matching
+// the file being the primary source of truth. [renderer] controls apply live;
+// everything else is marked "restart required" and only takes effect the
+// next time the game (not the host) launches.
+@interface DK2PreferencesWindowController : NSWindowController
++ (instancetype)shared;
+@end
+
+@implementation DK2PreferencesWindowController {
+    NSButton *_bloom;
+    NSButton *_metalShadows;
+    NSButton *_hdTextures;
+    NSButton *_movies;
+    NSButton *_meshGpuPath;
+    NSButton *_shadowCache;
+    NSButton *_debugProbes;
+    NSSlider *_renderScale;
+    NSTextField *_renderScaleLabel;
+    NSPopUpButton *_shadowLevel;
+    NSComboBox *_resolution;
+    NSTextField *_level;
+    NSTextField *_winedebug;
+}
+
++ (instancetype)shared {
+    static DK2PreferencesWindowController *instance;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ instance = [[DK2PreferencesWindowController alloc] init]; });
+    return instance;
+}
+
+- (instancetype)init {
+    NSRect frame = NSMakeRect(0, 0, 560, 560);
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:frame
+                                                    styleMask:NSWindowStyleMaskTitled |
+                                                              NSWindowStyleMaskClosable
+                                                      backing:NSBackingStoreBuffered
+                                                        defer:NO];
+    window.title = @"Dungeon Keeper II Preferences";
+    window.releasedWhenClosed = NO;
+    self = [super initWithWindow:window];
+    if (self) [self buildUI];
+    return self;
+}
+
+- (NSButton *)checkboxWithFrame:(NSRect)frame title:(NSString *)title checked:(BOOL)checked {
+    NSButton *box = [[NSButton alloc] initWithFrame:frame];
+    box.buttonType = NSButtonTypeSwitch;
+    box.title = title;
+    box.state = checked ? NSControlStateValueOn : NSControlStateValueOff;
+    box.target = self;
+    box.action = @selector(controlChanged:);
+    return box;
+}
+
+- (NSTextField *)labelWithFrame:(NSRect)frame text:(NSString *)text bold:(BOOL)bold {
+    NSTextField *field = [NSTextField labelWithString:text];
+    field.frame = frame;
+    if (bold) field.font = [NSFont boldSystemFontOfSize:13];
+    return field;
+}
+
+- (NSString *)percentString:(float)scale {
+    return [NSString stringWithFormat:@"%d%%", (int)std::lround(scale * 100.0f)];
+}
+
+- (void)buildUI {
+    dk2cfg::Settings s;
+    {
+        std::lock_guard<std::mutex> lock(dk2cfg::gMutex);
+        s = dk2cfg::gSettings;
+    }
+
+    NSView *container = [[NSView alloc] initWithFrame:self.window.contentView.bounds];
+    container.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+
+    const CGFloat labelX = 20, labelWidth = 150;
+    const CGFloat controlX = 180, controlWidth = 220;
+    const CGFloat hintX = 410, hintWidth = 130;
+    const CGFloat rowHeight = 24, rowGap = 10, headerGap = 30;
+    CGFloat y = container.bounds.size.height - 40;
+
+    auto addHeader = [&](NSString *title) {
+        y -= headerGap;
+        [container addSubview:[self labelWithFrame:NSMakeRect(labelX, y, 400, 20)
+                                               text:title bold:YES]];
+        y -= rowHeight + rowGap;
+    };
+    auto addHint = [&](CGFloat rowY) {
+        NSTextField *hint = [self labelWithFrame:NSMakeRect(hintX, rowY, hintWidth, rowHeight)
+                                             text:@"restart required" bold:NO];
+        hint.font = [NSFont systemFontOfSize:10];
+        hint.textColor = NSColor.secondaryLabelColor;
+        [container addSubview:hint];
+    };
+    auto addRowLabel = [&](NSString *title) {
+        [container addSubview:[self labelWithFrame:NSMakeRect(labelX, y, labelWidth, rowHeight)
+                                               text:title bold:NO]];
+    };
+
+    addHeader(@"Renderer (applies immediately)");
+    addRowLabel(@"Bloom");
+    _bloom = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
+                                title:@"" checked:s.bloom];
+    [container addSubview:_bloom];
+    y -= rowHeight + rowGap;
+
+    addRowLabel(@"Metal Shadows");
+    _metalShadows = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
+                                       title:@"" checked:s.metalShadows];
+    [container addSubview:_metalShadows];
+    y -= rowHeight + rowGap;
+
+    addRowLabel(@"HD Textures");
+    _hdTextures = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
+                                     title:@"" checked:s.hdTextures];
+    [container addSubview:_hdTextures];
+    y -= rowHeight + rowGap;
+
+    addRowLabel(@"Render Scale");
+    _renderScale = [NSSlider sliderWithValue:s.renderScale
+                                     minValue:0.375
+                                     maxValue:1.0
+                                       target:self
+                                       action:@selector(controlChanged:)];
+    _renderScale.frame = NSMakeRect(controlX, y, controlWidth - 56, rowHeight);
+    _renderScale.continuous = YES;
+    [container addSubview:_renderScale];
+    _renderScaleLabel = [self labelWithFrame:NSMakeRect(controlX + controlWidth - 48, y, 48, rowHeight)
+                                        text:[self percentString:s.renderScale] bold:NO];
+    [container addSubview:_renderScaleLabel];
+    y -= rowHeight + rowGap;
+
+    addHeader(@"Game");
+    addRowLabel(@"Shadow Level");
+    _shadowLevel = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(controlX, y, 80, rowHeight)
+                                               pullsDown:NO];
+    for (int i = 0; i <= 3; ++i) [_shadowLevel addItemWithTitle:[NSString stringWithFormat:@"%d", i]];
+    [_shadowLevel selectItemAtIndex:std::clamp(s.shadowLevel, 0, 3)];
+    _shadowLevel.target = self;
+    _shadowLevel.action = @selector(controlChanged:);
+    [container addSubview:_shadowLevel];
+    addHint(y);
+    y -= rowHeight + rowGap;
+
+    addRowLabel(@"Resolution");
+    _resolution = [[NSComboBox alloc] initWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)];
+    [_resolution addItemsWithObjectValues:@[@"1600x1200", @"1800x1200 (experimental, HUD gaps)"]];
+    _resolution.stringValue = @(s.resolution.c_str());
+    _resolution.target = self;
+    _resolution.action = @selector(controlChanged:);
+    [container addSubview:_resolution];
+    addHint(y);
+    y -= rowHeight + rowGap;
+
+    addRowLabel(@"Movies");
+    _movies = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
+                                 title:@"" checked:s.movies];
+    [container addSubview:_movies];
+    addHint(y);
+    y -= rowHeight + rowGap;
+
+    addRowLabel(@"Level");
+    _level = [[NSTextField alloc] initWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)];
+    _level.stringValue = @(s.level.c_str());
+    _level.placeholderString = @"empty = normal menu";
+    _level.target = self;
+    _level.action = @selector(controlChanged:);
+    [container addSubview:_level];
+    addHint(y);
+    y -= rowHeight + rowGap;
+
+    addHeader(@"Patches");
+    addRowLabel(@"Mesh GPU Path");
+    _meshGpuPath = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
+                                      title:@"" checked:s.meshGpuPath];
+    [container addSubview:_meshGpuPath];
+    addHint(y);
+    y -= rowHeight + rowGap;
+
+    addRowLabel(@"Shadow Cache");
+    _shadowCache = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
+                                      title:@"" checked:s.shadowCache];
+    [container addSubview:_shadowCache];
+    addHint(y);
+    y -= rowHeight + rowGap;
+
+    addRowLabel(@"Debug Probes");
+    _debugProbes = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
+                                      title:@"" checked:s.debugProbes];
+    [container addSubview:_debugProbes];
+    addHint(y);
+    y -= rowHeight + rowGap;
+
+    addHeader(@"Debug");
+    addRowLabel(@"WineDebug");
+    _winedebug = [[NSTextField alloc] initWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)];
+    _winedebug.stringValue = @(s.winedebug.c_str());
+    _winedebug.target = self;
+    _winedebug.action = @selector(controlChanged:);
+    [container addSubview:_winedebug];
+    addHint(y);
+    y -= rowHeight + rowGap;
+
+    self.window.contentView = container;
+}
+
+// Reads every control's current value (not just sender's) and saves the
+// whole settings.toml in one atomic write.
+- (void)controlChanged:(id)sender {
+    (void)sender;
+    dk2cfg::Settings s;
+    s.shadowLevel = (int)_shadowLevel.indexOfSelectedItem;
+    std::string resolution = _resolution.stringValue.UTF8String;
+    const size_t paren = resolution.find(" (");
+    if (paren != std::string::npos) resolution = resolution.substr(0, paren);
+    s.resolution = resolution;
+    s.movies = _movies.state == NSControlStateValueOn;
+    s.level = _level.stringValue.UTF8String;
+    s.bloom = _bloom.state == NSControlStateValueOn;
+    s.metalShadows = _metalShadows.state == NSControlStateValueOn;
+    s.renderScale = std::clamp((float)_renderScale.doubleValue, 0.375f, 1.0f);
+    s.hdTextures = _hdTextures.state == NSControlStateValueOn;
+    s.meshGpuPath = _meshGpuPath.state == NSControlStateValueOn;
+    s.shadowCache = _shadowCache.state == NSControlStateValueOn;
+    s.debugProbes = _debugProbes.state == NSControlStateValueOn;
+    s.winedebug = _winedebug.stringValue.UTF8String;
+
+    _renderScaleLabel.stringValue = [self percentString:s.renderScale];
+
+    if (!dk2cfg::writeAtomic(s)) {
+        NSLog(@"WARNING: failed to save settings.toml");
+    }
+    // Apply immediately rather than waiting on the file watcher's round trip
+    // through the filesystem; the watcher firing right after is a harmless
+    // no-op re-application of the same values.
+    dk2cfg::applyRendererLive(s);
+}
+
+@end
+
 @interface DK2AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @end
 
@@ -3468,6 +4069,15 @@ static void *renderWorker(void *context) {
     [NSApp activateIgnoringOtherApps:YES];
     [_view setInputActive:YES];
 
+    gMetalView = _view;
+    dk2cfg::gOnApplied = [] {
+        // render_scale changed; re-derive the drawable size without waiting
+        // for an unrelated window resize (bloom/shadows/hd_textures need no
+        // extra nudge, they are read fresh every frame/texture-upload).
+        if (gMetalView) dispatch_async(dispatch_get_main_queue(), ^{ [gMetalView setNeedsLayout:YES]; });
+    };
+    dk2cfg::startWatching();
+
     [self startBundledGameRunner];
 
     [_view layoutSubtreeIfNeeded];
@@ -3509,6 +4119,10 @@ static void *renderWorker(void *context) {
     NSMenuItem *applicationItem = [[NSMenuItem alloc] init];
     [bar addItem:applicationItem];
     NSMenu *applicationMenu = [[NSMenu alloc] init];
+    [applicationMenu addItemWithTitle:@"Settings…"
+                               action:@selector(openPreferences:)
+                        keyEquivalent:@","];
+    [applicationMenu addItem:[NSMenuItem separatorItem]];
     [applicationMenu addItemWithTitle:@"Quit Dungeon Keeper II"
                                action:@selector(terminate:)
                         keyEquivalent:@"q"];
@@ -3527,6 +4141,13 @@ static void *renderWorker(void *context) {
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
     (void)sender;
     return YES;
+}
+
+- (void)openPreferences:(id)sender {
+    (void)sender;
+    [NSApp activateIgnoringOtherApps:YES];
+    [[DK2PreferencesWindowController shared] showWindow:nil];
+    [[[DK2PreferencesWindowController shared] window] makeKeyAndOrderFront:nil];
 }
 
 @end
@@ -3555,6 +4176,17 @@ int main(int argc, const char *argv[]) {
                            [pair substringFromIndex:eq.location + 1].UTF8String, 1);
                 }
             }
+        }
+
+        // settings.toml is the base; anything already in the environment at
+        // this point (inherited from the parent shell, or just set above via
+        // --runner-env=) wins over it on every key -- see dk2cfg::setenvIfUnset.
+        dk2cfg::initEnvOverrides();
+        {
+            const dk2cfg::Settings settings = dk2cfg::load();
+            dk2cfg::gLaunchSettings = settings;
+            dk2cfg::applyRendererLive(settings);
+            dk2cfg::composeRunnerEnv(settings);
         }
 
         // Single-instance guard: a second launch against the same prefix

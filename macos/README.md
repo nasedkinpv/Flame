@@ -24,8 +24,8 @@ Two rendering paths coexist over the same bridge:
   vertex shader then performs projection and DK2's exact per-vertex point-light
   accumulation, replacing the original engine's per-vertex CPU loop. The first
   rerouted emitter is the deformed/dynamic mesh family (`sub_57B6D0`); enable it
-  with `MeshGpuPath = true` in the `[gog]` section of `flametal/config.toml` for
-  A/B testing. The camera matrix is assembled in closed form from the same
+  with `mesh_gpu_path = true` in `settings.toml` (`[patches]` section, see
+  Settings below) for A/B testing. The camera matrix is assembled in closed form from the same
   globals the original projection uses, so GPU output lands in the same clip
   space as legacy draws and z-testing orders the two paths correctly.
 
@@ -33,10 +33,78 @@ Current verdict (2026-07-21 A/B on Level1): the legacy path is both faster
 (~51 ms vs ~59 ms frame interval, half the host GPU time) and visually
 correct, because the SSE2-translated CPU transform is already cheap and the
 mesh path pays per-object feeding costs (texture resolve, light-set unioning,
-vertex copies, ~1300 small draws) every frame. `MeshGpuPath` therefore stays
-off by default; the mesh path becomes worthwhile once static geometry is
-registered once (`MESH_REGISTER` + per-frame `DRAW_MESH` transforms) instead
-of re-crossing the bridge inline every frame.
+vertex copies, ~1300 small draws) every frame. `mesh_gpu_path` therefore stays
+off by default (see Settings below); the mesh path becomes worthwhile once
+static geometry is registered once (`MESH_REGISTER` + per-frame `DRAW_MESH`
+transforms) instead of re-crossing the bridge inline every frame.
+
+## Settings
+
+`~/Library/Application Support/Dungeon Keeper II/settings.toml` is the one
+user-facing config file: OS-neutral, hand-editable, and parsed with
+[toml11](https://github.com/ToruNiina/toml11) (header-only, vendored at
+`libs/Toml11-4.4.0`). It's created with commented defaults the first time the
+host runs, migrating `MetalShadows`/`ShadowCache`/`DebugProbes`/`MeshGpuPath`
+out of the prefix's `flametal/config.toml` if that already exists from an
+older build. From then on, that prefix config is host-generated CLI passthrough
+plumbing, not something players edit.
+
+```toml
+[game]
+shadow_level = 3       # 0 (off) - 3 (full detail, cached silhouettes)
+resolution = "1600x1200"  # widescreen (e.g. 1800x1200) is experimental: the
+                           # HUD lays out for 4:3 and shows black gaps beside
+                           # the bottom toolbar at wider aspects
+movies = false
+level = ""              # non-empty skips the normal menu and loads this level
+
+[renderer]              # all four keys apply live, no restart needed
+bloom = true
+metal_shadows = true
+render_scale = 1.0       # fraction of the display's native backing resolution, 0.375-1.0
+hd_textures = true
+
+[patches]                # applied on next launch, passed to the game as
+mesh_gpu_path = false     # -gog:MeshGpuPath=/-flametal:ShadowCache=/
+shadow_cache = true       # -flametal:DebugProbes= CLI flags
+debug_probes = false
+
+[debug]
+winedebug = "-all"
+```
+
+Edit the file directly, or open **Settings…** (Cmd-,) in the game host for a
+native AppKit editor over the same file — every control saves immediately
+(single atomic-replace writer), there is no separate Apply/OK step. `[renderer]`
+controls are marked as applying immediately in the window; everything else is
+marked "restart required" since it only takes effect the next time the game
+(not the host) launches, and the window keeps that in mind rather than
+pretending a live in-place change happened.
+
+The host watches the file (a `DISPATCH_SOURCE_TYPE_VNODE` source, re-armed
+across the atomic-replace renames a save performs) and live-applies bloom,
+metal_shadows, render_scale and hd_textures the moment the file changes,
+whether edited by hand or through Settings.
+
+**Env overrides are a debug-only layer**, documented here once instead of
+scattered across the source: any `DK2_*` variable already present in the
+environment when the host starts wins over the matching settings.toml key,
+on every key the host manages. This exists for quick one-off profiling
+without touching the config file, not for regular use:
+
+- `DK2_BLOOM`, `DK2_METAL_SHADOWS`, `DK2_RENDER_SCALE` — pin a `[renderer]`
+  value for the process; the file (and Settings window) stop reaching it.
+- `DK2_SHADOW_LEVEL`, `DK2_GAME_RES`, `DK2_LEVEL`, `DK2_WINEDEBUG`, `DK2_MOVIES`,
+  `DK2_EXTRA_GAME_ARGS` — the same environment the host composes for
+  `dk2-runner.zsh` from `[game]`/`[patches]`/`[debug]`; set any of these
+  before launching (or export them in a dev shell) to override that one key.
+- `DK2_TEXTURE_HD` selects the HD texture directory (default
+  `.../Dungeon Keeper II/textures-hd`) — unrelated to the `hd_textures`
+  on/off toggle, which has no env override (settings.toml always governs it).
+- `DK2_METAL_SHADOW_UP_SIGN`, `DK2_METAL_INPUT_LOG`, `DK2_MESH_DEBUG`,
+  `DK2_MESH_NO_TEXTURE`, `DK2_TEXTURE_DUMP`, `DK2_METAL_HUD`, `DK2_FULLSCREEN`
+  remain plain debug/dev knobs with no settings.toml equivalent — see their
+  definitions in `macos/native/DK2Metal.mm` and `macos/run-metal-game.zsh`.
 
 ## Build and run
 
@@ -69,10 +137,10 @@ The first public importer intentionally accepts an already installed original
 GOG copy. Automating the GOG offline installer is kept separate so the normal
 launch path does not depend on a particular third-party installer version.
 
-The Metal launcher defaults to DK2 shadow level 3. The bounds-safe Flametal
-rasterizer keeps the original dynamic-shadow mode from writing outside its
-32x32 coverage surface. Set `DK2_SHADOW_LEVEL=0`, `1`, or `2` before launching
-to select a cheaper mode when profiling older hardware.
+The Metal launcher defaults to DK2 shadow level 3 (`settings.toml` [game]
+`shadow_level`). The bounds-safe Flametal rasterizer keeps the original
+dynamic-shadow mode from writing outside its 32x32 coverage surface. Set it to
+`0`, `1`, or `2` for a cheaper mode when profiling older hardware.
 
 The packaging script pins Wine 11 and verifies its SHA-256 checksum. Maintainer
 builds take the matching Release Flametal payload from the CI cache; set
@@ -90,8 +158,11 @@ mode: first-run import flow, Flametal payload sync, and error dialogs via
 `macos/dk2-wine-runner.zsh` still exists as a deprecated one-line shim that
 execs `dk2-runner.zsh`, so old muscle-memory invocations keep working.
 
-Env overrides (both modes): `DK2_LEVEL`, `DK2_SHADOW_LEVEL`, `DK2_GAME_RES`,
-`DK2_WINE_BIN`, `DK2_METAL_PREFIX`, `DK2_WINEDEBUG`.
+The host composes this script's environment from `settings.toml` before
+spawning it (see Settings above): `DK2_LEVEL`, `DK2_SHADOW_LEVEL`,
+`DK2_GAME_RES`, `DK2_WINEDEBUG`, `DK2_MOVIES`, `DK2_EXTRA_GAME_ARGS`.
+`DK2_WINE_BIN`/`DK2_METAL_PREFIX` are dev-flow-only path overrides with no
+settings.toml equivalent.
 
 The removed `macos/build-wrapper.zsh` and `macos/dk2-flametal.zsh` (and the
 `macos/Info.plist` that only they used) were the legacy single-executable,

@@ -41,6 +41,7 @@ readonly SIGNING_IDENTITY="${DK2_CODESIGN_IDENTITY:--}"
   -framework Metal \
   -framework QuartzCore \
   -I "${REPO_ROOT}/src/gog_patch_dll" \
+  -I "${REPO_ROOT}/libs/Toml11-4.4.0" \
   "${SOURCE}" \
   -o "${EXECUTABLE}"
 

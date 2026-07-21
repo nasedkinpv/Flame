@@ -45,6 +45,7 @@ KNOBS = {
     "DK2_WINEDEBUG":            {"surface": "settings", "note": "debug.winedebug"},
     # plumbing
     "DK2_EXTRA_GAME_ARGS":      {"surface": "internal", "note": "host->runner arg channel"},
+    "DK2_MOVIES":               {"surface": "settings", "note": "game.movies"},
     "DK2_WINE_BIN":             {"surface": "debug-env", "note": "alternate wine build"},
     "DK2_METAL_PREFIX":         {"surface": "debug-env", "note": "alternate prefix"},
     "DK2_METAL_BRIDGE_FILE":    {"surface": "internal", "note": "bridge path, set by host"},
