@@ -538,7 +538,8 @@ int copyEntryGuarded(const MeshEntry &entry, uint32_t indexCount,
 // for this very scene object, so reading them here matches writeVertex1C.
 bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                     dk2::MyScaledSurface *surface,
-                    const dk2::Vec3f &ambient, uint32_t *lightData) {
+                    const dk2::Vec3f &ambient, uint32_t *lightData,
+                    dk2::Obj58EF60 *sampler = nullptr) {
     if (!entry.triangleCount || !entry.vertices || !entry.triangleIndices) return false;
     const uint32_t indexCount = static_cast<uint32_t>(entry.triangleCount) * 3u;
     // uint8 indices bound both buffers: at most 256 vertices, 255*3 indices
@@ -588,6 +589,18 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                             entry.vertices, entry.triangleIndices);
         }
         return false;
+    }
+    if (sampler) {
+        // extended path: vector-field displacement stays on the CPU, exactly
+        // as the legacy emitter samples it before transforming
+        for (uint32_t v = 0; v < vertexCount; ++v) {
+            dk2::Vec3f displaced;
+            sampler->sub_58F030(vertices[v].px, vertices[v].py, vertices[v].pz,
+                                &displaced.x);
+            vertices[v].px = displaced.x;
+            vertices[v].py = displaced.y;
+            vertices[v].pz = displaced.z;
+        }
     }
     const uint32_t alphaTerm = *reinterpret_cast<const uint32_t *>(0x00779380);
     const uint32_t tint = (alphaTerm & 0xFF000000u) | 0x00FFFFFFu;
@@ -894,6 +907,10 @@ int *dk2::Obj57AD20::sub_57B0E0(
             vectorField,
             static_cast<float>(fieldOriginX - 1),
             static_cast<float>(fieldOriginY - 1)};
+    if (meshGpuActive() &&
+        drawEntryOnGpu(scene, entry, surface, ambient, lightData, &sampler)) {
+        return applyIndxs_sub_58AC20();
+    }
     Obj57BCB0 lights;
     lights.count = 0;
     lights.constructor(lightData, f2C);
