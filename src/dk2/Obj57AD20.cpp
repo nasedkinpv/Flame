@@ -397,6 +397,18 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyCESurfHandle *slotHandle,
     }
 }
 
+// SEH-guarded holder fetch for the resolve cache: creature/effect handles can
+// be a different subclass whose +holder_parent reads as a small-int garbage
+// pointer, and an unguarded read here crashed through WOW64 (7BF2123D).
+int readHolderGuarded(dk2::MyCESurfHandle *handle, const void **holderOut) {
+    __try {
+        *holderOut = handle->holder_parent;
+        return 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
     // positive cache: the guarded resolve chain + per-entry ensureTexture cost
     // ~microseconds across thousands of entries per frame, while the result
@@ -410,8 +422,14 @@ uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
         uint32_t lastEnsureFrame;
     };
     static ResolvedTexture cache[512];  // open-addressed, handle==nullptr empty
-    if (slotHandle) {
-        const void *holder = slotHandle->holder_parent;
+    // negative cache FIRST: a handle whose holder read faults must not fault
+    // again on every call - repeated recovered SEH faults crash WOW64 itself
+    static std::vector<const void *> badSurfaces;
+    for (const void *bad : badSurfaces) {
+        if (bad == slotHandle) return 0;
+    }
+    const void *holder = nullptr;
+    if (slotHandle && readHolderGuarded(slotHandle, &holder)) {
         uint32_t slot = (reinterpret_cast<uintptr_t>(slotHandle) >> 4) * 2654435761u & 511u;
         for (int probe = 0; probe < 8; ++probe, slot = (slot + 1) & 511u) {
             ResolvedTexture &hit = cache[slot];
@@ -426,10 +444,6 @@ uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
             }
             return hit.bridgeId;
         }
-    }
-    static std::vector<const void *> badSurfaces;
-    for (const void *bad : badSurfaces) {
-        if (bad == slotHandle) return 0;
     }
     uint32_t bridgeId = 0;
     void *bridgeSurface = nullptr;
@@ -457,16 +471,19 @@ uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
         // capture-only registration: never disturbs stage-0 binding state
         gog::metal_bridge::ensureTexture(
             bridgeId, static_cast<IDirectDrawSurface4 *>(bridgeSurface));
-        uint32_t slot = (reinterpret_cast<uintptr_t>(slotHandle) >> 4) * 2654435761u & 511u;
-        for (int probe = 0; probe < 8; ++probe, slot = (slot + 1) & 511u) {
-            ResolvedTexture &entry = cache[slot];
-            if (entry.handle && entry.handle != slotHandle) continue;
-            entry.handle = slotHandle;
-            entry.holder = slotHandle->holder_parent;
-            entry.bridgeId = bridgeId;
-            entry.bridgeSurface = bridgeSurface;
-            entry.lastEnsureFrame = gog::metal_bridge::frameCounter();
-            break;
+        const void *storeHolder = nullptr;
+        if (readHolderGuarded(slotHandle, &storeHolder)) {
+            uint32_t slot = (reinterpret_cast<uintptr_t>(slotHandle) >> 4) * 2654435761u & 511u;
+            for (int probe = 0; probe < 8; ++probe, slot = (slot + 1) & 511u) {
+                ResolvedTexture &entry = cache[slot];
+                if (entry.handle && entry.handle != slotHandle) continue;
+                entry.handle = slotHandle;
+                entry.holder = storeHolder;
+                entry.bridgeId = bridgeId;
+                entry.bridgeSurface = bridgeSurface;
+                entry.lastEnsureFrame = gog::metal_bridge::frameCounter();
+                break;
+            }
         }
         return bridgeId;
     }
