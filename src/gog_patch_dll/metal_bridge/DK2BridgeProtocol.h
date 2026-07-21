@@ -45,6 +45,10 @@ enum DK2MDrawMeshFlags {
     DK2M_DRAW_MESH_ALPHA_BLEND = 1u << 1,  // SRCALPHA/INVSRCALPHA blend
     DK2M_DRAW_MESH_ADDITIVE = 1u << 2,     // ONE/ONE additive blend
     DK2M_DRAW_MESH_ALPHA_TEST = 1u << 3,   // discard texels below the ref, rest opaque
+    // Shadow caster: the mesh is rendered ONLY into the host's top-down
+    // shadow coverage map, never into the visible scene. World-space
+    // vertices as usual; texture/tint/lights ignored.
+    DK2M_DRAW_MESH_SHADOW_CASTER = 1u << 4,
 };
 
 enum DK2MInputFlags {
