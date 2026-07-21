@@ -302,12 +302,26 @@ void initEnvOverrides() {
 // no env override (env-independent gating, per the settings plan) -- the
 // unrelated DK2_TEXTURE_HD env var only ever selects the HD directory path.
 void applyRendererLive(const Settings &s) {
-    if (!gEnvBloomSet) gBloomLive.store(s.bloom, std::memory_order_relaxed);
-    if (!gEnvShadowsSet) gShadowsLive.store(s.metalShadows, std::memory_order_relaxed);
-    gHdTexturesLive.store(s.hdTextures, std::memory_order_relaxed);
+    // One-time transition logs so a live toggle is verifiable in the log
+    // without guessing whether the frame-time check ever saw the change.
+    if (!gEnvBloomSet) {
+        const bool was = gBloomLive.exchange(s.bloom, std::memory_order_relaxed);
+        if (was != s.bloom) NSLog(@"DK2 settings: bloom -> %s", s.bloom ? "on" : "off");
+    }
+    if (!gEnvShadowsSet) {
+        const bool was = gShadowsLive.exchange(s.metalShadows, std::memory_order_relaxed);
+        if (was != s.metalShadows) NSLog(@"DK2 settings: metal_shadows -> %s", s.metalShadows ? "on" : "off");
+    }
+    {
+        const bool was = gHdTexturesLive.exchange(s.hdTextures, std::memory_order_relaxed);
+        if (was != s.hdTextures) NSLog(@"DK2 settings: hd_textures -> %s", s.hdTextures ? "on" : "off");
+    }
     if (!gEnvScaleSet) {
-        gRenderScaleBits.store(floatBits(std::clamp(s.renderScale, 0.375f, 1.0f)),
-                               std::memory_order_relaxed);
+        const float clamped = std::clamp(s.renderScale, 0.375f, 1.0f);
+        const uint32_t was = gRenderScaleBits.exchange(floatBits(clamped), std::memory_order_relaxed);
+        if (was != floatBits(clamped)) {
+            NSLog(@"DK2 settings: render_scale -> %.3f", (double)clamped);
+        }
     }
     {
         std::lock_guard<std::mutex> lock(gMutex);
@@ -335,7 +349,8 @@ void setenvIfUnset(const char *name, const std::string &value) {
 // game/patches/debug changes made later apply on next launch, per the
 // restart-required dirty flag. setenvIfUnset means anything already in the
 // environment (dev scripts' --runner-env, or a plain exported shell var)
-// keeps winning over settings.toml, matching the env-overrides-file rule.
+// keeps winning over settings.toml, matching the env-overrides-file rule --
+// EXCEPT DK2_EXTRA_GAME_ARGS (see below).
 void composeRunnerEnv(const Settings &s) {
     setenvIfUnset("DK2_SHADOW_LEVEL", std::to_string(s.shadowLevel));
     setenvIfUnset("DK2_GAME_RES", s.resolution);
@@ -347,7 +362,16 @@ void composeRunnerEnv(const Settings &s) {
           << " -gog:MeshGpuPath=" << tomlBool(s.meshGpuPath)
           << " -flametal:ShadowCache=" << tomlBool(s.shadowCache)
           << " -flametal:DebugProbes=" << tomlBool(s.debugProbes);
-    setenvIfUnset("DK2_EXTRA_GAME_ARGS", extra.str());
+    // Unlike the vars above, DK2_EXTRA_GAME_ARGS is not itself a documented
+    // debug override -- it is this function's own output, an internal pipe
+    // from host process to runner script. setenvIfUnset here would let a
+    // value exported in a earlier/unrelated shell session (or left over from
+    // a previous run in the same terminal) silently outlive the settings it
+    // was built from, e.g. reporting -flametal:MetalShadows=false forever
+    // after one test run exported that, even once settings.toml and the
+    // prefix config both agree it should be true. Always overwrite.
+    setenv("DK2_EXTRA_GAME_ARGS", extra.str().c_str(), 1);
+    NSLog(@"DK2 settings: DK2_EXTRA_GAME_ARGS = %s", extra.str().c_str());
 }
 
 // Dispatch-source file watcher (the plan's "FSEvents or dispatch source on
@@ -724,23 +748,42 @@ void dump(const uint8_t *pixels, uint32_t width, uint32_t height, uint32_t pitch
 // missing or deleted file silently falls back to the original pixels.
 namespace texhd {
 
-NSString *directory() {
-    static NSString *dir = nil;
+// The candidate path (env override or the default under Application Support)
+// never changes at runtime, so dispatch_once for that part is fine; but
+// whether that path currently EXISTS is re-checked on every call rather than
+// cached once. It used to be dispatch_once'd together with the existence
+// check, which meant: (a) toggling hd_textures off then on again in the
+// Preferences window couldn't be undone if the directory hadn't existed at
+// the very first lookup (this cached a permanent nil, live flag or not), and
+// (b) a directory created after the game started (e.g. the user drops HD
+// textures in mid-session) was never picked up. Re-stat'ing here only costs
+// anything on the relatively rare path where a texture update triggers a
+// lookup, not per frame.
+NSString *candidatePath() {
+    static NSString *path = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         const char *env = std::getenv("DK2_TEXTURE_HD");
-        NSString *path = (env && *env)
+        path = (env && *env)
                 ? @(env)
                 : [NSHomeDirectory() stringByAppendingPathComponent:
                           @"Library/Application Support/Dungeon Keeper II/textures-hd"];
-        BOOL isDir = NO;
-        if ([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDir] && isDir) {
-            dir = path;
-        }
     });
+    return path;
+}
+
+NSString *directory() {
     // settings.toml [renderer] hd_textures, live-appliable, env-independent.
+    // Toggling this off does not retroactively evict already-loaded HD
+    // textures (see the LRU eviction in lookup() below) -- only newly
+    // requested/reloaded pages are affected, converging as the LRU turns over.
     if (!dk2cfg::gHdTexturesLive.load(std::memory_order_relaxed)) return nil;
-    return dir;
+    NSString *path = candidatePath();
+    BOOL isDir = NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDir] || !isDir) {
+        return nil;
+    }
+    return path;
 }
 
 // CPU box-filter mip chain for an already-created mipmapped texture whose
@@ -3757,14 +3800,19 @@ static void *renderWorker(void *context) {
 }
 
 - (instancetype)init {
-    NSRect frame = NSMakeRect(0, 0, 560, 560);
+    NSRect frame = NSMakeRect(0, 0, 560, 520);
     NSWindow *window = [[NSWindow alloc] initWithContentRect:frame
                                                     styleMask:NSWindowStyleMaskTitled |
-                                                              NSWindowStyleMaskClosable
+                                                              NSWindowStyleMaskClosable |
+                                                              NSWindowStyleMaskResizable
                                                       backing:NSBackingStoreBuffered
                                                         defer:NO];
     window.title = @"Dungeon Keeper II Preferences";
     window.releasedWhenClosed = NO;
+    // Content (4 section headers + 12 rows) is taller than any reasonable
+    // fixed window, so this is a floor, not the real size -- see buildUI's
+    // NSScrollView.
+    window.minSize = NSMakeSize(560, 280);
     self = [super initWithWindow:window];
     if (self) [self buildUI];
     return self;
@@ -3798,14 +3846,25 @@ static void *renderWorker(void *context) {
         s = dk2cfg::gSettings;
     }
 
-    NSView *container = [[NSView alloc] initWithFrame:self.window.contentView.bounds];
-    container.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-
+    // The content (4 section headers + 12 rows) is reliably taller than any
+    // reasonable fixed window -- this was previously sized to the window's
+    // own bounds, which silently clipped the bottom rows (Shadow Cache,
+    // Debug Probes, WineDebug) with no way to reach them. Compute the real
+    // content height up front and put it in a scroll view instead.
     const CGFloat labelX = 20, labelWidth = 150;
     const CGFloat controlX = 180, controlWidth = 220;
     const CGFloat hintX = 410, hintWidth = 130;
     const CGFloat rowHeight = 24, rowGap = 10, headerGap = 30;
-    CGFloat y = container.bounds.size.height - 40;
+    const CGFloat topMargin = 40, bottomMargin = 20;
+    const int headerCount = 4;   // Renderer, Game, Patches, Debug
+    const int rowCount = 12;     // 4 + 4 + 3 + 1
+    const CGFloat contentWidth = 560;
+    const CGFloat contentHeight = topMargin + bottomMargin +
+        headerCount * (headerGap + rowHeight + rowGap) +
+        rowCount * (rowHeight + rowGap);
+
+    NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, contentWidth, contentHeight)];
+    CGFloat y = contentHeight - topMargin;
 
     auto addHeader = [&](NSString *title) {
         y -= headerGap;
@@ -3929,7 +3988,14 @@ static void *renderWorker(void *context) {
     addHint(y);
     y -= rowHeight + rowGap;
 
-    self.window.contentView = container;
+    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:self.window.contentView.bounds];
+    scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    scrollView.hasVerticalScroller = YES;
+    scrollView.hasHorizontalScroller = NO;
+    scrollView.autohidesScrollers = YES;
+    scrollView.drawsBackground = NO;
+    scrollView.documentView = container;
+    self.window.contentView = scrollView;
 }
 
 // Reads every control's current value (not just sender's) and saves the

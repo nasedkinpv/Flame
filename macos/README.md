@@ -84,7 +84,11 @@ pretending a live in-place change happened.
 The host watches the file (a `DISPATCH_SOURCE_TYPE_VNODE` source, re-armed
 across the atomic-replace renames a save performs) and live-applies bloom,
 metal_shadows, render_scale and hd_textures the moment the file changes,
-whether edited by hand or through Settings.
+whether edited by hand or through Settings. Toggling `hd_textures` off does
+not retroactively evict HD textures already resident on the GPU; only newly
+loaded/reloaded texture pages are affected from that point on, so the effect
+converges as the existing LRU cache (`textures-hd` lookup) turns over rather
+than applying to every visible pixel instantly.
 
 **Env overrides are a debug-only layer**, documented here once instead of
 scattered across the source: any `DK2_*` variable already present in the
