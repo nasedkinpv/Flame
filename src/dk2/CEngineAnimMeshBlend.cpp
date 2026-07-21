@@ -296,7 +296,7 @@ void processVertex(
     const BlendVertexShading shading =
             computeBlendVertexShading(f10_matrix, field_4, position, *vertex);
 
-    const dk2::Vec3f lightPosition{
+    dk2::Vec3f lightPosition{
             position.x - pivot.x,
             position.y - pivot.y,
             position.z - pivot.z};
