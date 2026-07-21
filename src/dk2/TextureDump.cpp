@@ -22,10 +22,17 @@
 // previous host-side hash-named dump (macos/native/DK2Metal.mm) captured --
 // after atlas compositing, hence its "collage" pages and content-hash names.
 // Hooking here instead lets us dump one clean, named PNG per resource.
+// Update: the "silhouette" 8bpp output traced back to the bytesPerPixel==1
+// branch of convertToRgba8() below treating the byte as a raw grey level.
+// DK2's 8-bit surfaces are palette-indexed against the single shared
+// DirectDraw palette (dk2::g_paletteEntries, see dk2/engine/window_functions.cpp
+// updatePalette()/dk2dd_updatePalette_devTexture and ddraw_functions.cpp's
+// d_ge_dk2dd_init), not greyscale -- resolved below via that global.
 #include "dk2/TextureDump.h"
 
 #include "dk2/MySurface.h"
 #include "dk2/MySurfDesc.h"
+#include "dk2_globals.h"
 #include "patches/logging.h"
 #include "tools/flametal_config.h"
 
@@ -148,13 +155,15 @@ bool convertToRgba8(const dk2::MySurface *surf, std::vector<uint8_t> &out) {
         uint8_t *dst = &out[static_cast<size_t>(y) * w * 4];
         for (int32_t x = 0; x < w; ++x, px += bytesPerPixel, dst += 4) {
             uint32_t packed = loadPackedPixel(px, bytesPerPixel);
-            // 8bpp with no color masks is a palette index we can't resolve
-            // here without the surface's palette (not carried by MySurface);
-            // treat it as an 8-bit alpha/grey plane like MySurface_blend8bit
-            // does for the alpha-only case, otherwise fall back to grey.
+            // 8bpp surfaces are palette-indexed against the single shared
+            // DirectDraw palette (dk2::g_paletteEntries), not grey levels --
+            // resolving through it is what turns these from silhouettes into
+            // real colors.
             if (bytesPerPixel == 1) {
-                uint8_t v = static_cast<uint8_t>(packed & 0xFF);
-                dst[0] = dst[1] = dst[2] = v;
+                const tagPALETTEENTRY &pe = dk2::g_paletteEntries[packed & 0xFF];
+                dst[0] = pe.peRed;
+                dst[1] = pe.peGreen;
+                dst[2] = pe.peBlue;
                 dst[3] = 0xFF;
                 continue;
             }
@@ -170,6 +179,13 @@ bool convertToRgba8(const dk2::MySurface *surf, std::vector<uint8_t> &out) {
 std::unordered_set<std::string> &dumpedNames() {
     static std::unordered_set<std::string> names;
     return names;
+}
+
+// See setCompositeSourceName() in the header for why this exists: compressed
+// (world/terrain/creature/room) surfaces have no name of their own.
+const char *&compositeSourceNameSlot() {
+    static const char *name = nullptr;
+    return name;
 }
 
 // Resolved once; empty string means the feature stays off for the process.
@@ -216,6 +232,19 @@ void onDecodedSurface(const char *name, const dk2::MySurface *surf) {
                 lodepng_error_text(err));
     }
     names.insert(std::move(key));
+}
+
+void setCompositeSourceName(const char *name) {
+    // Cheap even when the feature is off (a pointer store); keeping this
+    // unconditional avoids a second option check at every call site and
+    // matches how trivial the cost is.
+    compositeSourceNameSlot() = name;
+}
+
+void onCompositedSurfaceDecoded(const dk2::MySurface *surf) {
+    const std::string &dir = resolvedDir();
+    if (dir.empty()) return;  // feature off: single string check, no further cost
+    onDecodedSurface(compositeSourceNameSlot(), surf);
 }
 
 }  // namespace patch::texture_dump

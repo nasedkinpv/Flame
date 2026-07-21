@@ -99,7 +99,12 @@ void dk2::MyCESurfHandle::loadPrescaled() {
         }
         CEngineSurfaceScaler_instance.prescaleWigth = f0_cesurf->width;
         CEngineSurfaceScaler_instance.prescaleHeight = f0_cesurf->height;
+        // f0_cesurf may be a CEngineCompressedSurface (world/terrain/creature
+        // texture) that only gets decoded here, inside copySurf(); give it
+        // the name of the handle it came from (see TextureDump.h).
+        patch::texture_dump::setCompositeSourceName(surfName);
         ((CEngineSurfaceBase *) CEngineSurfaceScaler_instance.orig_128x128_8a8r8g8b)->paintSurf(f0_cesurf, 0, 0);
+        patch::texture_dump::setCompositeSourceName(nullptr);
         CEngineSurfaceScaler_instance.isScaled = 0;
         f4_value->reductionLevel_andFlags &= ~0x200u;
     } else {
@@ -230,8 +235,8 @@ dk2::MyCESurfHandle *dk2::MyCESurfHandle::paint(MySurface *surf, char computeCrc
     // source surface for this handle's resource name, the narrowest point
     // where both are available together (see TextureDump.cpp for why here).
     // No-op unless flametal:TextureDump is set.
-    patch::texture_dump::onDecodedSurface(
-            MyStringHashMap_MyCESurfHandle_instance.entries.buf[this->mapIdx].name, surf);
+    const char *name = MyStringHashMap_MyCESurfHandle_instance.entries.buf[this->mapIdx].name;
+    patch::texture_dump::onDecodedSurface(name, surf);
 
     void *pixels = this->cesurf->v_lockBuf();
     MySurface local;  // the original never destroys it either
@@ -241,7 +246,12 @@ dk2::MyCESurfHandle *dk2::MyCESurfHandle::paint(MySurface *surf, char computeCrc
     SurfaceHolder *holder = this->holder_parent;
     if (holder) {
         if (MyDirectDraw_instance.flags & 1) {
+            // this->cesurf itself may be a CEngineCompressedSurface for
+            // world/terrain/creature/room handles: it only gets decoded
+            // inside copySurf(), triggered by this call.
+            patch::texture_dump::setCompositeSourceName(name);
             holder->surf->paintSurf(this->cesurf, this->x8, this->y8);
+            patch::texture_dump::setCompositeSourceName(nullptr);
         } else {
             // unlink this handle from the holder's list
             MyCESurfHandle *prev = nullptr;

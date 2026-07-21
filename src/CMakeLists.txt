@@ -104,6 +104,7 @@ add_library(${TARGET} SHARED
         dk2/engine/scene/SurfaceHolder.cpp
         dk2/engine/scene/SurfHashList.cpp
         dk2/engine/scene/SurfHashList2.cpp
+        dk2/engine/scene/CEngineCompressedSurface.cpp
         dk2/engine/scene/CEngineDDSurface.cpp
         dk2/engine/scene/MyDirectDraw.cpp
 

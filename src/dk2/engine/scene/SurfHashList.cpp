@@ -10,6 +10,7 @@
 #include "dk2/SurfHashListItem.h"
 #include "dk2/CEngineSurfaceBase.h"
 #include "dk2/CEngineSurface.h"
+#include "dk2/TextureDump.h"
 #include "patches/big_resolution_fix/big_resolution_fix.h"
 #include "patches/logging.h"
 
@@ -401,7 +402,15 @@ void dk2::SurfHashList::expandPut(MyCESurfHandle *surfh, SurfHashListItem *item)
 
         surfh->reductionLevel_andFlags |= 0x200u;
         if (surfh->cesurf == NULL) surfh->resolveSurface();
+        // surfh->cesurf is the main path world/terrain/creature/room
+        // textures take: a CEngineCompressedSurface that only gets
+        // JPEG/tqia-decompressed here, inside copySurf() (see
+        // TextureDump.h / CEngineCompressedSurface.cpp). Named dump hook:
+        // no-op unless flametal:TextureDump is set.
+        patch::texture_dump::setCompositeSourceName(
+                MyStringHashMap_MyCESurfHandle_instance.entries.buf[surfh->mapIdx].name);
         holder->surf->paintSurf(surfh->cesurf, (uint8_t) item->x, (uint8_t) item->y);
+        patch::texture_dump::setCompositeSourceName(nullptr);
         surfh->reductionLevel_andFlags &= ~0x200u;
         return;
     }

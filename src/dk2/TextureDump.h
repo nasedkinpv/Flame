@@ -22,6 +22,24 @@ namespace patch::texture_dump {
 // written at most once per process run.
 void onDecodedSurface(const char *name, const dk2::MySurface *surf);
 
+// World/terrain/creature/room textures are backed by CEngineCompressedSurface
+// (see MyTextures::loadCompressed / EngineTextures.dat), which decompresses
+// straight into the destination page's locked buffer inside
+// CEngineCompressedSurface::copySurf -- there is no separate decoded MySurface
+// to hand a name to, because the compressed surface object itself carries no
+// resource name (only the MyCESurfHandle that resolved it does). Callers that
+// are about to composite a handle with a known name (MyCESurfHandle::paint,
+// SurfHashList::expandPut) call setCompositeSourceName() immediately before
+// invoking paintSurf()/copySurf() on it, and clear it (pass nullptr)
+// immediately after. copySurf() then calls onCompositedSurfaceDecoded() with
+// the freshly-decoded rect, which looks the name up via this context.
+// Not thread-safe, but the paint/composite path is single-threaded.
+void setCompositeSourceName(const char *name);
+
+// See setCompositeSourceName(). No-op (including the context lookup) unless
+// flametal:TextureDump is set.
+void onCompositedSurfaceDecoded(const dk2::MySurface *surf);
+
 }  // namespace patch::texture_dump
 
 #endif  // FLAMETAL_DK2_TEXTURE_DUMP_H
