@@ -319,7 +319,12 @@ public:
         const uintptr_t pageKey = reinterpret_cast<uintptr_t>(key);
         const auto found = surfaceTextures_.find(pageKey);
         if (found == surfaceTextures_.end()) {
-            forgetSurfaceKey(pageKey);
+            // An unresolved atlas report is the only state an unregistered
+            // surface can own. Most CEngineSurface instances are temporary
+            // decode buffers, so keep their destructor path O(1).
+            if (pendingAtlasRects_.find(pageKey) != pendingAtlasRects_.end()) {
+                forgetSurfaceKey(pageKey);
+            }
             return;
         }
         textureReleased(found->second, key);
