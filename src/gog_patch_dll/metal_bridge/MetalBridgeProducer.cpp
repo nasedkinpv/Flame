@@ -1632,8 +1632,11 @@ public:
             bucket.vertices.insert(bucket.vertices.end(), vertexBytes,
                                    vertexBytes + static_cast<size_t>(vertexCount) * sizeof(DK2MMeshVertex));
             const uint16_t rebase = static_cast<uint16_t>(bucket.vertexCount);
+            const size_t indexBase = bucket.indices.size();
+            bucket.indices.resize(indexBase + indexCount);
+            uint16_t *outIndices = bucket.indices.data() + indexBase;
             for (uint32_t i = 0; i < indexCount; ++i) {
-                bucket.indices.push_back(static_cast<uint16_t>(indices[i] + rebase));
+                outIndices[i] = static_cast<uint16_t>(indices[i] + rebase);
             }
             bucket.vertexCount += vertexCount;
             return;

@@ -220,6 +220,21 @@ void emitFrameLights(uint32_t *lightData) {
         firstOfFrame = true;  // always push once so a stale slot payload can't linger
     }
     const size_t sizeBefore = scratch.size();
+    // adjacent terrain cells usually carry the identical spatially-selected
+    // subset: skip re-hashing when the collection looks the same as the
+    // previous call of this frame
+    static uint32_t lastSubsetSig = 0;
+    if (lightData) {
+        const auto firstLight = *reinterpret_cast<const uint32_t *>(
+                reinterpret_cast<const uint8_t *>(lightData) + 0x38);
+        const uint32_t sig = reinterpret_cast<uintptr_t>(lightData) ^
+                             (lightData[0] * 33u) ^ (lightData[1] * 131u) ^
+                             (firstLight * 16777619u);
+        if (!firstOfFrame && sig == lastSubsetSig) return;
+        lastSubsetSig = sig;
+    } else {
+        lastSubsetSig = 0;
+    }
     if (!lightData) {
         gog::metal_bridge::lightsSet(scratch.data(), static_cast<uint32_t>(scratch.size()),
                                      0.0f, 0.0f, 0.0f, lut);
@@ -421,7 +436,7 @@ uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
         void *bridgeSurface;
         uint32_t lastEnsureFrame;
     };
-    static ResolvedTexture cache[512];  // open-addressed, handle==nullptr empty
+    static ResolvedTexture cache[2048];  // open-addressed, handle==nullptr empty
     // negative cache FIRST: a handle whose holder read faults must not fault
     // again on every call - repeated recovered SEH faults crash WOW64 itself
     static std::vector<const void *> badSurfaces;
@@ -430,18 +445,17 @@ uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
     }
     const void *holder = nullptr;
     if (slotHandle && readHolderGuarded(slotHandle, &holder)) {
-        uint32_t slot = (reinterpret_cast<uintptr_t>(slotHandle) >> 4) * 2654435761u & 511u;
-        for (int probe = 0; probe < 8; ++probe, slot = (slot + 1) & 511u) {
+        uint32_t slot = (reinterpret_cast<uintptr_t>(slotHandle) >> 4) * 2654435761u & 2047u;
+        for (int probe = 0; probe < 16; ++probe, slot = (slot + 1) & 2047u) {
             ResolvedTexture &hit = cache[slot];
             if (!hit.handle) break;
             if (hit.handle != slotHandle) continue;
             if (hit.holder != holder) { hit.handle = nullptr; break; }  // repacked
-            const uint32_t stamp = gog::metal_bridge::frameCounter();
-            if (hit.lastEnsureFrame != stamp) {
-                hit.lastEnsureFrame = stamp;
-                gog::metal_bridge::ensureTexture(
-                    hit.bridgeId, static_cast<IDirectDrawSurface4 *>(hit.bridgeSurface));
-            }
+            // ensure on every hit: it is just a map lookup, and skipping it
+            // let freshly repainted atlas pages miss their content resend
+            // (black terrain flashes while the camera moves)
+            gog::metal_bridge::ensureTexture(
+                hit.bridgeId, static_cast<IDirectDrawSurface4 *>(hit.bridgeSurface));
             return hit.bridgeId;
         }
     }
@@ -473,8 +487,8 @@ uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
             bridgeId, static_cast<IDirectDrawSurface4 *>(bridgeSurface));
         const void *storeHolder = nullptr;
         if (readHolderGuarded(slotHandle, &storeHolder)) {
-            uint32_t slot = (reinterpret_cast<uintptr_t>(slotHandle) >> 4) * 2654435761u & 511u;
-            for (int probe = 0; probe < 8; ++probe, slot = (slot + 1) & 511u) {
+            uint32_t slot = (reinterpret_cast<uintptr_t>(slotHandle) >> 4) * 2654435761u & 2047u;
+            for (int probe = 0; probe < 16; ++probe, slot = (slot + 1) & 2047u) {
                 ResolvedTexture &entry = cache[slot];
                 if (entry.handle && entry.handle != slotHandle) continue;
                 entry.handle = slotHandle;
