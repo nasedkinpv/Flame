@@ -306,8 +306,9 @@ HRESULT FakeSurface4::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE4 srcSurf_, LPRECT 
         metal_bridge::textureDirty(this);
         return DD_OK;
     }
-    gog_unused_function_called("FakeSurface4::Blt");
-    return DDERR_GENERIC;
+    auto *srcSurf = static_cast<FakeSurface4 *>(srcSurf_);
+    return this->f8_orig_surf->Blt(dstRect, srcSurf ? srcSurf->f8_orig_surf : nullptr,
+                                  srcRect, flags, effects);
 }
 
 HRESULT FakeSurface4::BltBatch(LPDDBLTBATCH, DWORD, DWORD) {
@@ -403,8 +404,8 @@ HRESULT FakeSurface4::GetAttachedSurface(LPDDSCAPS2, LPDIRECTDRAWSURFACE4 *) {
     return DDERR_GENERIC;
 }
 
-HRESULT FakeSurface4::GetBltStatus(DWORD) {
-    return this->f90_ownedPixels ? DD_OK : DDERR_GENERIC;
+HRESULT FakeSurface4::GetBltStatus(DWORD flags) {
+    return this->f90_ownedPixels ? DD_OK : this->f8_orig_surf->GetBltStatus(flags);
 }
 
 HRESULT FakeSurface4::GetCaps(LPDDSCAPS2 caps) {
@@ -412,7 +413,7 @@ HRESULT FakeSurface4::GetCaps(LPDDSCAPS2 caps) {
         *caps = this->f14_desc.ddsCaps;
         return DD_OK;
     }
-    return DDERR_INVALIDPARAMS;
+    return caps ? this->f8_orig_surf->GetCaps(caps) : DDERR_INVALIDPARAMS;
 }
 
 HRESULT FakeSurface4::GetClipper(LPDIRECTDRAWCLIPPER *) {
@@ -421,19 +422,20 @@ HRESULT FakeSurface4::GetClipper(LPDIRECTDRAWCLIPPER *) {
 }
 
 HRESULT FakeSurface4::GetColorKey(DWORD flags, LPDDCOLORKEY key) {
-    if (!this->f90_ownedPixels || !key || flags != DDCKEY_SRCBLT) return DDERR_INVALIDPARAMS;
+    if (!this->f90_ownedPixels)
+        return this->f8_orig_surf->GetColorKey(flags, key);
+    if (!key || flags != DDCKEY_SRCBLT) return DDERR_INVALIDPARAMS;
     if ((this->f14_desc.dwFlags & DDSD_CKSRCBLT) == 0) return DDERR_NOCOLORKEY;
     *key = this->f14_desc.ddckCKSrcBlt;
     return DD_OK;
 }
 
-HRESULT FakeSurface4::GetDC(HDC *) {
-    gog_unused_function_called("FakeSurface4::GetDC");
-    return DDERR_GENERIC;
+HRESULT FakeSurface4::GetDC(HDC *dc) {
+    return this->f90_ownedPixels ? DDERR_UNSUPPORTED : this->f8_orig_surf->GetDC(dc);
 }
 
-HRESULT FakeSurface4::GetFlipStatus(DWORD) {
-    return this->f90_ownedPixels ? DD_OK : DDERR_GENERIC;
+HRESULT FakeSurface4::GetFlipStatus(DWORD flags) {
+    return this->f90_ownedPixels ? DD_OK : this->f8_orig_surf->GetFlipStatus(flags);
 }
 
 HRESULT FakeSurface4::GetOverlayPosition(LPLONG, LPLONG) {
@@ -451,8 +453,7 @@ HRESULT FakeSurface4::GetPixelFormat(LPDDPIXELFORMAT format) {
         *format = this->f14_desc.ddpfPixelFormat;
         return DD_OK;
     }
-    gog_unused_function_called("FakeSurface4::GetPixelFormat");
-    return DDERR_GENERIC;
+    return format ? this->f8_orig_surf->GetPixelFormat(format) : DDERR_INVALIDPARAMS;
 }
 
 HRESULT FakeSurface4::GetSurfaceDesc(LPDDSURFACEDESC2 desc) {
@@ -460,8 +461,7 @@ HRESULT FakeSurface4::GetSurfaceDesc(LPDDSURFACEDESC2 desc) {
         *desc = this->f14_desc;
         return DD_OK;
     }
-    gog_unused_function_called("FakeSurface4::GetSurfaceDesc");
-    return DDERR_GENERIC;
+    return desc ? this->f8_orig_surf->GetSurfaceDesc(desc) : DDERR_INVALIDPARAMS;
 }
 
 HRESULT FakeSurface4::Initialize(LPDIRECTDRAW, LPDDSURFACEDESC2) {
@@ -470,7 +470,7 @@ HRESULT FakeSurface4::Initialize(LPDIRECTDRAW, LPDDSURFACEDESC2) {
 }
 
 HRESULT FakeSurface4::IsLost(void) {
-    return DD_OK;
+    return this->f90_ownedPixels ? DD_OK : this->f8_orig_surf->IsLost();
 }
 
 HRESULT FakeSurface4::Lock(LPRECT pRect, LPDDSURFACEDESC2 surf, DWORD a4, HANDLE a5) {
@@ -518,21 +518,22 @@ HRESULT FakeSurface4::Lock(LPRECT pRect, LPDDSURFACEDESC2 surf, DWORD a4, HANDLE
     return hr;
 }
 
-HRESULT FakeSurface4::ReleaseDC(HDC) {
-    gog_unused_function_called("FakeSurface4::ReleaseDC");
-    return DDERR_GENERIC;
+HRESULT FakeSurface4::ReleaseDC(HDC dc) {
+    return this->f90_ownedPixels ? DDERR_UNSUPPORTED : this->f8_orig_surf->ReleaseDC(dc);
 }
 
 HRESULT FakeSurface4::Restore(void) {
-    return DD_OK;
+    return this->f90_ownedPixels ? DD_OK : this->f8_orig_surf->Restore();
 }
 
-HRESULT FakeSurface4::SetClipper(LPDIRECTDRAWCLIPPER) {
-    return this->f90_ownedPixels ? DD_OK : DDERR_GENERIC;
+HRESULT FakeSurface4::SetClipper(LPDIRECTDRAWCLIPPER clipper) {
+    return this->f90_ownedPixels ? DD_OK : this->f8_orig_surf->SetClipper(clipper);
 }
 
 HRESULT FakeSurface4::SetColorKey(DWORD flags, LPDDCOLORKEY key) {
-    if (!this->f90_ownedPixels || flags != DDCKEY_SRCBLT) return DDERR_INVALIDPARAMS;
+    if (!this->f90_ownedPixels)
+        return this->f8_orig_surf->SetColorKey(flags, key);
+    if (flags != DDCKEY_SRCBLT) return DDERR_INVALIDPARAMS;
     if (!key) {
         this->f14_desc.dwFlags &= ~DDSD_CKSRCBLT;
         return DD_OK;
@@ -547,9 +548,8 @@ HRESULT FakeSurface4::SetOverlayPosition(LONG, LONG) {
     return DDERR_GENERIC;
 }
 
-HRESULT FakeSurface4::SetPalette(LPDIRECTDRAWPALETTE) {
-    gog_unused_function_called("FakeSurface4::SetPalette");
-    return DDERR_GENERIC;
+HRESULT FakeSurface4::SetPalette(LPDIRECTDRAWPALETTE palette) {
+    return this->f90_ownedPixels ? DDERR_UNSUPPORTED : this->f8_orig_surf->SetPalette(palette);
 }
 
 HRESULT FakeSurface4::Unlock(LPRECT pRect) {

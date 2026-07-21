@@ -51,6 +51,18 @@ jobs:
       - name: "cmake install"
         shell: cmd
         run: cd build && cmake --install .
+      - name: "verify native DirectDraw boundary"
+        shell: cmd
+        run: |
+          dumpbin /dependents install\flametal\Flametal.dll > build\flametal-dependents.txt
+          findstr /I /C:"DDRAW.dll" build\flametal-dependents.txt
+          if not errorlevel 1 exit /b 1
+          dumpbin /exports install\flametal\Flametal.dll > build\flametal-exports.txt
+          findstr /C:"Flametal_DirectDrawCreate" build\flametal-exports.txt > nul
+          findstr /C:"Flametal_DirectDrawEnumerateA" build\flametal-exports.txt > nul
+          dumpbin /exports install\PATCH.dll > build\patch-exports.txt
+          findstr /C:"DirectDrawCreate" build\patch-exports.txt > nul
+          findstr /C:"DirectDrawEnumerateA" build\patch-exports.txt > nul
       - name: "get artifact name"
         shell: cmd
         run: |

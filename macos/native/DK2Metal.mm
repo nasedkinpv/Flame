@@ -2236,7 +2236,7 @@ bool inputLogEnabled() {
             // Threshold/intensity are literal constants in DK2Shaders.metal
             // (kDK2BloomThreshold/kDK2BloomIntensity) - kept in sync here as
             // a comment only, this is just a startup confirmation log.
-            NSLog(@"DK2 bloom: pipeline ready, currently %s (threshold=0.70 intensity=0.35); "
+            NSLog(@"DK2 bloom: pipeline ready, currently %s (threshold=0.65 intensity=0.35); "
                   "settings.toml [renderer] bloom, or DK2_BLOOM=0/1.",
                   dk2BloomEnabled() ? "enabled" : "disabled");
         }
@@ -2923,6 +2923,13 @@ static void *renderWorker(void *context) {
         // DK2M_DRAW_MESH_SHADOW_CASTER - they never enter the main scene
         // loop below (see the `continue` in its DRAW_MESH_INLINE branch).
         bool shadowActiveThisFrame = false;
+        auto *shadowUniform =
+            static_cast<ShadowGlobalUniform *>(_shadowUniformBuffers[slot].contents);
+        // Every frame slot keeps its previous contents. Clear `active` even
+        // when shadows are switched off live (or no casters are present),
+        // otherwise the fragment stage samples the white fallback texture
+        // through a stale projection and darkens its whole rectangular AABB.
+        std::memset(shadowUniform, 0, sizeof(ShadowGlobalUniform));
         if (snapshot && dk2ShadowsEnabled() && _shadowsAvailable &&
             _shadowCoverageTextures[slot] && _shadowArgumentTables[slot]) {
             bool haveCamera = false;
@@ -2971,9 +2978,6 @@ static void *renderWorker(void *context) {
                 }
             }
             shadowActiveThisFrame = haveCamera && !shadowDraws.empty();
-            auto *shadowUniform =
-                static_cast<ShadowGlobalUniform *>(_shadowUniformBuffers[slot].contents);
-            std::memset(shadowUniform, 0, sizeof(ShadowGlobalUniform));
             if (shadowActiveThisFrame) {
                 // Reconstruction matrix: invert the 4x4 built from
                 // view_proj's clip-x/clip-y/clip-w rows (row 3 is a dummy

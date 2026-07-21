@@ -659,17 +659,18 @@ vertex DK2BloomVaryings dk2_bloom_vertex(uint vertexID [[vertex_id]]) {
     return out;
 }
 
-constant float kDK2BloomThreshold = 0.7;
+constant float kDK2BloomThreshold = 0.65;
 
 fragment float4 dk2_bloom_threshold(DK2BloomVaryings in [[stage_in]],
                                     texture2d<float> scene [[texture(0)]],
                                     sampler smp [[sampler(0)]]) {
     const float4 color = scene.sample(smp, in.uv);
-    const float luminance = dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
-    // Soft knee: 0 below threshold, ramps to full contribution by
-    // luminance == 1 so only genuinely bright pixels (lava, fire, torches)
-    // feed the glow.
-    const float contribution = saturate((luminance - kDK2BloomThreshold) /
+    // DK2's emissive-looking fire/lava is authored as saturated SDR color,
+    // not HDR values above 1. Rec.709 luminance therefore rejects even a
+    // full red texel. Peak channel brightness preserves those hot colors.
+    const float brightness = max(color.r, max(color.g, color.b));
+    // Soft knee: 0 below threshold, ramps to full contribution at 1.
+    const float contribution = saturate((brightness - kDK2BloomThreshold) /
                                         max(1.0 - kDK2BloomThreshold, 0.0001));
     return float4(color.rgb * contribution, 1.0);
 }

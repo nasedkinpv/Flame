@@ -5,6 +5,8 @@
 #ifndef FLAMETAL_DEPENDENCY_INJECTION_H
 #define FLAMETAL_DEPENDENCY_INJECTION_H
 
-bool initDependency();
+#include <Windows.h>
+
+bool initDependency(HMODULE flametal);
 
 #endif // FLAMETAL_DEPENDENCY_INJECTION_H

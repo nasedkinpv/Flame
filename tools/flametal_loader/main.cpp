@@ -663,7 +663,7 @@ bool flametalLoaderMain(HMODULE loader) {
         return g_entryHook.hook(flametal, [](auto flametal) -> bool {
             // Finally! Relocations already applied and entry is not called in both PEs
             // we can now link Flametal.dll and DKII-DX.exe together
-            return patchMain(flametal);
+            return patchMain(flametal) && initDependency(flametal);
         });
     });
     SetDllDirectoryA(NULL);
@@ -689,7 +689,6 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
             return FALSE;
         }
         loader::log::init();
-        initDependency();
         if(!flametalLoaderMain(hinstDLL)) {
             fflush(stdout);
             MessageBoxA(NULL, "Load Flametal failed", "Flametal loader error", MB_OK);

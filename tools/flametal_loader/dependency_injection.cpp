@@ -43,6 +43,7 @@ typedef HRESULT (WINAPI *DirectDrawCreateProc)(GUID FAR *lpGUID, LPDIRECTDRAW FA
 DirectDrawCreateProc DirectDrawCreateOrig = nullptr;
 #pragma comment(linker, "/EXPORT:DirectDrawCreate@12=DirectDrawCreate")
 [[maybe_unused]] HRESULT WINAPI DirectDrawCreate(GUID FAR *lpGUID, LPDIRECTDRAW FAR *lplpDD, IUnknown FAR *pUnkOuter) {
+    if (!DirectDrawCreateOrig) return DDERR_GENERIC;
     return DirectDrawCreateOrig(lpGUID, lplpDD, pUnkOuter);
 }
 
@@ -50,11 +51,12 @@ typedef HRESULT (WINAPI *DirectDrawEnumerateAProc)(LPDDENUMCALLBACKA lpCallback,
 DirectDrawEnumerateAProc DirectDrawEnumerateAOrig = nullptr;
 #pragma comment(linker, "/EXPORT:DirectDrawEnumerateA@8=DirectDrawEnumerateA")
 [[maybe_unused]] HRESULT WINAPI DirectDrawEnumerateA(LPDDENUMCALLBACKA lpCallback, LPVOID lpContext) {
+    if (!DirectDrawEnumerateAOrig) return DDERR_GENERIC;
     return DirectDrawEnumerateAOrig(lpCallback, lpContext);
 }
 #endif
 
-bool initDependency() {
+bool initDependency(HMODULE flametal) {
 #if BELIKE_DINPUT
     HMODULE dinput = LoadLibraryA("dinput.dll");
     DirectInputCreateAOrig = (DirectInputCreateAProc) GetProcAddress(dinput, "DirectInputCreateA");
@@ -70,10 +72,12 @@ bool initDependency() {
 #endif
 
 #if BELIKE_DDRAW
-    HMODULE ddraw = LoadLibraryA("DDRAW.dll");
-    DirectDrawCreateOrig = (DirectDrawCreateProc) GetProcAddress(ddraw, "DirectDrawCreate");
-    DirectDrawEnumerateAOrig = (DirectDrawEnumerateAProc) GetProcAddress(ddraw, "DirectDrawEnumerateA");
-    if(!ddraw || !DirectDrawCreateOrig || !DirectDrawEnumerateAOrig) return false;
+    if (!flametal) return false;
+    DirectDrawCreateOrig = reinterpret_cast<DirectDrawCreateProc>(
+        GetProcAddress(flametal, "Flametal_DirectDrawCreate"));
+    DirectDrawEnumerateAOrig = reinterpret_cast<DirectDrawEnumerateAProc>(
+        GetProcAddress(flametal, "Flametal_DirectDrawEnumerateA"));
+    if(!DirectDrawCreateOrig || !DirectDrawEnumerateAOrig) return false;
 #endif
     return true;
 }

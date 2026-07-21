@@ -173,12 +173,12 @@ The removed `macos/build-wrapper.zsh` and `macos/dk2-flametal.zsh` (and the
 windowed-only packaging path, superseded by `build-metal-wrapper.zsh` +
 the native Metal host.
 
-Wine's Mono and Gecko installers add up to roughly 294 MB of the packaged
-app's ~674 MB (44%) and are never used by DK2. The runner's
-`WINEDLLOVERRIDES` now includes `mscoree,mshtml=` to disable them at runtime.
-Actually dropping them from the bundled Wine payload is pending a fresh-prefix
-smoke test, so `.cache/wine` and the wrapper's Wine payload are left alone for
-now.
+The packaged app removes Wine's unused Mono and Gecko installers, DirectDraw/
+WineD3D frontends, OpenGL/Vulkan modules, and MoltenVK from its staged runtime.
+The source Wine archive and `.cache` runtime stay intact, so dev builds retain
+the explicit `DK2_HEADLESS_DDRAW=0` A/B fallback. Packaged builds are native-
+surface-only and reject that fallback instead of silently loading a graphics
+stack the app no longer ships.
 
 ## Flametal DLL build options
 

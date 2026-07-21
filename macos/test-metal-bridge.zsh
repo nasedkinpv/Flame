@@ -18,7 +18,7 @@ cleanup() {
 trap cleanup EXIT
 
 "${SCRIPT_DIR}/build-metal-host.zsh" >/dev/null
-env MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 \
+env MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 DK2_BLOOM=1 DK2_METAL_SHADOWS=1 \
   "${APP_EXECUTABLE}" \
   --self-test-frames=120 \
   --bridge-self-test \

@@ -410,14 +410,16 @@ HRESULT FakeSurface::GetAttachedSurface(LPDDSCAPS a2, LPDIRECTDRAWSURFACE2 *a3) 
     return DD_OK;
 }
 
-HRESULT FakeSurface::GetBltStatus(DWORD) {
-    gog_unused_function_called("FakeSurface::GetBltStatus");
-    return DDERR_GENERIC;
+HRESULT FakeSurface::GetBltStatus(DWORD flags) {
+    return this->f88_orig_surf->GetBltStatus(flags);
 }
 
-HRESULT FakeSurface::GetCaps(LPDDSCAPS) {
-    gog_unused_function_called("FakeSurface::GetCaps");
-    return DDERR_GENERIC;
+HRESULT FakeSurface::GetCaps(LPDDSCAPS caps) {
+    if (!caps) return DDERR_INVALIDPARAMS;
+    DDSCAPS2 caps2 = {};
+    HRESULT hr = this->f88_orig_surf->GetCaps(&caps2);
+    if (SUCCEEDED(hr)) caps->dwCaps = caps2.dwCaps;
+    return hr;
 }
 
 HRESULT FakeSurface::GetClipper(LPDIRECTDRAWCLIPPER *) {
@@ -425,19 +427,16 @@ HRESULT FakeSurface::GetClipper(LPDIRECTDRAWCLIPPER *) {
     return DDERR_GENERIC;
 }
 
-HRESULT FakeSurface::GetColorKey(DWORD, LPDDCOLORKEY) {
-    gog_unused_function_called("FakeSurface::GetColorKey");
-    return DDERR_GENERIC;
+HRESULT FakeSurface::GetColorKey(DWORD flags, LPDDCOLORKEY key) {
+    return this->f88_orig_surf->GetColorKey(flags, key);
 }
 
-HRESULT FakeSurface::GetDC(HDC *) {
-    gog_unused_function_called("FakeSurface::GetDC");
-    return DDERR_GENERIC;
+HRESULT FakeSurface::GetDC(HDC *dc) {
+    return this->f88_orig_surf->GetDC(dc);
 }
 
-HRESULT FakeSurface::GetFlipStatus(DWORD) {
-    gog_unused_function_called("FakeSurface::GetFlipStatus");
-    return DDERR_GENERIC;
+HRESULT FakeSurface::GetFlipStatus(DWORD flags) {
+    return this->f88_orig_surf->GetFlipStatus(flags);
 }
 
 HRESULT FakeSurface::GetOverlayPosition(LPLONG, LPLONG) {
@@ -500,9 +499,8 @@ HRESULT FakeSurface::Lock(LPRECT pRect, LPDDSURFACEDESC pDesc, DWORD a4, HANDLE 
     return hr;
 }
 
-HRESULT FakeSurface::ReleaseDC(HDC) {
-    gog_unused_function_called("FakeSurface::ReleaseDC");
-    return DDERR_GENERIC;
+HRESULT FakeSurface::ReleaseDC(HDC dc) {
+    return this->f88_orig_surf->ReleaseDC(dc);
 }
 
 HRESULT FakeSurface::Restore(void) {
@@ -522,9 +520,8 @@ HRESULT FakeSurface::SetOverlayPosition(LONG, LONG) {
     return DDERR_GENERIC;
 }
 
-HRESULT FakeSurface::SetPalette(LPDIRECTDRAWPALETTE) {
-    gog_unused_function_called("FakeSurface::SetPalette");
-    return DDERR_GENERIC;
+HRESULT FakeSurface::SetPalette(LPDIRECTDRAWPALETTE palette) {
+    return this->f88_orig_surf->SetPalette(palette);
 }
 
 HRESULT FakeSurface::Unlock(LPVOID) {

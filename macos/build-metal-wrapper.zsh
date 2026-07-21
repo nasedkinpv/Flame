@@ -23,6 +23,37 @@ sha256() {
   /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'
 }
 
+prune_native_only_wine_runtime() {
+  local runtime="$1"
+  [[ "${runtime}" == "${stage}/Contents/Resources/wine" ]] || \
+    fail "refusing to prune a Wine runtime outside the staged app"
+
+  # The packaged renderer is Flametal -> shared bridge -> native Metal. Keep
+  # the full runtime in .cache for the dev-only DK2_HEADLESS_DDRAW=0 A/B path,
+  # but do not ship unused managed/web or alternate graphics stacks.
+  /bin/rm -rf -- "${runtime}/share/wine/mono" "${runtime}/share/wine/gecko"
+
+  local graphics_files=()
+  local windows_arch
+  for windows_arch in i386-windows x86_64-windows; do
+    graphics_files+=(
+      "${runtime}/lib/wine/${windows_arch}"/ddraw*.dll(N)
+      "${runtime}/lib/wine/${windows_arch}"/d3d*.dll(N)
+      "${runtime}/lib/wine/${windows_arch}"/dxgi.dll(N)
+      "${runtime}/lib/wine/${windows_arch}"/opengl32.dll(N)
+      "${runtime}/lib/wine/${windows_arch}"/vulkan-1.dll(N)
+      "${runtime}/lib/wine/${windows_arch}"/wined3d.dll(N)
+      "${runtime}/lib/wine/${windows_arch}"/winevulkan.dll(N)
+    )
+  done
+  graphics_files+=(
+    "${runtime}/lib/wine/x86_64-unix/opengl32.so"(N)
+    "${runtime}/lib/wine/x86_64-unix/winevulkan.so"(N)
+    "${runtime}/lib/libMoltenVK.dylib"(N)
+  )
+  (( ${#graphics_files} == 0 )) || /bin/rm -f -- "${graphics_files[@]}"
+}
+
 find_payload() {
   if [[ -n "${DK2_FLAMETAL_PAYLOAD:-}" ]]; then
     print -r -- "${DK2_FLAMETAL_PAYLOAD}"
@@ -65,6 +96,7 @@ stage="${stage_root}/Dungeon Keeper II.app"
 /bin/cp "${payload}/flametal/Flametal.dll" "${stage}/Contents/Resources/Flametal/flametal/Flametal.dll"
 /bin/cp "${payload}/flametal/DKII.dll" "${stage}/Contents/Resources/Flametal/flametal/DKII.dll"
 /usr/bin/ditto "${WINE_CACHE}" "${stage}/Contents/Resources/wine"
+prune_native_only_wine_runtime "${stage}/Contents/Resources/wine"
 /bin/chmod 755 "${stage}/Contents/MacOS/DK2Metal" \
   "${stage}/Contents/Resources/dk2-game-runner" \
   "${stage}/Contents/Resources/import-original-game"

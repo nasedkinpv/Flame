@@ -41,11 +41,6 @@ HRESULT FakeDirectDraw4::CreatePalette(DWORD, LPPALETTEENTRY, LPDIRECTDRAWPALETT
 HRESULT FakeDirectDraw4::CreateSurface(LPDDSURFACEDESC2 pDesc, LPDIRECTDRAWSURFACE4 *ppSurf, IUnknown *a4) {
     if (!pDesc) gog_assert_failed("FakeDirectDraw4::CreateSurface:1053");
     if (a4) gog_assert_failed("FakeDirectDraw4::CreateSurface:1054");
-    // ponytail: breadcrumb for the 16-bit bump crash hunt. Remove once solved.
-    gog_debugf("CreateSurface: %ux%u bits=%u pf_flags=0x%x caps=0x%x",
-               pDesc->dwWidth, pDesc->dwHeight,
-               pDesc->ddpfPixelFormat.dwRGBBitCount,
-               pDesc->ddpfPixelFormat.dwFlags, pDesc->ddsCaps.dwCaps);
     auto *surf = new FakeSurface4(pDesc);
     if (!surf->isValid()) gog_assert_failed("FakeDirectDraw4::CreateSurface:1056");
     *ppSurf = surf;

@@ -48,7 +48,7 @@ namespace dk2 {
             if(*o_gog_enabled) {
                 createResult = fake_DirectDrawCreate(lpGUID, &lpDD, NULL);
             } else {
-                createResult = DirectDrawCreate(lpGUID, &lpDD, NULL);
+                createResult = real_DirectDrawCreate(lpGUID, &lpDD, NULL);
             }
             if (FAILED(createResult) || !lpDD) {
                 patch::log::err("DirectDrawCreate failed for enumerated device: %08X", createResult);
@@ -130,7 +130,7 @@ namespace dk2 {
         if(*o_gog_enabled) {
             fake_DirectDrawEnumerateA(lpCallback, NULL);
         } else {
-            DirectDrawEnumerateA(lpCallback, NULL);
+            real_DirectDrawEnumerateA(lpCallback, NULL);
         }
         return g_ge_ddraw_device_count;
     }
@@ -182,7 +182,7 @@ namespace dk2 {
         if(*o_gog_enabled) {
             fake_DirectDrawEnumerateA(lpCallback, window);
         } else {
-            DirectDrawEnumerateA(lpCallback, window);
+            real_DirectDrawEnumerateA(lpCallback, window);
         }
     }
 
@@ -196,7 +196,7 @@ namespace dk2 {
             if(*o_gog_enabled) {
                 createResult = fake_DirectDrawCreate(lpGuid, &lpDD, NULL);
             } else {
-                createResult = DirectDrawCreate(lpGuid, &lpDD, NULL);
+                createResult = real_DirectDrawCreate(lpGuid, &lpDD, NULL);
             }
             if (FAILED(createResult) || !lpDD) {
                 patch::log::err("DirectDrawCreate failed while collecting display modes: %08X", createResult);
@@ -236,7 +236,7 @@ namespace dk2 {
         if(*o_gog_enabled) {
             fake_DirectDrawEnumerateA(lpCallback, getHWindow());
         } else {
-            DirectDrawEnumerateA(lpCallback, getHWindow());
+            real_DirectDrawEnumerateA(lpCallback, getHWindow());
         }
     }
 
