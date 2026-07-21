@@ -454,4 +454,23 @@ void dk2::CEngineAnimMesh::fun_5848B0(int mode, SceneObject2E *scene) {
                             g_animGpuHit, g_animGpuMiss);
         }
     }
+    // Cursor mini-scene probe: the Hand of Evil is the anim resource "hand"
+    // rasterized into cursorSurf through some scene other than the main one.
+    // Log each unique scene pointer once so the cursor scene (tiny draw
+    // count, appears when the cursor changes shape) can be identified for
+    // the host-rendered-cursor plan.
+    if (o_flametal_debugProbes.get()) {
+        static void *seenScenes[16] = {};
+        static uint32_t seenCounts[16] = {};
+        for (int i = 0; i < 16; ++i) {
+            if (seenScenes[i] == scene) { ++seenCounts[i]; break; }
+            if (!seenScenes[i]) {
+                seenScenes[i] = scene;
+                seenCounts[i] = 1;
+                patch::log::dbg("anim scene probe: new scene=%p mode=%d this=%p",
+                                (void *) scene, mode, (void *) this);
+                break;
+            }
+        }
+    }
 }
