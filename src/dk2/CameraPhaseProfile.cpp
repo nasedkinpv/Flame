@@ -62,6 +62,10 @@ enum PrimitiveKind : uint32_t {
     AnimatedMesh,
     StaticMesh,
     StaticHeightField,
+    DynamicDraw,
+    AnimatedDraw,
+    StaticDraw,
+    HeightDraw,
     PrimitiveKindCount,
 };
 
@@ -90,6 +94,15 @@ struct PrimitiveProfile {
                 calls[AnimatedMesh] * 100u / frames,
                 calls[StaticMesh] * 100u / frames,
                 calls[StaticHeightField] * 100u / frames);
+        patch::log::dbg(
+                "PERF draw-walk avg us: dynamic=%llu anim=%llu static=%llu "
+                "height=%llu; calls/frame x100: dynamic=%u anim=%u static=%u height=%u",
+                averageUs(DynamicDraw), averageUs(AnimatedDraw),
+                averageUs(StaticDraw), averageUs(HeightDraw),
+                calls[DynamicDraw] * 100u / frames,
+                calls[AnimatedDraw] * 100u / frames,
+                calls[StaticDraw] * 100u / frames,
+                calls[HeightDraw] * 100u / frames);
         *this = {};
     }
 };
@@ -291,6 +304,20 @@ bool dk2::installCameraPhaseProfiler() {
              reinterpret_cast<uintptr_t>(
                      &profilePrimitive<0x00587060, StaticHeightField>),
              "static height field"},
+            // slot +4 of the same vtables: v___addRenderObj, the draw-phase
+            // emitters consumed by the ToDraw walk (draw3d "mesh" step)
+            {0x0066FD20, 0x00582CE0,
+             reinterpret_cast<uintptr_t>(
+                     &profilePrimitive<0x00582CE0, DynamicDraw>), "dynamic draw"},
+            {0x0066FD68, 0x005848B0,
+             reinterpret_cast<uintptr_t>(
+                     &profilePrimitive<0x005848B0, AnimatedDraw>), "animated draw"},
+            {0x0066FD90, 0x00586150,
+             reinterpret_cast<uintptr_t>(
+                     &profilePrimitive<0x00586150, StaticDraw>), "static draw"},
+            {0x0066FDB8, 0x00587010,
+             reinterpret_cast<uintptr_t>(
+                     &profilePrimitive<0x00587010, HeightDraw>), "height draw"},
     };
     for (const PointerPatch &patch : primitivePatches) {
         if (!patchPointer(patch)) return false;
