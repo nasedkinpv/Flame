@@ -1,5 +1,7 @@
 # Flametal
 
+![Dungeon Keeper 2 running natively on Apple Silicon](docs/screenshot-gameplay.jpg)
+
 Flametal is a fork of [DiaLight/Flame](https://github.com/DiaLight/Flame), which modifies the Dungeon Keeper 2 code to fix bugs found in both single and multiplayer and works with the Disk, Steam and GOG versions of the game. The goal of this fork is preservation: keeping Dungeon Keeper 2 running natively on current hardware, starting with Apple Silicon Macs and, longer term, iOS.
 
 Warning: Saves and network sessions between Flame/Flametal and non-Flame Dungeon Keeper 2 versions are [incompatible](https://github.com/DiaLight/Flame/issues/57).
