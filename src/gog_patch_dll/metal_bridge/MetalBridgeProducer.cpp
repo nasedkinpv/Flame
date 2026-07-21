@@ -92,7 +92,9 @@ public:
         const uint32_t consumer = InterlockedCompareExchange(asLong(&header_->consumer_frame), 0, 0);
         const uint32_t consumerSession =
             InterlockedCompareExchange(asLong(&header_->consumer_session), 0, 0);
-        if (consumerSession != lastConsumerSession_ || consumer < lastConsumerFrame_) {
+        const bool freshConsumer =
+            consumerSession != lastConsumerSession_ || consumer < lastConsumerFrame_;
+        if (freshConsumer) {
             for (auto &entry : textures_) entry.second.pending = true;
             // A fresh consumer needs the full atlas map again. Unlike draw
             // state, maps are persistent host state and must not depend on a
@@ -100,18 +102,40 @@ public:
             atlasRectsAcked_ = 0;
             atlasRectsEmitted_ = 0;
             atlasLastSentFrame_ = 0;
+            // A new host starts with no texture cache, so releases intended
+            // for the previous host are already satisfied.
+            textureReleases_.clear();
+            textureReleasesAcked_ = 0;
+            textureReleasesEmitted_ = 0;
+            textureReleaseLastSentFrame_ = 0;
             for (auto &entry : shadowMasks_) {
                 entry.second.lastSentGeneration = entry.second.generation;
             }
-        } else if (atlasLastSentFrame_) {
-            if (consumer == atlasLastSentFrame_) {
-                atlasRectsAcked_ = atlasRectsEmitted_;
-            } else {
-                // The consumer skipped (or has not yet accepted) the frame
-                // carrying these maps. Retry from the last acknowledged map.
-                atlasRectsEmitted_ = atlasRectsAcked_;
+        } else {
+            if (atlasLastSentFrame_) {
+                if (consumer == atlasLastSentFrame_) {
+                    atlasRectsAcked_ = atlasRectsEmitted_;
+                } else {
+                    // The consumer skipped (or has not yet accepted) the frame
+                    // carrying these maps. Retry from the last acknowledged map.
+                    atlasRectsEmitted_ = atlasRectsAcked_;
+                }
+                atlasLastSentFrame_ = 0;
             }
-            atlasLastSentFrame_ = 0;
+            if (textureReleaseLastSentFrame_) {
+                if (consumer == textureReleaseLastSentFrame_) {
+                    textureReleasesAcked_ = textureReleasesEmitted_;
+                } else {
+                    textureReleasesEmitted_ = textureReleasesAcked_;
+                }
+                textureReleaseLastSentFrame_ = 0;
+            }
+            if (textureReleasesAcked_ == textureReleases_.size() &&
+                !textureReleases_.empty()) {
+                textureReleases_.clear();
+                textureReleasesAcked_ = 0;
+                textureReleasesEmitted_ = 0;
+            }
         }
         lastConsumerSession_ = consumerSession;
         lastConsumerFrame_ = consumer;
@@ -148,6 +172,8 @@ public:
         clear.alpha = 1.0f;
         append(&clear, sizeof(clear));
         ++commandCount_;
+
+        emitTextureReleases();
 
         // Maps precede full texture uploads. The host also pre-scans maps,
         // but keeping the stream ordered makes captures and other consumers
@@ -288,6 +314,69 @@ public:
         return textureId;
     }
 
+    void surfaceReleased(const void *key) {
+        if (!key) return;
+        const uintptr_t pageKey = reinterpret_cast<uintptr_t>(key);
+        const auto found = surfaceTextures_.find(pageKey);
+        if (found == surfaceTextures_.end()) {
+            forgetSurfaceKey(pageKey);
+            return;
+        }
+        textureReleased(found->second, key);
+    }
+
+    void textureReleased(uint32_t textureId, const void *key) {
+        if (!textureId) return;
+
+        bool wasKnown = false;
+        std::vector<uintptr_t> pageKeys;
+        if (key) pageKeys.push_back(reinterpret_cast<uintptr_t>(key));
+        for (auto it = surfaceTextures_.begin(); it != surfaceTextures_.end();) {
+            if (it->second != textureId) {
+                ++it;
+                continue;
+            }
+            if (std::find(pageKeys.begin(), pageKeys.end(), it->first) == pageKeys.end()) {
+                pageKeys.push_back(it->first);
+            }
+            wasKnown = true;
+            it = surfaceTextures_.erase(it);
+        }
+        for (uintptr_t pageKey : pageKeys) forgetSurfaceKey(pageKey);
+
+        wasKnown = textures_.erase(textureId) != 0 || wasKnown;
+        for (DWORD stage = 0; stage < 3; ++stage) {
+            if (boundTextures_[stage] != textureId) continue;
+            boundTextures_[stage] = 0;
+            boundSurfaces_[stage] = nullptr;
+        }
+
+        const size_t oldAtlasSize = atlasRects_.size();
+        atlasRects_.erase(
+            std::remove_if(atlasRects_.begin(), atlasRects_.end(),
+                           [textureId](const DK2MPageAtlasMapCommand &rect) {
+                               return rect.textureId == textureId;
+                           }),
+            atlasRects_.end());
+        if (atlasRects_.size() != oldAtlasSize) {
+            wasKnown = true;
+            // Indices are the reliability watermark. Compacting invalidates
+            // them, so replay the remaining live map from zero.
+            atlasRectsAcked_ = 0;
+            atlasRectsEmitted_ = 0;
+            atlasLastSentFrame_ = 0;
+        }
+
+        if (!wasKnown) return;
+        if ((++textureReleaseCount_ % 250) == 1) {
+            gog_debugf("Metal bridge: texture releases=%u live=%u atlas-rects=%u",
+                       textureReleaseCount_, static_cast<unsigned>(textures_.size()),
+                       static_cast<unsigned>(atlasRects_.size()));
+        }
+        textureReleases_.push_back(textureId);
+        if (active_) emitTextureReleases();
+    }
+
     // --- named-atlas map (HD resource pack) ---
     // Composition points report (page surface, resource name, rect). The
     // page's bridge texture id may not exist yet (compositing precedes the
@@ -388,6 +477,19 @@ public:
             append(&cmd, sizeof(cmd));
             ++commandCount_;
             ++atlasRectsEmitted_;
+        }
+    }
+
+    void emitTextureReleases() {
+        while (textureReleasesEmitted_ < textureReleases_.size()) {
+            DK2MTextureReleaseCommand command = {};
+            command.header.type = DK2M_COMMAND_TEXTURE_RELEASE;
+            command.header.size = sizeof(command);
+            command.texture_id = textureReleases_[textureReleasesEmitted_];
+            if (used_ + sizeof(command) > DK2M_SLOT_CAPACITY) break;
+            append(&command, sizeof(command));
+            ++commandCount_;
+            ++textureReleasesEmitted_;
         }
     }
 
@@ -516,6 +618,9 @@ public:
         InterlockedExchange(asLong(&header_->latest_slot), static_cast<LONG>(slotIndex_));
         InterlockedExchange(asLong(&header_->latest_frame), static_cast<LONG>(frame_));
         if (atlasRectsEmitted_ > atlasRectsAcked_) atlasLastSentFrame_ = frame_;
+        if (textureReleasesEmitted_ > textureReleasesAcked_) {
+            textureReleaseLastSentFrame_ = frame_;
+        }
         for (auto &entry : textures_) {
             TextureCache &texture = entry.second;
             if (texture.sentInCurrentFrame) {
@@ -1959,6 +2064,24 @@ public:
     }
 
 private:
+    void forgetSurfaceKey(uintptr_t pageKey) {
+        pendingAtlasRects_.erase(pageKey);
+        const void *key = reinterpret_cast<const void *>(pageKey);
+        deadSurfaces_.erase(
+            std::remove(deadSurfaces_.begin(), deadSurfaces_.end(), key),
+            deadSurfaces_.end());
+        char prefix[32];
+        std::snprintf(prefix, sizeof(prefix), "%p|", key);
+        const size_t prefixLength = std::strlen(prefix);
+        for (auto it = atlasRectSeen_.begin(); it != atlasRectSeen_.end();) {
+            if (it->compare(0, prefixLength, prefix) == 0) {
+                it = atlasRectSeen_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     void append(const void *data, uint32_t size) {
         std::memcpy(static_cast<uint8_t *>(view_) + DK2M_SLOT_OFFSET(slotIndex_) + used_, data, size);
         used_ += size;
@@ -1978,6 +2101,11 @@ private:
     uint32_t atlasRejectedInvalid_ = 0;
     std::unordered_map<uintptr_t, std::vector<PendingAtlasRect>> pendingAtlasRects_;
     std::unordered_set<std::string> atlasRectSeen_;
+    std::vector<uint32_t> textureReleases_;
+    size_t textureReleasesAcked_ = 0;
+    size_t textureReleasesEmitted_ = 0;
+    uint32_t textureReleaseLastSentFrame_ = 0;
+    uint32_t textureReleaseCount_ = 0;
 
     HANDLE file_ = INVALID_HANDLE_VALUE;
     HANDLE mapping_ = nullptr;
@@ -2208,6 +2336,14 @@ uint32_t ensureSurfaceTexture(IDirectDrawSurface4 *surface) {
 uint32_t ensureBufferTexture(const void *key, const void *pixels, uint32_t width,
                              uint32_t height, uint32_t pitchBytes) {
     return producer.ensureBufferTexture(key, pixels, width, height, pitchBytes);
+}
+
+void surfaceReleased(const void *key) {
+    if (isEnabled()) producer.surfaceReleased(key);
+}
+
+void textureReleased(DWORD textureId, const void *key) {
+    if (isEnabled()) producer.textureReleased(textureId, key);
 }
 
 void reportAtlasRect(const void *pageKey, const char *name, uint32_t x, uint32_t y,

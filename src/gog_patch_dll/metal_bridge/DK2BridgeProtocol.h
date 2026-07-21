@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 11u
+#define DK2M_VERSION 12u
 #define DK2M_TIMING_QUANTUM_US 8u
 #define DK2M_SLOT_COUNT 3u
 // A 1600x1200 High-Res frame can introduce 9-12 MiB of 128x128 surfaces while
@@ -51,6 +51,9 @@ enum DK2MCommandType {
     // subpixel coordinate space. The host rasterizes/downsamples them into
     // the specified region of the original texture atlas before scene draws.
     DK2M_COMMAND_SHADOW_MASK = 14,
+    // The game-side owner released this bridge texture id. The host drops
+    // both the Metal texture and persistent named-atlas metadata for it.
+    DK2M_COMMAND_TEXTURE_RELEASE = 15,
 };
 
 struct DK2MPageAtlasMapCommand {
@@ -203,6 +206,11 @@ typedef struct DK2MSetTextureCommand {
     uint32_t stage;
     uint32_t texture_id;
 } DK2MSetTextureCommand;
+
+typedef struct DK2MTextureReleaseCommand {
+    DK2MCommandHeader header;
+    uint32_t texture_id;
+} DK2MTextureReleaseCommand;
 
 typedef struct DK2MRenderStateCommand {
     DK2MCommandHeader header;

@@ -4,6 +4,7 @@
 #include "dk2_functions.h"
 #include "dk2_globals.h"
 #include "dk2/CEngineDDSurface.h"
+#include <metal_bridge/MetalBridgeProducer.h>
 
 
 dk2::CEngineDDSurface *dk2::CEngineDDSurface::constructor(uint32_t width, uint32_t height, MyCEngineSurfDesc *desc, int a5) {
@@ -47,6 +48,7 @@ dk2::CEngineDDSurface *dk2::CEngineDDSurface::constructor(uint32_t width, uint32
 void dk2::CEngineDDSurface::destructor() {
     *(void **) this = CEngineDDSurface::vftable;
     if (!this->surfCreated) {
+        gog::metal_bridge::surfaceReleased(this->ddSurf);
         if ((this->f14 & 1) != 0)
             this->devTex->Release();
         this->ddSurf->Release();

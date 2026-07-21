@@ -973,6 +973,10 @@ std::unordered_map<uint32_t, PageState> &pages() {
     return map;
 }
 
+void release(uint32_t textureId) {
+    pages().erase(textureId);
+}
+
 uint64_t &pngCacheEpoch() {
     static uint64_t epoch = 1;
     return epoch;
@@ -3088,10 +3092,20 @@ static void *renderWorker(void *context) {
             }
         }
 
-        // PAGE_ATLAS_MAP is persistent metadata, not a draw command. Read all
-        // maps before processing uploads so map+upload works regardless of
-        // their order in a captured frame.
+        // Releases and PAGE_ATLAS_MAP are persistent cache state rather than
+        // draw commands. Apply releases first, then read every map before
+        // uploads so map+upload works regardless of stream order.
         if (snapshot) {
+            for (const CommandView &view : _commandViews) {
+                if (view.type != DK2M_COMMAND_TEXTURE_RELEASE ||
+                    view.size != sizeof(DK2MTextureReleaseCommand)) continue;
+                DK2MTextureReleaseCommand release = {};
+                std::memcpy(&release, snapshot->bytes.data() + view.offset, sizeof(release));
+                if (!release.texture_id) continue;
+                _textures.erase(release.texture_id);
+                _dynamicTextures.erase(release.texture_id);
+                respack::release(release.texture_id);
+            }
             for (const CommandView &view : _commandViews) {
                 if (view.type != DK2M_COMMAND_PAGE_ATLAS_MAP) continue;
                 ++metrics.packMapCommands;
@@ -3399,6 +3413,8 @@ static void *renderWorker(void *context) {
                     }
                 } else if (view.type == DK2M_COMMAND_PAGE_ATLAS_MAP) {
                     // Persistent metadata was consumed by the pre-pass above.
+                } else if (view.type == DK2M_COMMAND_TEXTURE_RELEASE) {
+                    // Persistent cache state was consumed by the pre-pass.
                 }
             }
         }

@@ -3,6 +3,7 @@
 //
 #include <fake/FakeTexture.h>
 #include <gog_debug.h>
+#include <metal_bridge/MetalBridgeProducer.h>
 
 using namespace gog;
 
@@ -24,6 +25,7 @@ HRESULT FakeTexture::QueryInterface(const IID &riid, LPVOID *ppvObj) {
 ULONG FakeTexture::Release(void) {
     if (--this->refs != 0)
         return this->refs;
+    metal_bridge::textureReleased(this->f10_bridge_id, this->fC_orig_surf);
     if (this->f8_orig_tex) {
         this->f8_orig_tex->Release();
         this->f8_orig_tex = nullptr;
@@ -50,4 +52,3 @@ HRESULT FakeTexture::Load(LPDIRECT3DTEXTURE2) {
     gog_unused_function_called("FakeTexture::Load");
     return DDERR_GENERIC;
 }
-

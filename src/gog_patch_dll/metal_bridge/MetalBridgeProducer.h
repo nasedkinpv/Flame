@@ -83,6 +83,11 @@ uint32_t ensureSurfaceTexture(IDirectDrawSurface4 *surface);
 // Bridge id for a raw BGRA32 CPU buffer (engine surface page).
 uint32_t ensureBufferTexture(const void *key, const void *pixels, uint32_t width,
                              uint32_t height, uint32_t pitchBytes);
+// Ends producer and host ownership for a texture. `surfaceReleased` resolves
+// synthetic ids by their surface/buffer key; `textureReleased` is used by a
+// FakeTexture whose bridge id is already known.
+void surfaceReleased(const void *key);
+void textureReleased(DWORD textureId, const void *key = nullptr);
 // Named-atlas map (HD resource pack): the rect [x,y,w,h] of the page surface
 // identified by `pageKey` (the CEngineSurfaceBase*/IDirectDrawSurface4* the
 // producer keys its texture ids by) was composited from resource `name`.
