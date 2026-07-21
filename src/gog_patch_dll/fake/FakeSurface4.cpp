@@ -231,12 +231,31 @@ HRESULT FakeSurface4::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE4 srcSurf_, LPRECT 
         const DWORD destinationBytes = bytesPerPixel(this->f14_desc);
         if (colorFill) {
             if (srcSurf || !effects || !destinationBytes) return DDERR_INVALIDPARAMS;
+            const LONG fillWidth = dst.right - dst.left;
+            const DWORD fill = effects->dwFillColor;
             for (LONG y = dst.top; y < dst.bottom; ++y) {
                 BYTE *row = this->f90_ownedPixels + y * this->f94_ownedPitch +
                             dst.left * destinationBytes;
-                for (LONG x = dst.left; x < dst.right; ++x) {
-                    memcpy(row, &effects->dwFillColor, destinationBytes);
-                    row += destinationBytes;
+                switch (destinationBytes) {
+                case 4: {
+                    auto *px = reinterpret_cast<uint32_t *>(row);
+                    for (LONG x = 0; x < fillWidth; ++x) px[x] = fill;
+                    break;
+                }
+                case 2: {
+                    auto *px = reinterpret_cast<uint16_t *>(row);
+                    const uint16_t f16 = static_cast<uint16_t>(fill);
+                    for (LONG x = 0; x < fillWidth; ++x) px[x] = f16;
+                    break;
+                }
+                case 1:
+                    memset(row, static_cast<int>(fill & 0xFF), fillWidth);
+                    break;
+                default:
+                    for (LONG x = 0; x < fillWidth; ++x) {
+                        memcpy(row + x * destinationBytes, &fill, destinationBytes);
+                    }
+                    break;
                 }
             }
             metal_bridge::textureDirty(this);
