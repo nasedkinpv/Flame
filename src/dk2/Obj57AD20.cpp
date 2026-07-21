@@ -1,5 +1,7 @@
 #include "dk2/Obj57AD20.h"
 
+#include "dk2/MeshGpuEmit.h"
+
 #include "dk2/CEngineDDSurface.h"
 #include "dk2/CEngineSurfaceBase.h"
 #include "dk2/SurfaceHolder.h"
@@ -675,6 +677,61 @@ void processVertex(
 }
 
 }
+
+
+// Cross-emitter plumbing (MeshGpuEmit.h): lets the animated-mesh emitter in
+// CEngineAnimMesh.cpp reuse this file's texture resolve, UV stage tables and
+// material-flag translation for GPU inline draws.
+namespace dk2::meshgpu {
+
+bool active() { return meshGpuActive(); }
+
+void emitCamera() { emitMeshCamera(); }
+
+bool prepareTarget(dk2::SceneObject2E *scene, dk2::MyScaledSurface *surface,
+                   bool lit, InlineTarget *out) {
+    int stageSlot = 0;
+    dk2::MyCESurfHandle *slotHandle = surface ? surface->surfh : nullptr;
+    if (scene) {
+        for (int i = 0; i < 4 && i < scene->surfhCount; ++i) {
+            if (surface && scene->surfh_x4[i] == surface->surfh) {
+                stageSlot = i;
+                slotHandle = scene->surfh_x4[i];
+                break;
+            }
+        }
+        if (scene->surfhCount == 1 && scene->surfh_x4[0]) {
+            slotHandle = scene->surfh_x4[0];
+            stageSlot = 0;
+        }
+    }
+    if (!slotHandle) return false;
+    out->textureId = resolveBridgeTextureId(slotHandle);
+    out->uS = reinterpret_cast<const float *>(0x00779368)[stageSlot];
+    out->vS = reinterpret_cast<const float *>(0x0076F340)[stageSlot];
+    out->uO = reinterpret_cast<const float *>(0x0077F480)[stageSlot];
+    out->vO = reinterpret_cast<const float *>(0x0077F3D8)[stageSlot];
+    const uint32_t alphaTerm = *reinterpret_cast<const uint32_t *>(0x00779380);
+    out->tint = (alphaTerm & 0xFF000000u) | 0x00FFFFFFu;
+    uint32_t meshFlags = lit ? DK2M_DRAW_MESH_LIT : 0u;
+    const uint32_t drawFlags = surface ? surface->flags : 0;
+    if (drawFlags & 0x200u) meshFlags |= DK2M_DRAW_MESH_ALPHA_TEST;
+    else if (drawFlags & (0x20u | 0x1000u)) meshFlags |= DK2M_DRAW_MESH_ALPHA_BLEND;
+    else if (drawFlags & 0x1u) meshFlags = DK2M_DRAW_MESH_ADDITIVE;
+    out->meshFlags = meshFlags;
+    return true;
+}
+
+void emitInline(const InlineTarget &target, const DK2MMeshVertex *vertices,
+                uint32_t vertexCount, const uint16_t *indices,
+                uint32_t indexCount, float ambientR, float ambientG,
+                float ambientB) {
+    gog::metal_bridge::drawMeshInline(
+        target.textureId, vertices, vertexCount, indices, indexCount,
+        target.tint, target.meshFlags, ambientR, ambientG, ambientB);
+}
+
+}  // namespace dk2::meshgpu
 
 
 namespace dk2 {

@@ -24,8 +24,6 @@ enum CameraPhase : uint32_t {
     CreateMeshes,
     FinishLists,
     EmitSceneCells,
-    DrawScene3D,
-    DrawSceneUI,
     PhaseCount,
 };
 
@@ -48,12 +46,11 @@ struct CameraPhaseProfile {
         patch::log::dbg(
                 "PERF camera avg us: generate=%llu state=%llu zarrays=%llu "
                 "projection=%llu visibleA=%llu visibleB=%llu meshes=%llu "
-                "finish=%llu sceneEmit=%llu draw3d=%llu ui=%llu",
+                "finish=%llu sceneEmit=%llu",
                 averageUs(Generate), averageUs(CameraState), averageUs(ZArrays),
                 averageUs(Projection), averageUs(BuildVisibleA),
                 averageUs(BuildVisibleB), averageUs(CreateMeshes),
-                averageUs(FinishLists), averageUs(EmitSceneCells),
-                averageUs(DrawScene3D), averageUs(DrawSceneUI));
+                averageUs(FinishLists), averageUs(EmitSceneCells));
         *this = {};
     }
 };
@@ -182,17 +179,6 @@ int __cdecl profileFinishLists() {
     return measure<int>(FinishLists, reinterpret_cast<Function>(0x00576230));
 }
 
-bool __cdecl profileDrawScene3D(char mode) {
-    using Function = bool (__cdecl *)(char);
-    return measure<bool>(
-            DrawScene3D, reinterpret_cast<Function>(0x00575780), mode);
-}
-
-int __cdecl profileDrawSceneUI() {
-    using Function = int (__cdecl *)();
-    return measure<int>(DrawSceneUI, reinterpret_cast<Function>(0x0059AD80));
-}
-
 void __stdcall profileSceneEmission() {
     using Function = void (__stdcall *)();
     measureVoid(EmitSceneCells, reinterpret_cast<Function>(0x00572CF0));
@@ -287,10 +273,6 @@ bool dk2::installCameraPhaseProfiler() {
              reinterpret_cast<uintptr_t>(&profileFinishLists), "finish"},
             {0x00575D0A, 0x00572CF0,
              reinterpret_cast<uintptr_t>(&profileSceneEmission), "scene emission"},
-            {0x0059D816, 0x00575780,
-             reinterpret_cast<uintptr_t>(&profileDrawScene3D), "drawScene 3d"},
-            {0x0059D83E, 0x0059AD80,
-             reinterpret_cast<uintptr_t>(&profileDrawSceneUI), "drawScene ui"},
     };
     for (const CallPatch &patch : patches) {
         if (!patchCall(patch)) return false;

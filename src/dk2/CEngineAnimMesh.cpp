@@ -1,6 +1,8 @@
 #include "dk2/engine/primitive/2d/world/CEngineAnimMesh.h"
 
 #include "dk2/AnimVertEx.h"
+#include "dk2/MeshGpuEmit.h"
+#include <metal_bridge/DK2BridgeProtocol.h>
 #include "dk2/MyMeshResourceHolder.h"
 #include "dk2/MyScaledSurface.h"
 #include "dk2/Obj57BCB0.h"
@@ -14,6 +16,7 @@
 #include "dk2_globals.h"
 
 #include <cstdint>
+#include <cstring>
 #include <emmintrin.h>
 
 
@@ -117,6 +120,73 @@ void buildDirectionalLights(
         const dk2::Vec3f &position) {
     const auto fun = reinterpret_cast<BuildLightsFun>(0x0057BD70);
     fun(&lights, first, second, matrix, position);
+}
+
+// Emit this animated mesh through the Metal world-space inline path: skeletal
+// interpolation stays on the CPU (it's data-dependent), but projection and
+// per-vertex lighting move to the GPU, and the legacy RenderData walk is
+// skipped entirely.
+bool drawAnimOnGpu(
+        dk2::CEngineAnimMesh *mesh,
+        dk2::SceneObject2E *scene,
+        dk2::MyScaledSurface *surface,
+        dk2::CAnimMeshResource *resource,
+        int animation,
+        float frame,
+        uint32_t frameIndex,
+        dk2::SprsAnimHeader &entry,
+        const uint8_t *indices,
+        uint32_t triangleCount,
+        const dk2::Vec3f &ambient,
+        bool lit,
+        float scale) {
+    if (!triangleCount || triangleCount > 255) return false;
+    dk2::meshgpu::InlineTarget target;
+    if (!dk2::meshgpu::prepareTarget(scene, surface, lit, &target)) return false;
+    if (!target.textureId) return false;  // CPU fallback keeps it visible
+    static DK2MMeshVertex vertices[256];
+    static uint16_t outIndices[765];
+    uint8_t mapped[256];
+    std::memset(mapped, 0xFF, sizeof(mapped));
+    const float uvScale = *reinterpret_cast<const float *>(0x0066FC74);
+    dk2::Mat3x3f &m = mesh->f10_matrix;
+    const dk2::Vec3f &translation = mesh->field_4;
+    uint32_t vertexCount = 0, indexCount = 0;
+    for (uint32_t triangle = 0; triangle < triangleCount; ++triangle, indices += 3) {
+        for (int corner = 0; corner < 3; ++corner) {
+            const uint32_t src = indices[corner];
+            if (mapped[src] == 0xFF) {
+                dk2::Vec3f model;
+                resource->sub_57E5B0(
+                        animation, frame, frameIndex,
+                        static_cast<int>(src), &model);
+                dk2::Vec3f rotated;
+                m.multiplyVec(&rotated, &model);
+                const dk2::AnimVertEx &av = entry.AnimVertEx_base[src];
+                dk2::Vec3f normal{av.x, av.y, av.z};
+                dk2::Vec3f worldNormal;
+                m.multiplyVec(&worldNormal, &normal);
+                DK2MMeshVertex &dst = vertices[vertexCount];
+                dst.px = rotated.x * scale + translation.x;
+                dst.py = rotated.y * scale + translation.y;
+                dst.pz = rotated.z * scale + translation.z;
+                dst.nx = worldNormal.x;
+                dst.ny = worldNormal.y;
+                dst.nz = worldNormal.z;
+                const uint32_t packed = static_cast<uint32_t>(av.uv);
+                dst.u = target.uS * (static_cast<float>(packed & 0xFFFF) * uvScale) + target.uO;
+                dst.v = target.vS * (static_cast<float>(packed >> 16) * uvScale) + target.vO;
+                dst.base_color = 0xFF000000u;
+                mapped[src] = static_cast<uint8_t>(vertexCount++);
+            }
+            outIndices[indexCount++] = mapped[src];
+        }
+    }
+    dk2::meshgpu::emitCamera();
+    dk2::meshgpu::emitInline(
+            target, vertices, vertexCount, outIndices, indexCount,
+            ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
+    return true;
 }
 
 __m128 decodeAnimationPosition(
@@ -228,6 +298,15 @@ void dk2::CEngineAnimMesh::sub_5836A0(int animation, SceneObject2E *scene) {
     const RenderFun renderFun = __renderFun;
     const uint8_t *indices = reinterpret_cast<const uint8_t *>(entry.plod_list[lod]);
     const uint32_t triangleCount = static_cast<uint8_t>(entry.lod_list[lod]);
+
+    if (dk2::meshgpu::active() &&
+        drawAnimOnGpu(this, scene, surface, resource, animation, frame,
+                      frameIndex, entry, indices, triangleCount, ambient,
+                      (scene->drawFlags_x2[0] & 0x40) != 0,
+                      *reinterpret_cast<float *>(&field_38))) {
+        f50_pMeshHolder->markUsed();
+        return;
+    }
 
     for (uint32_t triangle = 0; triangle < triangleCount; ++triangle, indices += 3) {
         const uint32_t a = indices[0];
