@@ -23,6 +23,7 @@
 #include <tools/flametal_config.h>
 #include <windows.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <emmintrin.h>
@@ -211,14 +212,16 @@ void emitMeshCamera() {
     gog::metal_bridge::cameraSet(columnMajor, depthParams);
 }
 
-// Each emitter call carries only its spatially selected light subset, so
-// accumulate a per-frame union (deduped by light pointer) and resend the
-// growing list; the producer keeps only the last (fullest) payload.
-void emitFrameLights(uint32_t *lightData) {
+// Keep a deduplicated frame light table, while preserving the engine's
+// per-object mask as indices into that table. Applying the whole union to
+// every draw was both slower and visibly over-lit neighbouring cells.
+bool prepareFrameLights(uint32_t *lightData, uint32_t mask,
+                        dk2::meshgpu::LightSelection *out) {
+    if (!out) return false;
+    out->count = 0;
     const auto *lut = reinterpret_cast<const float *>(0x007818A0);
-    // open-addressed content-key set: the linear scan was O(lights^2) per
-    // frame across thousands of emitter calls
-    static uint64_t seenKeys[2048];  // power of two; 0 = empty
+    static uint64_t seenKeys[2048];
+    static uint16_t seenIndices[2048];
     static std::vector<DK2MLight> scratch;
     static uint32_t lastFrame = 0xFFFFFFFFu;
     const uint32_t stamp = gog::metal_bridge::frameCounter();
@@ -227,53 +230,21 @@ void emitFrameLights(uint32_t *lightData) {
         lastFrame = stamp;
         std::memset(seenKeys, 0, sizeof(seenKeys));
         scratch.clear();
-        firstOfFrame = true;  // always push once so a stale slot payload can't linger
+        firstOfFrame = true;
     }
     const size_t sizeBefore = scratch.size();
-    // adjacent terrain cells usually carry the identical spatially-selected
-    // subset: skip re-hashing when the collection looks the same as the
-    // previous call of this frame
-    static uint32_t lastSubsetSig = 0;
-    if (lightData) {
-        const auto firstLight = *reinterpret_cast<const uint32_t *>(
-                reinterpret_cast<const uint8_t *>(lightData) + 0x38);
-        const uint32_t sig = reinterpret_cast<uintptr_t>(lightData) ^
-                             (lightData[0] * 33u) ^ (lightData[1] * 131u) ^
-                             (firstLight * 16777619u);
-        if (!firstOfFrame && sig == lastSubsetSig) return;
-        lastSubsetSig = sig;
-    } else {
-        lastSubsetSig = 0;
-    }
-    if (!lightData) {
-        gog::metal_bridge::lightsSet(scratch.data(), static_cast<uint32_t>(scratch.size()),
-                                     0.0f, 0.0f, 0.0f, lut);
-        return;
-    }
-    const int32_t total = static_cast<int32_t>(lightData[0]) + static_cast<int32_t>(lightData[1]);
-    const auto lights = reinterpret_cast<const SceneLightForGpu *const *>(
-            reinterpret_cast<const uint8_t *>(lightData) + 0x38);
-    for (int32_t i = 0; i < total && i < 1024; ++i) {
-        if (!lights[i]) continue;
+    const int32_t total = lightData
+        ? std::min<int32_t>(static_cast<int32_t>(lightData[0]) +
+                                static_cast<int32_t>(lightData[1]),
+                            32)
+        : 0;
+    const auto lights = lightData
+        ? reinterpret_cast<const SceneLightForGpu *const *>(
+              reinterpret_cast<const uint8_t *>(lightData) + 0x38)
+        : nullptr;
+    for (int32_t i = 0; i < total && out->count < 24; ++i) {
+        if ((mask & (1u << i)) == 0 || !lights[i]) continue;
         const SceneLightForGpu &s = *lights[i];
-        // content key: the game may rebuild light structs each frame, so
-        // pointer identity multiplies duplicates and overflows the cap -
-        // which drops the LATE lights of the frame (cursor, effects) at
-        // camera angles where many meshes contribute subsets.
-        uint32_t pxBits, pyBits, rBits;
-        std::memcpy(&pxBits, &s.position.x, 4);
-        std::memcpy(&pyBits, &s.position.y, 4);
-        std::memcpy(&rBits, &s.color.x, 4);
-        uint64_t key = (static_cast<uint64_t>(pxBits) << 32) ^ (pyBits ^ (static_cast<uint64_t>(rBits) << 13));
-        if (!key) key = 1;
-        uint32_t slot = (static_cast<uint32_t>(key) * 2654435761u) & 2047u;
-        bool known = false;
-        while (seenKeys[slot]) {
-            if (seenKeys[slot] == key) { known = true; break; }
-            slot = (slot + 1) & 2047u;
-        }
-        if (known || scratch.size() >= 1024) continue;
-        seenKeys[slot] = key;
         DK2MLight light = {};
         light.px = s.position.x;
         light.py = s.position.y;
@@ -284,29 +255,39 @@ void emitFrameLights(uint32_t *lightData) {
         light.dist_sq_limit = s.distanceSquaredLimit;
         light.atten_scale = s.attenuationScale;
         light.facing_scale = s.facingScale;
-        scratch.push_back(light);
+        uint64_t key = 1469598103934665603ull;
+        const auto *bytes = reinterpret_cast<const uint8_t *>(&light);
+        for (size_t byte = 0; byte < sizeof(light); ++byte) {
+            key ^= bytes[byte];
+            key *= 1099511628211ull;
+        }
+        if (!key) key = 1;
+        uint32_t slot = static_cast<uint32_t>(key ^ (key >> 32)) & 2047u;
+        uint16_t index = 0;
+        bool found = false;
+        while (seenKeys[slot]) {
+            index = seenIndices[slot];
+            if (seenKeys[slot] == key &&
+                std::memcmp(&scratch[index], &light, sizeof(light)) == 0) {
+                found = true;
+                break;
+            }
+            slot = (slot + 1) & 2047u;
+        }
+        if (!found) {
+            if (scratch.size() >= 1024) return false;
+            index = static_cast<uint16_t>(scratch.size());
+            scratch.push_back(light);
+            seenKeys[slot] = key;
+            seenIndices[slot] = index;
+        }
+        out->indices[out->count++] = index;
     }
-    static bool loggedLights = false;
-    if (!loggedLights && !scratch.empty()) {
-        loggedLights = true;
-        patch::log::dbg("mesh gpu lights: total=%d serialized=%u first pos=(%f %f %f) "
-                        "col=(%f %f %f) limit=%f atten=%f facing=%f lut0=%f lut16=%f",
-                        total, static_cast<uint32_t>(scratch.size()),
-                        static_cast<double>(scratch[0].px), static_cast<double>(scratch[0].py),
-                        static_cast<double>(scratch[0].pz),
-                        static_cast<double>(scratch[0].r), static_cast<double>(scratch[0].g),
-                        static_cast<double>(scratch[0].b),
-                        static_cast<double>(scratch[0].dist_sq_limit),
-                        static_cast<double>(scratch[0].atten_scale),
-                        static_cast<double>(scratch[0].facing_scale),
-                        static_cast<double>(lut[0]), static_cast<double>(lut[16]));
-    }
-    // the producer copies the whole payload (1KB LUT + lights) on every call;
-    // only push when this emitter actually contributed new lights
     if (scratch.size() != sizeBefore || firstOfFrame) {
         gog::metal_bridge::lightsSet(scratch.data(), static_cast<uint32_t>(scratch.size()),
                                      0.0f, 0.0f, 0.0f, lut);
     }
+    return true;
 }
 
 // SEH-guarded: level transitions leave stale cesurf/devTex pointers behind,
@@ -566,18 +547,115 @@ int copyEntryGuarded(const MeshEntry &entry, uint32_t indexCount,
     }
 }
 
+int describeEntryGuarded(const MeshEntry &entry, uint32_t indexCount,
+                         uint32_t *vertexCountOut, uint64_t *signatureOut) {
+    __try {
+        if (!entry.vertices || !entry.triangleIndices || !indexCount) return 0;
+        uint32_t maxIndex = 0;
+        uint64_t signature = 1469598103934665603ull;
+        for (uint32_t i = 0; i < indexCount; ++i) {
+            const uint8_t index = entry.triangleIndices[i];
+            if (index > maxIndex) maxIndex = index;
+            signature ^= index;
+            signature *= 1099511628211ull;
+        }
+        const uint32_t vertexCount = maxIndex + 1;
+        const uint32_t samples[3] = {0, maxIndex / 2, maxIndex};
+        for (uint32_t sample : samples) {
+            const auto *bytes = reinterpret_cast<const uint8_t *>(&entry.vertices[sample]);
+            for (size_t byte = 0; byte < sizeof(MeshVertex); ++byte) {
+                signature ^= bytes[byte];
+                signature *= 1099511628211ull;
+            }
+        }
+        *vertexCountOut = vertexCount;
+        *signatureOut = signature;
+        return 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+uint32_t retainedEntryMeshId(const MeshEntry &entry, uint32_t textureId,
+                             uint32_t indexCount, uint32_t vertexCount,
+                             uint64_t signature, float uvScale,
+                             float uS, float vS, float uO, float vO) {
+    struct CacheEntry {
+        const void *vertices;
+        const void *indices;
+        uint32_t textureId;
+        uint32_t indexCount;
+        uint32_t vertexCount;
+        uint32_t uvBits[5];
+        uint64_t signature;
+        uint32_t meshId;
+    };
+    static CacheEntry cache[16384] = {};
+    uint32_t uvBits[5];
+    std::memcpy(&uvBits[0], &uvScale, 4);
+    std::memcpy(&uvBits[1], &uS, 4);
+    std::memcpy(&uvBits[2], &vS, 4);
+    std::memcpy(&uvBits[3], &uO, 4);
+    std::memcpy(&uvBits[4], &vO, 4);
+    uintptr_t hash = reinterpret_cast<uintptr_t>(entry.vertices) >> 4;
+    hash ^= reinterpret_cast<uintptr_t>(entry.triangleIndices) >> 3;
+    hash ^= static_cast<uintptr_t>(textureId) * 2654435761u;
+    hash ^= static_cast<uintptr_t>(uvBits[1]) * 2246822519u;
+    uint32_t slot = static_cast<uint32_t>(hash) & 16383u;
+    CacheEntry *available = nullptr;
+    for (uint32_t probe = 0; probe < 64; ++probe, slot = (slot + 1) & 16383u) {
+        CacheEntry &candidate = cache[slot];
+        if (!candidate.vertices) {
+            available = &candidate;
+            break;
+        }
+        if (candidate.vertices != entry.vertices ||
+            candidate.indices != entry.triangleIndices ||
+            candidate.textureId != textureId ||
+            candidate.indexCount != indexCount ||
+            candidate.vertexCount != vertexCount ||
+            std::memcmp(candidate.uvBits, uvBits, sizeof(uvBits)) != 0) {
+            continue;
+        }
+        if (candidate.signature == signature) return candidate.meshId;
+        available = &candidate;  // address reuse after a level/resource rebuild
+        break;
+    }
+    if (!available) return 0;
+    static DK2MMeshVertex vertices[256];
+    static uint16_t indices[765];
+    uint32_t copiedVertices = 0;
+    if (!copyEntryGuarded(entry, indexCount, &copiedVertices, vertices, 256,
+                          indices, uvScale, uS, vS, uO, vO) ||
+        copiedVertices != vertexCount) {
+        return 0;
+    }
+    const uint32_t meshId = dk2::meshgpu::allocateMeshId();
+    if (!dk2::meshgpu::registerMesh(
+            meshId, vertices, copiedVertices, indices, indexCount)) {
+        return 0;
+    }
+    available->vertices = entry.vertices;
+    available->indices = entry.triangleIndices;
+    available->textureId = textureId;
+    available->indexCount = indexCount;
+    available->vertexCount = vertexCount;
+    std::memcpy(available->uvBits, uvBits, sizeof(uvBits));
+    available->signature = signature;
+    available->meshId = meshId;
+    return meshId;
+}
+
 // Emit one MeshEntry through the bridge's inline world-space path. The UV
 // stage-0 scale/offset tables were just written by __renderFun_setSceneObject2E
 // for this very scene object, so reading them here matches writeVertex1C.
 bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                     dk2::MyScaledSurface *surface,
                     const dk2::Vec3f &ambient, uint32_t *lightData,
+                    uint32_t lightMask,
                     dk2::Obj58EF60 *sampler = nullptr) {
     if (!entry.triangleCount || !entry.vertices || !entry.triangleIndices) return false;
     const uint32_t indexCount = static_cast<uint32_t>(entry.triangleCount) * 3u;
-    // uint8 indices bound both buffers: at most 256 vertices, 255*3 indices
-    static DK2MMeshVertex vertices[256];
-    static uint16_t indices[765];
     // The UV scale/offset tables are per scene-object STAGE SLOT: find the
     // slot our surface's handle occupies instead of assuming slot 0
     // (multi-texture objects put it elsewhere, shifting every UV).
@@ -611,8 +689,9 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
         if (bad == entry.vertices) return false;
     }
     uint32_t vertexCount = 0;
-    if (!copyEntryGuarded(entry, indexCount, &vertexCount, vertices, 256, indices,
-                          uvScale, uS, vS, uO, vO)) {
+    uint64_t signature = 0;
+    if (!describeEntryGuarded(
+            entry, indexCount, &vertexCount, &signature) || vertexCount > 256) {
         if (badEntries.size() < 4096) badEntries.push_back(entry.vertices);
         static bool loggedBadEntry = false;
         if (!loggedBadEntry) {
@@ -623,7 +702,13 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
         }
         return false;
     }
+    static DK2MMeshVertex vertices[256];
+    static uint16_t indices[765];
     if (sampler) {
+        if (!copyEntryGuarded(entry, indexCount, &vertexCount, vertices, 256,
+                              indices, uvScale, uS, vS, uO, vO)) {
+            return false;
+        }
         // extended path: vector-field displacement stays on the CPU, exactly
         // as the legacy emitter samples it before transforming
         for (uint32_t v = 0; v < vertexCount; ++v) {
@@ -638,36 +723,10 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     const uint32_t alphaTerm = *reinterpret_cast<const uint32_t *>(0x00779380);
     const uint32_t tint = (alphaTerm & 0xFF000000u) | 0x00FFFFFFu;
     const uint32_t textureId = resolveBridgeTextureId(slotHandle);
-    // ponytail: one-shot raw-value dump for the missing-mesh hunt (menu
-    // columns went from black to invisible across colour fixes). Shows
-    // whether vertex colours/ambient are biased and what alpha rides along.
-    static DWORD lastProbeTick = 0;
-    const DWORD nowTick = GetTickCount();
-    if (nowTick - lastProbeTick > 3000) {
-        lastProbeTick = nowTick;
-        if (o_flametal_debugProbes.get()) {
-            patch::log::dbg("mesh gpu probe: v0.color=(%f %f %f) ambient=(%f %f %f) "
-                            "alphaTerm=%08X texId=%u verts=%u packed0=%08X uv0=(%f %f) "
-                            "uvTables=(%f %f %f %f) n0=(%f %f %f)",
-                            static_cast<double>(entry.vertices[0].color.x),
-                            static_cast<double>(entry.vertices[0].color.y),
-                            static_cast<double>(entry.vertices[0].color.z),
-                            static_cast<double>(ambient.x),
-                            static_cast<double>(ambient.y),
-                            static_cast<double>(ambient.z),
-                            alphaTerm, textureId, vertexCount, vertices[0].base_color,
-                            static_cast<double>(vertices[0].u), static_cast<double>(vertices[0].v),
-                            static_cast<double>(*reinterpret_cast<const float *>(0x00779368)),
-                            static_cast<double>(*reinterpret_cast<const float *>(0x0076F340)),
-                            static_cast<double>(*reinterpret_cast<const float *>(0x0077F480)),
-                            static_cast<double>(*reinterpret_cast<const float *>(0x0077F3D8)),
-                            static_cast<double>(entry.vertices[0].normal.x),
-                            static_cast<double>(entry.vertices[0].normal.y),
-                            static_cast<double>(entry.vertices[0].normal.z));
-        }
-    }
+    if (!textureId) return false;
     emitMeshCamera();
-    emitFrameLights(lightData);
+    dk2::meshgpu::LightSelection lights = {};
+    if (!prepareFrameLights(lightData, lightMask, &lights)) return false;
     // Colours are plain 0..255 floats everywhere (probe confirmed zeros for
     // both vertex colour and ambient); the "bias" constants in the engine's
     // encoding helpers are themselves negative magic numbers, so nothing here
@@ -707,12 +766,23 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
         // their emissive texture already carries the brightness
         meshFlags = DK2M_DRAW_MESH_ADDITIVE;
     }
-    gog::metal_bridge::drawMeshInline(
-        textureId, vertices, vertexCount, indices, indexCount, tint,
-        meshFlags,
-        ambient.x / 255.0f,
-        ambient.y / 255.0f,
-        ambient.z / 255.0f);
+    const dk2::meshgpu::InlineTarget target = {
+        textureId, uS, vS, uO, vO, meshFlags, tint};
+    if (sampler) {
+        dk2::meshgpu::emitInline(
+            target, vertices, vertexCount, indices, indexCount, lights,
+            ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
+    } else {
+        const uint32_t meshId = retainedEntryMeshId(
+            entry, textureId, indexCount, vertexCount, signature,
+            uvScale, uS, vS, uO, vO);
+        if (!meshId) return false;
+        static const float identity[12] = {
+            1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+        dk2::meshgpu::emitRetained(
+            target, meshId, identity, lights,
+            ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
+    }
     return true;
 }
 
@@ -753,6 +823,24 @@ bool active() { return meshGpuActive(); }
 
 void emitCamera() { emitMeshCamera(); }
 
+uint32_t allocateMeshId() {
+    static uint32_t nextMeshId = 1;
+    const uint32_t result = nextMeshId++;
+    if (!nextMeshId) nextMeshId = 1;
+    return result;
+}
+
+bool registerMesh(uint32_t meshId, const DK2MMeshVertex *vertices,
+                  uint32_t vertexCount, const uint16_t *indices,
+                  uint32_t indexCount) {
+    return gog::metal_bridge::meshRegister(
+        meshId, vertices, vertexCount, indices, indexCount);
+}
+
+bool prepareLights(uint32_t *collection, uint32_t mask, LightSelection *out) {
+    return prepareFrameLights(collection, mask, out);
+}
+
 bool prepareTarget(dk2::SceneObject2E *scene, dk2::MyScaledSurface *surface,
                    bool lit, InlineTarget *out) {
     int stageSlot = 0;
@@ -787,13 +875,32 @@ bool prepareTarget(dk2::SceneObject2E *scene, dk2::MyScaledSurface *surface,
     return true;
 }
 
+void emitRetained(const InlineTarget &target, uint32_t meshId,
+                  const float world[12], const LightSelection &lights,
+                  float ambientR, float ambientG, float ambientB) {
+    gog::metal_bridge::drawMesh(
+        meshId, target.textureId, world, target.tint, target.meshFlags,
+        lights.indices, lights.count, ambientR, ambientG, ambientB);
+}
+
+void emitDeformed(const InlineTarget &target, uint32_t meshId,
+                  const float *positions, uint32_t vertexCount,
+                  const float world[12], const LightSelection &lights,
+                  float ambientR, float ambientG, float ambientB) {
+    gog::metal_bridge::drawMeshDeformed(
+        meshId, target.textureId, positions, vertexCount, world,
+        target.tint, target.meshFlags, lights.indices, lights.count,
+        ambientR, ambientG, ambientB);
+}
+
 void emitInline(const InlineTarget &target, const DK2MMeshVertex *vertices,
                 uint32_t vertexCount, const uint16_t *indices,
-                uint32_t indexCount, float ambientR, float ambientG,
-                float ambientB) {
+                uint32_t indexCount, const LightSelection &lights,
+                float ambientR, float ambientG, float ambientB) {
     gog::metal_bridge::drawMeshInline(
         target.textureId, vertices, vertexCount, indices, indexCount,
-        target.tint, target.meshFlags, ambientR, ambientG, ambientB);
+        target.tint, target.meshFlags, lights.indices, lights.count,
+        ambientR, ambientG, ambientB);
 }
 
 }  // namespace dk2::meshgpu
@@ -951,7 +1058,8 @@ int *dk2::Obj57AD20::sub_57B0E0(
             static_cast<float>(fieldOriginX - 1),
             static_cast<float>(fieldOriginY - 1)};
     if (meshGpuActive() &&
-        drawEntryOnGpu(scene, entry, surface, ambient, lightData, &sampler)) {
+        drawEntryOnGpu(scene, entry, surface, ambient, lightData,
+                       static_cast<uint32_t>(f2C), &sampler)) {
         return applyIndxs_sub_58AC20();
     }
     Obj57BCB0 lights;
@@ -1014,7 +1122,9 @@ int *dk2::Obj57AD20::sub_57B6D0(
             vec_14.y + g_vec_760A98.y + surface->vec.y,
             vec_14.z + g_vec_760A98.z + surface->vec.z};
 
-    if (meshGpuActive() && drawEntryOnGpu(scene, entry, surface, ambient, lightData)) {
+    if (meshGpuActive() &&
+        drawEntryOnGpu(scene, entry, surface, ambient, lightData,
+                       static_cast<uint32_t>(f2C))) {
         return applyIndxs_sub_58AC20();
     }
 

@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 12u
+#define DK2M_VERSION 13u
 #define DK2M_TIMING_QUANTUM_US 8u
 #define DK2M_SLOT_COUNT 3u
 // A 1600x1200 High-Res frame can introduce 9-12 MiB of 128x128 surfaces while
@@ -17,6 +17,7 @@
 #define DK2M_OVERLAY_TEXTURE_ID 0xFFFFFFFEu
 #define DK2M_CURSOR_TEXTURE_ID 0xFFFFFFFDu
 #define DK2M_INPUT_EVENT_CAPACITY 64u
+#define DK2M_MAX_LIGHTS_PER_DRAW 24u
 
 enum DK2MCommandType {
     DK2M_COMMAND_CLEAR = 1,
@@ -61,6 +62,9 @@ enum DK2MCommandType {
     // keep getting composed into reused pages (stale sprites glued into
     // unrelated textures).
     DK2M_COMMAND_PAGE_ATLAS_RESET = 16,
+    // Retained animated topology with only the interpolated float3 positions
+    // supplied per frame. Normals, UVs and indices come from MESH_REGISTER.
+    DK2M_COMMAND_DRAW_MESH_DEFORMED = 17,
 };
 
 struct DK2MPageAtlasMapCommand {
@@ -301,6 +305,8 @@ typedef struct DK2MDrawMeshCommand {
     uint32_t tint;    // ARGB modulated over the lit colour
     float ambient_r, ambient_g, ambient_b;  // additive per-draw ambient
     float world[12];
+    uint32_t light_count;
+    uint16_t light_indices[DK2M_MAX_LIGHTS_PER_DRAW];
 } DK2MDrawMeshCommand;
 
 // Inline world-space draw; payload = vertex_count DK2MMeshVertex followed by
@@ -314,7 +320,24 @@ typedef struct DK2MDrawMeshInlineCommand {
     uint32_t vertex_count;
     uint32_t index_count;
     float ambient_r, ambient_g, ambient_b;
+    uint32_t light_count;
+    uint16_t light_indices[DK2M_MAX_LIGHTS_PER_DRAW];
 } DK2MDrawMeshInlineCommand;
+
+// Per-frame deformation of a retained mesh. Payload is vertex_count packed
+// float3 positions in the same dense vertex order as MESH_REGISTER.
+typedef struct DK2MDrawMeshDeformedCommand {
+    DK2MCommandHeader header;
+    uint32_t mesh_id;
+    uint32_t texture_id;
+    uint32_t flags;
+    uint32_t tint;
+    uint32_t vertex_count;
+    float ambient_r, ambient_g, ambient_b;
+    float world[12];
+    uint32_t light_count;
+    uint16_t light_indices[DK2M_MAX_LIGHTS_PER_DRAW];
+} DK2MDrawMeshDeformedCommand;
 
 typedef struct DK2MShadowTriangle {
     int32_t x0, y0;

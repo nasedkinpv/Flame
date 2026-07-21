@@ -781,10 +781,14 @@ public:
         captured.mouseY = mouseY;
         captured.hotspotX = hotspotX;
         captured.hotspotY = hotspotY;
-        normalizeCursorSize(captured);
+        // The overlay-space rect (strip/tooltip region) lives entirely in
+        // captured (game-resolution) coordinates: build it from the raw
+        // hotspot BEFORE normalizeCursorSize rescales the hotspot to the
+        // logical display size, or the erase region drifts.
         captured.rect = {mouseX - hotspotX, mouseY - hotspotY,
                          mouseX - hotspotX + static_cast<LONG>(width),
                          mouseY - hotspotY + static_cast<LONG>(height)};
+        normalizeCursorSize(captured);
         captured.visible = true;
 
         const uint64_t geometry = static_cast<uint64_t>(captured.width) |
@@ -1353,6 +1357,8 @@ private:
                                  lock.ddpfPixelFormat.dwGBitMask |
                                  lock.ddpfPixelFormat.dwBBitMask;
         const uint32_t keyLow = colorKey & rgbMask;
+        const int keyR = (keyLow >> 16) & 0xFF, keyG = (keyLow >> 8) & 0xFF,
+                  keyB = keyLow & 0xFF;
         for (uint32_t row = 0; row < height; ++row) {
             const auto *input = reinterpret_cast<const uint32_t *>(
                 static_cast<const uint8_t *>(lock.lpSurface) +
@@ -1362,10 +1368,43 @@ private:
                 const uint32_t raw = input[column];
                 const uint32_t rgb = raw & rgbMask;
                 std::memcpy(output + column * 4, &raw, 3);
-                output[column * 4 + 3] = rgb == keyLow ? 0 : 0xFF;
+                if (rgb == keyLow) {
+                    output[column * 4 + 3] = 0;
+                    continue;
+                }
+                // The scaler bleeds the key colour into edge pixels; treat
+                // near-key colours as transparent too (dark green halo fix).
+                const int dr = ((rgb >> 16) & 0xFF) - keyR;
+                const int dg = ((rgb >> 8) & 0xFF) - keyG;
+                const int db = (rgb & 0xFF) - keyB;
+                output[column * 4 + 3] =
+                    (dr * dr + dg * dg + db * db) < 24 * 24 ? 0 : 0xFF;
             }
         }
         source->Unlock(&rect);
+        // One-pass edge feather: an opaque pixel bordering transparency drops
+        // to ~60% coverage, so the host's linear sampling draws a soft edge
+        // instead of a hard-keyed staircase.
+        std::vector<uint8_t> &px = cursor.pixels;
+        auto alphaAt = [&px, width](uint32_t x, uint32_t y) {
+            return px[(static_cast<size_t>(y) * width + x) * 4 + 3];
+        };
+        std::vector<uint8_t> feathered(static_cast<size_t>(width) * height);
+        for (uint32_t y = 0; y < height; ++y) {
+            for (uint32_t x = 0; x < width; ++x) {
+                uint8_t a = alphaAt(x, y);
+                if (a == 0xFF) {
+                    const bool edge =
+                        (x > 0 && !alphaAt(x - 1, y)) ||
+                        (x + 1 < width && !alphaAt(x + 1, y)) ||
+                        (y > 0 && !alphaAt(x, y - 1)) ||
+                        (y + 1 < height && !alphaAt(x, y + 1));
+                    if (edge) a = 0x99;
+                }
+                feathered[static_cast<size_t>(y) * width + x] = a;
+            }
+        }
+        for (uint32_t i = 0; i < width * height; ++i) px[i * 4 + 3] = feathered[i];
         return true;
     }
 
@@ -1888,7 +1927,8 @@ public:
     // --- world-space mesh pipeline (protocol v9) ---
     bool meshRegister(uint32_t meshId, const void *vertices, uint32_t vertexCount,
                       const uint16_t *indices, uint32_t indexCount) {
-        if (!meshId || !vertices || !vertexCount || !indices || !indexCount) return false;
+        if (!meshId || !vertices || !vertexCount || !indices || !indexCount ||
+            !ensureMapped()) return false;
         MeshState &state = meshes_[meshId];
         if (!state.blob.empty()) return true;
         const uint32_t vertexBytes = vertexCount * static_cast<uint32_t>(sizeof(DK2MMeshVertex));
@@ -1991,15 +2031,18 @@ public:
         uint32_t tint = 0;
         uint32_t flags = 0;
         float ambient[3] = {};
+        uint16_t lightIndices[DK2M_MAX_LIGHTS_PER_DRAW] = {};
+        uint32_t lightCount = 0;
     };
-    using InlineKey = std::array<uint32_t, 6>;
+    using InlineKey = std::array<uint32_t, 7 + DK2M_MAX_LIGHTS_PER_DRAW>;
     std::map<InlineKey, InlineBucket> inlineBuckets_;
 
     void flushInlineBucket(InlineBucket &bucket) {
         if (!bucket.vertexCount) return;
         emitInlineCommand(bucket.textureId, bucket.vertices.data(), bucket.vertexCount,
                           bucket.indices.data(), static_cast<uint32_t>(bucket.indices.size()),
-                          bucket.tint, bucket.flags,
+                          bucket.tint, bucket.flags, bucket.lightIndices,
+                          bucket.lightCount,
                           bucket.ambient[0], bucket.ambient[1], bucket.ambient[2]);
         bucket.vertices.clear();
         bucket.indices.clear();
@@ -2012,15 +2055,25 @@ public:
 
     void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCount,
                         const uint16_t *indices, uint32_t indexCount, uint32_t tint,
-                        uint32_t flags, float ambientR, float ambientG, float ambientB) {
+                        uint32_t flags, const uint16_t *lightIndices,
+                        uint32_t lightCount, float ambientR, float ambientG,
+                        float ambientB) {
         if (!vertices || !vertexCount || !indices || !indexCount) return;
-        if (true) {  // z-tested tiles never overlap each other: merge all states
+        lightCount = std::min<uint32_t>(lightCount, DK2M_MAX_LIGHTS_PER_DRAW);
+        if ((flags & (DK2M_DRAW_MESH_ALPHA_BLEND | DK2M_DRAW_MESH_ADDITIVE)) == 0) {
             uint32_t ambientBits[3];
             std::memcpy(ambientBits, &ambientR, 4);
             std::memcpy(ambientBits + 1, &ambientG, 4);
             std::memcpy(ambientBits + 2, &ambientB, 4);
-            const InlineKey key = {textureId, tint, flags,
-                                   ambientBits[0], ambientBits[1], ambientBits[2]};
+            InlineKey key = {};
+            key[0] = textureId;
+            key[1] = tint;
+            key[2] = flags;
+            key[3] = ambientBits[0];
+            key[4] = ambientBits[1];
+            key[5] = ambientBits[2];
+            key[6] = lightCount;
+            for (uint32_t i = 0; i < lightCount; ++i) key[7 + i] = lightIndices[i];
             InlineBucket &bucket = inlineBuckets_[key];
             if (bucket.vertexCount + vertexCount > 60000u) flushInlineBucket(bucket);
             if (!bucket.vertexCount) {
@@ -2030,6 +2083,11 @@ public:
                 bucket.ambient[0] = ambientR;
                 bucket.ambient[1] = ambientG;
                 bucket.ambient[2] = ambientB;
+                bucket.lightCount = lightCount;
+                if (lightCount) {
+                    std::memcpy(bucket.lightIndices, lightIndices,
+                                lightCount * sizeof(uint16_t));
+                }
             }
             const auto *vertexBytes = static_cast<const uint8_t *>(vertices);
             bucket.vertices.insert(bucket.vertices.end(), vertexBytes,
@@ -2045,12 +2103,15 @@ public:
             return;
         }
         emitInlineCommand(textureId, vertices, vertexCount, indices, indexCount,
-                          tint, flags, ambientR, ambientG, ambientB);
+                          tint, flags, lightIndices, lightCount,
+                          ambientR, ambientG, ambientB);
     }
 
     void emitInlineCommand(uint32_t textureId, const void *vertices, uint32_t vertexCount,
                            const uint16_t *indices, uint32_t indexCount, uint32_t tint,
-                           uint32_t flags, float ambientR, float ambientG, float ambientB) {
+                           uint32_t flags, const uint16_t *lightIndices,
+                           uint32_t lightCount, float ambientR, float ambientG,
+                           float ambientB) {
         if (!vertices || !vertexCount || !indices || !indexCount) return;
         const uint32_t vertexBytes = vertexCount * static_cast<uint32_t>(sizeof(DK2MMeshVertex));
         const uint32_t indexBytes = (indexCount * 2u + 3u) & ~3u;
@@ -2067,6 +2128,12 @@ public:
         command.ambient_r = ambientR;
         command.ambient_g = ambientG;
         command.ambient_b = ambientB;
+        command.light_count = std::min<uint32_t>(
+            lightCount, DK2M_MAX_LIGHTS_PER_DRAW);
+        if (command.light_count) {
+            std::memcpy(command.light_indices, lightIndices,
+                        command.light_count * sizeof(uint16_t));
+        }
         const uint16_t zeroPad = 0;
         const uint32_t padBytes = indexBytes - indexCount * 2u;
         if (!active_) {
@@ -2090,12 +2157,9 @@ public:
         ++commandCount_;
     }
 
-    void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12],
-                  uint32_t tint, uint32_t flags,
-                  float ambientR, float ambientG, float ambientB) {
-        if (!active_) return;
+    bool prepareMeshRegistration(uint32_t meshId) {
         auto found = meshes_.find(meshId);
-        if (found == meshes_.end() || found->second.blob.empty()) return;
+        if (found == meshes_.end() || found->second.blob.empty() || !header_) return false;
         MeshState &state = found->second;
         // (Re)send the registration blob until the consumer acknowledges a
         // frame that carried it - same ack model as texture uploads, so a
@@ -2114,16 +2178,27 @@ public:
                 InterlockedCompareExchange(asLong(&header_->consumer_frame), 0, 0);
             if (state.lastSentFrame && consumer == state.lastSentFrame) {
                 state.pending = false;
-            } else if (state.lastSentFrame != frame_ + 1 &&
-                       used_ + state.blob.size() <= DK2M_SLOT_CAPACITY) {
-                append(state.blob.data(), static_cast<uint32_t>(state.blob.size()));
-                ++commandCount_;
+            } else if (state.lastSentFrame != frame_ + 1) {
+                if (active_) {
+                    if (used_ + state.blob.size() > DK2M_SLOT_CAPACITY) return false;
+                    append(state.blob.data(), static_cast<uint32_t>(state.blob.size()));
+                    ++commandCount_;
+                } else {
+                    stageBytes(state.blob.data(), static_cast<uint32_t>(state.blob.size()));
+                    ++stagedMeshCommandCount_;
+                }
                 state.lastSentFrame = frame_ + 1;
                 if (state.lastSentFrame == 0) state.lastSentFrame = 1;
             }
         }
-        if (textureId) emitTexture(0, textureId);
-        if (used_ + sizeof(DK2MDrawMeshCommand) > DK2M_SLOT_CAPACITY) return;
+        return true;
+    }
+
+    void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12],
+                  uint32_t tint, uint32_t flags,
+                  const uint16_t *lightIndices, uint32_t lightCount,
+                  float ambientR, float ambientG, float ambientB) {
+        if (!prepareMeshRegistration(meshId)) return;
         DK2MDrawMeshCommand command = {};
         command.header.type = DK2M_COMMAND_DRAW_MESH;
         command.header.size = sizeof(command);
@@ -2135,7 +2210,61 @@ public:
         command.ambient_g = ambientG;
         command.ambient_b = ambientB;
         std::memcpy(command.world, world, sizeof(command.world));
+        command.light_count = std::min<uint32_t>(
+            lightCount, DK2M_MAX_LIGHTS_PER_DRAW);
+        if (command.light_count) {
+            std::memcpy(command.light_indices, lightIndices,
+                        command.light_count * sizeof(uint16_t));
+        }
+        if (!active_) {
+            stageBytes(&command, sizeof(command));
+            if (textureId) stagedMeshTextures_.push_back(textureId);
+            ++stagedMeshCommandCount_;
+            return;
+        }
+        if (textureId) emitTexture(0, textureId);
+        if (used_ + sizeof(DK2MDrawMeshCommand) > DK2M_SLOT_CAPACITY) return;
         append(&command, sizeof(command));
+        ++commandCount_;
+    }
+
+    void drawMeshDeformed(uint32_t meshId, uint32_t textureId,
+                          const float *positions, uint32_t vertexCount,
+                          const float world[12], uint32_t tint, uint32_t flags,
+                          const uint16_t *lightIndices, uint32_t lightCount,
+                          float ambientR, float ambientG, float ambientB) {
+        if (!positions || !vertexCount || !prepareMeshRegistration(meshId)) return;
+        const uint32_t positionBytes = vertexCount * 3u * sizeof(float);
+        const uint32_t size = sizeof(DK2MDrawMeshDeformedCommand) + positionBytes;
+        DK2MDrawMeshDeformedCommand command = {};
+        command.header.type = DK2M_COMMAND_DRAW_MESH_DEFORMED;
+        command.header.size = size;
+        command.mesh_id = meshId;
+        command.texture_id = textureId;
+        command.flags = flags;
+        command.tint = tint;
+        command.vertex_count = vertexCount;
+        command.ambient_r = ambientR;
+        command.ambient_g = ambientG;
+        command.ambient_b = ambientB;
+        std::memcpy(command.world, world, sizeof(command.world));
+        command.light_count = std::min<uint32_t>(
+            lightCount, DK2M_MAX_LIGHTS_PER_DRAW);
+        if (command.light_count) {
+            std::memcpy(command.light_indices, lightIndices,
+                        command.light_count * sizeof(uint16_t));
+        }
+        if (!active_) {
+            stageBytes(&command, sizeof(command));
+            stageBytes(positions, positionBytes);
+            if (textureId) stagedMeshTextures_.push_back(textureId);
+            ++stagedMeshCommandCount_;
+            return;
+        }
+        if (textureId) emitTexture(0, textureId);
+        if (used_ + size > DK2M_SLOT_CAPACITY) return;
+        append(&command, sizeof(command));
+        append(positions, positionBytes);
         ++commandCount_;
     }
 
@@ -2382,15 +2511,30 @@ void lightsSet(const void *lights, uint32_t lightCount, float ambientR, float am
 }
 
 void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12], uint32_t tint,
-              uint32_t flags, float ambientR, float ambientG, float ambientB) {
-    producer.drawMesh(meshId, textureId, world, tint, flags, ambientR, ambientG, ambientB);
+              uint32_t flags, const uint16_t *lightIndices, uint32_t lightCount,
+              float ambientR, float ambientG, float ambientB) {
+    producer.drawMesh(meshId, textureId, world, tint, flags,
+                      lightIndices, lightCount, ambientR, ambientG, ambientB);
+}
+
+void drawMeshDeformed(uint32_t meshId, uint32_t textureId,
+                      const float *positions, uint32_t vertexCount,
+                      const float world[12], uint32_t tint, uint32_t flags,
+                      const uint16_t *lightIndices, uint32_t lightCount,
+                      float ambientR, float ambientG, float ambientB) {
+    producer.drawMeshDeformed(
+        meshId, textureId, positions, vertexCount, world, tint, flags,
+        lightIndices, lightCount, ambientR, ambientG, ambientB);
 }
 
 void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCount,
                     const uint16_t *indices, uint32_t indexCount, uint32_t tint,
-                    uint32_t flags, float ambientR, float ambientG, float ambientB) {
+                    uint32_t flags, const uint16_t *lightIndices,
+                    uint32_t lightCount, float ambientR, float ambientG,
+                    float ambientB) {
     producer.drawMeshInline(textureId, vertices, vertexCount, indices, indexCount,
-                            tint, flags, ambientR, ambientG, ambientB);
+                            tint, flags, lightIndices, lightCount,
+                            ambientR, ambientG, ambientB);
 }
 
 void frameSize(uint32_t *width, uint32_t *height) { producer.frameSize(width, height); }

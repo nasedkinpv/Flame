@@ -65,13 +65,22 @@ void lightsSet(const void *lights, uint32_t lightCount,
 // the surrounding setRenderState stream, same as drawIndexed.
 void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12],
               uint32_t tint, uint32_t flags,
+              const uint16_t *lightIndices, uint32_t lightCount,
               float ambientR, float ambientG, float ambientB);
+// Retained topology/attributes with per-frame packed float3 positions.
+void drawMeshDeformed(uint32_t meshId, uint32_t textureId,
+                      const float *positions, uint32_t vertexCount,
+                      const float world[12], uint32_t tint, uint32_t flags,
+                      const uint16_t *lightIndices, uint32_t lightCount,
+                      float ambientR, float ambientG, float ambientB);
 // Inline world-space draw for deformed geometry: vertices are DK2MMeshVertex
 // (world space), indices uint16; travels with the frame, GPU still projects
 // and lights. World transform is implicitly identity.
 void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCount,
                     const uint16_t *indices, uint32_t indexCount, uint32_t tint,
-                    uint32_t flags, float ambientR, float ambientG, float ambientB);
+                    uint32_t flags, const uint16_t *lightIndices,
+                    uint32_t lightCount, float ambientR, float ambientG,
+                    float ambientB);
 // Last begun frame's dimensions (stable during the game's prepare phase).
 void frameSize(uint32_t *width, uint32_t *height);
 // Monotonic finished-frame counter - stable frame identity for callers.

@@ -131,10 +131,105 @@ void buildDirectionalLights(
     fun(&lights, first, second, matrix, position);
 }
 
-// Emit this animated mesh through the Metal world-space inline path: skeletal
-// interpolation stays on the CPU (it's data-dependent), but projection and
-// per-vertex lighting move to the GPU, and the legacy RenderData walk is
-// skipped entirely.
+struct AnimTopology {
+    uint32_t meshId;
+    uint32_t vertexCount;
+    uint8_t sourceIndices[256];
+};
+
+AnimTopology *retainedAnimTopology(
+        dk2::CAnimMeshResource *resource, int animation,
+        dk2::SprsAnimHeader &entry, const uint8_t *indices,
+        uint32_t triangleCount, const dk2::meshgpu::InlineTarget &target) {
+    struct CacheEntry {
+        const void *resource;
+        const void *vertices;
+        const void *indices;
+        int animation;
+        uint32_t triangleCount;
+        uint32_t textureId;
+        uint32_t uvBits[4];
+        AnimTopology topology;
+    };
+    static CacheEntry cache[4096] = {};
+    uint32_t uvBits[4];
+    std::memcpy(&uvBits[0], &target.uS, 4);
+    std::memcpy(&uvBits[1], &target.vS, 4);
+    std::memcpy(&uvBits[2], &target.uO, 4);
+    std::memcpy(&uvBits[3], &target.vO, 4);
+    uintptr_t hash = reinterpret_cast<uintptr_t>(resource) >> 4;
+    hash ^= reinterpret_cast<uintptr_t>(indices) >> 3;
+    hash ^= static_cast<uintptr_t>(target.textureId) * 2654435761u;
+    uint32_t slot = static_cast<uint32_t>(hash) & 4095u;
+    CacheEntry *available = nullptr;
+    for (uint32_t probe = 0; probe < 32; ++probe, slot = (slot + 1) & 4095u) {
+        CacheEntry &candidate = cache[slot];
+        if (!candidate.resource) {
+            available = &candidate;
+            break;
+        }
+        if (candidate.resource == resource &&
+            candidate.vertices == entry.AnimVertEx_base &&
+            candidate.indices == indices && candidate.animation == animation &&
+            candidate.triangleCount == triangleCount &&
+            candidate.textureId == target.textureId &&
+            std::memcmp(candidate.uvBits, uvBits, sizeof(uvBits)) == 0) {
+            return &candidate.topology;
+        }
+    }
+    if (!available || !triangleCount || triangleCount > 255) return nullptr;
+    static DK2MMeshVertex vertices[256];
+    static uint16_t outIndices[765];
+    uint16_t mapped[256];
+    for (uint16_t &value : mapped) value = 0xFFFFu;
+    const float uvScale = *reinterpret_cast<const float *>(0x0066FC74);
+    uint32_t vertexCount = 0, indexCount = 0;
+    const uint8_t *cursor = indices;
+    for (uint32_t triangle = 0; triangle < triangleCount; ++triangle, cursor += 3) {
+        for (int corner = 0; corner < 3; ++corner) {
+            const uint8_t source = cursor[corner];
+            if (mapped[source] == 0xFFFFu) {
+                if (vertexCount == 256) return nullptr;
+                const dk2::AnimVertEx &av = entry.AnimVertEx_base[source];
+                DK2MMeshVertex &vertex = vertices[vertexCount];
+                vertex.px = vertex.py = vertex.pz = 0.0f;
+                vertex.nx = av.x;
+                vertex.ny = av.y;
+                vertex.nz = av.z;
+                const uint32_t packed = static_cast<uint32_t>(av.uv);
+                vertex.u = target.uS *
+                               (static_cast<float>(packed & 0xFFFFu) * uvScale) +
+                           target.uO;
+                vertex.v = target.vS *
+                               (static_cast<float>(packed >> 16) * uvScale) +
+                           target.vO;
+                vertex.base_color = 0xFF000000u;
+                mapped[source] = static_cast<uint16_t>(vertexCount);
+                available->topology.sourceIndices[vertexCount++] = source;
+            }
+            outIndices[indexCount++] = mapped[source];
+        }
+    }
+    const uint32_t meshId = dk2::meshgpu::allocateMeshId();
+    if (!dk2::meshgpu::registerMesh(
+            meshId, vertices, vertexCount, outIndices, indexCount)) {
+        return nullptr;
+    }
+    available->resource = resource;
+    available->vertices = entry.AnimVertEx_base;
+    available->indices = indices;
+    available->animation = animation;
+    available->triangleCount = triangleCount;
+    available->textureId = target.textureId;
+    std::memcpy(available->uvBits, uvBits, sizeof(uvBits));
+    available->topology.meshId = meshId;
+    available->topology.vertexCount = vertexCount;
+    return &available->topology;
+}
+
+// Animation interpolation remains game-side, but immutable topology, normals,
+// UVs and indices are registered once. Each frame now crosses only float3
+// positions plus one instance transform.
 bool drawAnimOnGpu(
         dk2::CEngineAnimMesh *mesh,
         dk2::SceneObject2E *scene,
@@ -149,52 +244,46 @@ bool drawAnimOnGpu(
         const dk2::Vec3f &ambient,
         bool lit,
         float scale) {
-    if (!triangleCount || triangleCount > 255) return false;
     dk2::meshgpu::InlineTarget target;
     if (!dk2::meshgpu::prepareTarget(scene, surface, lit, &target)) return false;
     if (!target.textureId) return false;  // CPU fallback keeps it visible
-    static DK2MMeshVertex vertices[256];
-    static uint16_t outIndices[765];
-    uint8_t mapped[256];
-    std::memset(mapped, 0xFF, sizeof(mapped));
-    const float uvScale = *reinterpret_cast<const float *>(0x0066FC74);
-    dk2::Mat3x3f &m = mesh->f10_matrix;
-    const dk2::Vec3f &translation = mesh->field_4;
-    uint32_t vertexCount = 0, indexCount = 0;
-    for (uint32_t triangle = 0; triangle < triangleCount; ++triangle, indices += 3) {
-        for (int corner = 0; corner < 3; ++corner) {
-            const uint32_t src = indices[corner];
-            if (mapped[src] == 0xFF) {
-                dk2::Vec3f model;
-                resource->sub_57E5B0(
-                        animation, frame, frameIndex,
-                        static_cast<int>(src), &model);
-                dk2::Vec3f rotated;
-                m.multiplyVec(&rotated, &model);
-                const dk2::AnimVertEx &av = entry.AnimVertEx_base[src];
-                dk2::Vec3f normal{av.x, av.y, av.z};
-                dk2::Vec3f worldNormal;
-                m.multiplyVec(&worldNormal, &normal);
-                DK2MMeshVertex &dst = vertices[vertexCount];
-                dst.px = rotated.x * scale + translation.x;
-                dst.py = rotated.y * scale + translation.y;
-                dst.pz = rotated.z * scale + translation.z;
-                dst.nx = worldNormal.x;
-                dst.ny = worldNormal.y;
-                dst.nz = worldNormal.z;
-                const uint32_t packed = static_cast<uint32_t>(av.uv);
-                dst.u = target.uS * (static_cast<float>(packed & 0xFFFF) * uvScale) + target.uO;
-                dst.v = target.vS * (static_cast<float>(packed >> 16) * uvScale) + target.vO;
-                dst.base_color = 0xFF000000u;
-                mapped[src] = static_cast<uint8_t>(vertexCount++);
-            }
-            outIndices[indexCount++] = mapped[src];
+    AnimTopology *topology = retainedAnimTopology(
+        resource, animation, entry, indices, triangleCount, target);
+    if (!topology) return false;
+    static float positions[256 * 3];
+    for (uint32_t vertex = 0; vertex < topology->vertexCount; ++vertex) {
+        dk2::Vec3f model;
+        resource->sub_57E5B0(
+            animation, frame, frameIndex,
+            topology->sourceIndices[vertex], &model);
+        positions[vertex * 3 + 0] = model.x;
+        positions[vertex * 3 + 1] = model.y;
+        positions[vertex * 3 + 2] = model.z;
+    }
+    dk2::meshgpu::LightSelection lights = {};
+    auto *collection = lit
+        ? reinterpret_cast<uint32_t *>(static_cast<uintptr_t>(mesh->field_58))
+        : nullptr;
+    if (!dk2::meshgpu::prepareLights(
+            collection, lit ? static_cast<uint32_t>(mesh->field_68) : 0u,
+            &lights)) {
+        return false;
+    }
+    float world[12];
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) {
+            world[row * 4 + column] =
+                mesh->f10_matrix.m[row][column] * scale;
         }
     }
+    world[3] = mesh->field_4.x;
+    world[7] = mesh->field_4.y;
+    world[11] = mesh->field_4.z;
     dk2::meshgpu::emitCamera();
-    dk2::meshgpu::emitInline(
-            target, vertices, vertexCount, outIndices, indexCount,
-            ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
+    dk2::meshgpu::emitDeformed(
+        target, topology->meshId, positions, topology->vertexCount,
+        world, lights, ambient.x / 255.0f, ambient.y / 255.0f,
+        ambient.z / 255.0f);
     return true;
 }
 
@@ -282,19 +371,6 @@ void dk2::CEngineAnimMesh::sub_5836A0(int animation, SceneObject2E *scene) {
             *reinterpret_cast<float *>(&field_38),
             f48_flags & 0x10000);
 
-    Vec3f pivot;
-    f10_matrix.multiplyVec(&pivot, &resource->pos);
-    Obj57BCB0 lights;
-    lights.count = 0;
-    if (scene->drawFlags_x2[0] & 0x40) {
-        const Vec3f worldPosition{
-                field_4.x + pivot.x,
-                field_4.y + pivot.y,
-                field_4.z + pivot.z};
-        buildDirectionalLights(
-                lights, field_58, field_68, f10_matrix, worldPosition);
-    }
-
     const Vec3f ambient{
             field_3C.x + surface->vec.x,
             field_3C.y + surface->vec.y,
@@ -318,6 +394,21 @@ void dk2::CEngineAnimMesh::sub_5836A0(int animation, SceneObject2E *scene) {
             return;
         }
         ++g_animGpuMiss;
+    }
+
+    // Only the legacy CPU vertex path needs pivot-relative directional light
+    // vectors. The retained GPU path selects the same source lights directly.
+    Vec3f pivot;
+    f10_matrix.multiplyVec(&pivot, &resource->pos);
+    Obj57BCB0 lights;
+    lights.count = 0;
+    if (scene->drawFlags_x2[0] & 0x40) {
+        const Vec3f worldPosition{
+                field_4.x + pivot.x,
+                field_4.y + pivot.y,
+                field_4.z + pivot.z};
+        buildDirectionalLights(
+                lights, field_58, field_68, f10_matrix, worldPosition);
     }
 
     for (uint32_t triangle = 0; triangle < triangleCount; ++triangle, indices += 3) {
