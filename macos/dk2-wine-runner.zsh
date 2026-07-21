@@ -17,7 +17,9 @@ readonly LOG_DIR="${HOME}/Library/Logs/Dungeon Keeper II Metal"
 readonly LOG_FILE="${LOG_DIR}/game.log"
 readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-3}"
 readonly LEVEL="${DK2_LEVEL:-}"
-readonly GAME_RES="${DK2_GAME_RES:-1920x1200}"
+# Widescreen needs the DirectDraw mode list to expose non-4:3 modes first;
+# until then the safe default is the largest mode the bridge enumerates.
+readonly GAME_RES="${DK2_GAME_RES:-1600x1200}"
 LEVEL_ARGS=()
 [[ -n "${LEVEL}" ]] && LEVEL_ARGS=(-LEVEL "${LEVEL}" -Q)
 
