@@ -1491,6 +1491,14 @@ struct FrameMetrics {
     uint32_t bindingOverflows = 0;
     uint32_t invalidDraws = 0;
     uint32_t packHits = 0;
+    uint32_t shadowLive = 0;
+    uint32_t shadowMasksReceived = 0;
+    uint32_t shadowMasksRendered = 0;
+    uint32_t shadowTriangles = 0;
+    uint32_t shadowRejectUnavailable = 0;
+    uint32_t shadowRejectMalformed = 0;
+    uint32_t shadowRejectTarget = 0;
+    uint32_t shadowRejectCapacity = 0;
 };
 
 class TelemetryWindow {
@@ -1540,6 +1548,15 @@ public:
               p(&FrameMetrics::producerTextureUs, 95), p(&FrameMetrics::producerTextureUs, 99),
               p(&FrameMetrics::producerOverlayUs, 50), p(&FrameMetrics::producerOverlayUs, 95),
               p(&FrameMetrics::producerOverlayUs, 99));
+        NSLog(@"PERF shadows totals/%zu frames: live=%llu received=%llu rendered=%llu "
+               "triangles=%llu rejected(unavailable=%llu malformed=%llu target=%llu capacity=%llu)",
+              kFrames, total(&FrameMetrics::shadowLive),
+              total(&FrameMetrics::shadowMasksReceived),
+              total(&FrameMetrics::shadowMasksRendered), total(&FrameMetrics::shadowTriangles),
+              total(&FrameMetrics::shadowRejectUnavailable),
+              total(&FrameMetrics::shadowRejectMalformed),
+              total(&FrameMetrics::shadowRejectTarget),
+              total(&FrameMetrics::shadowRejectCapacity));
         count_ = 0;
     }
 
@@ -3348,37 +3365,64 @@ static void *renderWorker(void *context) {
         std::vector<ShadowMaskWork> shadowMasks;
         std::vector<uint32_t> shadowTargetOrder;
         NSUInteger shadowVertexBytes = 0;
-        if (snapshot && _shadowsAvailable && _shadowScratchTextures[slot] &&
-            _shadowMaskArgumentTables[slot] && _shadowResolveArgumentTables[slot]) {
+        const bool shadowResourcesReady = _shadowsAvailable &&
+            _shadowScratchTextures[slot] && _shadowMaskArgumentTables[slot] &&
+            _shadowResolveArgumentTables[slot];
+        metrics.shadowLive = dk2ShadowsEnabled() && shadowResourcesReady;
+        if (snapshot) {
             auto *shadowVertices =
-                static_cast<ShadowMaskVertex *>(_shadowVertexBuffers[slot].contents);
+                shadowResourcesReady
+                    ? static_cast<ShadowMaskVertex *>(_shadowVertexBuffers[slot].contents)
+                    : nullptr;
             auto *shadowUniforms =
-                static_cast<ShadowResolveUniform *>(_shadowResolveBuffers[slot].contents);
+                shadowResourcesReady
+                    ? static_cast<ShadowResolveUniform *>(_shadowResolveBuffers[slot].contents)
+                    : nullptr;
             for (const CommandView &view : _commandViews) {
-                if (view.type != DK2M_COMMAND_SHADOW_MASK ||
-                    view.size < sizeof(DK2MShadowMaskCommand) ||
-                    shadowMasks.size() >= kMaxShadowMasksPerFrame) continue;
+                if (view.type != DK2M_COMMAND_SHADOW_MASK) continue;
+                ++metrics.shadowMasksReceived;
+                if (view.size < sizeof(DK2MShadowMaskCommand)) {
+                    ++metrics.shadowRejectMalformed;
+                    continue;
+                }
                 DK2MShadowMaskCommand shadow{};
                 std::memcpy(&shadow, snapshot->bytes.data() + view.offset, sizeof(shadow));
                 const uint64_t triangleBytes =
                     static_cast<uint64_t>(shadow.triangle_count) * sizeof(DK2MShadowTriangle);
                 if (sizeof(shadow) + triangleBytes > view.size ||
                     shadow.target_width != 32 || shadow.target_height != 32 ||
-                    shadow.mode > DK2M_SHADOW_MASK_GRAYSCALE) continue;
+                    shadow.mode > DK2M_SHADOW_MASK_GRAYSCALE) {
+                    ++metrics.shadowRejectMalformed;
+                    continue;
+                }
+                if (!shadowResourcesReady) {
+                    ++metrics.shadowRejectUnavailable;
+                    continue;
+                }
+                if (shadowMasks.size() >= kMaxShadowMasksPerFrame) {
+                    ++metrics.shadowRejectCapacity;
+                    continue;
+                }
                 const auto found = _textures.find(shadow.texture_id);
                 id<MTLTexture> target = found == _textures.end() ? nil : found->second;
                 if (!target || target.pixelFormat != MTLPixelFormatBGRA8Unorm ||
                     !(target.usage & MTLTextureUsageRenderTarget) ||
                     shadow.target_x > target.width || shadow.target_y > target.height ||
                     shadow.target_width > target.width - shadow.target_x ||
-                    shadow.target_height > target.height - shadow.target_y) continue;
+                    shadow.target_height > target.height - shadow.target_y) {
+                    ++metrics.shadowRejectTarget;
+                    continue;
+                }
 
                 const NSUInteger availableVertices =
                     (kShadowVertexBufferSize - shadowVertexBytes) / sizeof(ShadowMaskVertex);
                 const NSUInteger requestedVertices =
                     static_cast<NSUInteger>(shadow.triangle_count) * 3;
-                const NSUInteger copiedVertices = requestedVertices <= availableVertices
-                    ? requestedVertices : 0;
+                if (requestedVertices > availableVertices) {
+                    ++metrics.shadowRejectCapacity;
+                    continue;
+                }
+                const NSUInteger copiedVertices = requestedVertices;
                 const auto *triangles = reinterpret_cast<const DK2MShadowTriangle *>(
                     snapshot->bytes.data() + view.offset + sizeof(shadow));
                 const NSUInteger vertexStart = shadowVertexBytes / sizeof(ShadowMaskVertex);
@@ -3485,9 +3529,36 @@ static void *renderWorker(void *context) {
                     [resolveEncoder drawPrimitives:MTLPrimitiveTypeTriangle
                                        vertexStart:0 vertexCount:3
                                      instanceCount:1 baseInstance:work.uniformIndex];
+                    ++metrics.shadowMasksRendered;
+                    metrics.shadowTriangles += static_cast<uint32_t>(work.vertexCount / 3);
                 }
                 [resolveEncoder endEncoding];
             }
+        }
+
+        // Immediate proof for live A/B: settings logs show intent, this log
+        // shows that the host actually encoded the GPU mask and atlas passes.
+        static bool previousShadowLive = false;
+        static bool shadowLiveConfirmed = false;
+        static bool shadowRejectReported = false;
+        const bool shadowLive = metrics.shadowLive != 0;
+        if (shadowLive != previousShadowLive) {
+            NSLog(@"DK2 shadows GPU path -> %s", shadowLive ? "on; awaiting masks" : "off; CPU fallback");
+            previousShadowLive = shadowLive;
+            shadowLiveConfirmed = false;
+            shadowRejectReported = false;
+        }
+        if (shadowLive && metrics.shadowMasksRendered && !shadowLiveConfirmed) {
+            NSLog(@"DK2 shadows GPU activity confirmed: received=%u rendered=%u triangles=%u",
+                  metrics.shadowMasksReceived, metrics.shadowMasksRendered,
+                  metrics.shadowTriangles);
+            shadowLiveConfirmed = true;
+        } else if (shadowLive && metrics.shadowMasksReceived &&
+                   !metrics.shadowMasksRendered && !shadowRejectReported) {
+            NSLog(@"DK2 shadows GPU commands rejected: unavailable=%u malformed=%u target=%u capacity=%u",
+                  metrics.shadowRejectUnavailable, metrics.shadowRejectMalformed,
+                  metrics.shadowRejectTarget, metrics.shadowRejectCapacity);
+            shadowRejectReported = true;
         }
 
         MTL4RenderPassDescriptor *pass = [[MTL4RenderPassDescriptor alloc] init];

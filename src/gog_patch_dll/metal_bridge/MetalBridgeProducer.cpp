@@ -766,7 +766,9 @@ private:
     }
 
     void setMetalShadowsEnabled(bool enabled) {
-        metalShadowsEnabled_.store(enabled, std::memory_order_relaxed);
+        const bool previous = metalShadowsEnabled_.exchange(enabled, std::memory_order_relaxed);
+        if (previous == enabled) return;
+        gog_debugf("metal shadows bridge: GPU rasterizer %s", enabled ? "on" : "off");
         if (!enabled) {
             for (auto &entry : shadowMasks_) {
                 entry.second.lastSentGeneration = entry.second.generation;
