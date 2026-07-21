@@ -1517,6 +1517,8 @@ struct FrameMetrics {
     uint32_t packMapCommands = 0;
     uint32_t packMappedRects = 0;
     uint32_t packHits = 0;
+    uint32_t residentTextures = 0;
+    uint32_t residentTextureMB = 0;
     uint32_t shadowLive = 0;
     uint32_t shadowMasksReceived = 0;
     uint32_t shadowMasksRendered = 0;
@@ -1575,6 +1577,13 @@ public:
               p(&FrameMetrics::producerTextureUs, 95), p(&FrameMetrics::producerTextureUs, 99),
               p(&FrameMetrics::producerOverlayUs, 50), p(&FrameMetrics::producerOverlayUs, 95),
               p(&FrameMetrics::producerOverlayUs, 99));
+        NSLog(@"PERF frame texture residency p50/p95/p99: allocations=%u/%u/%u MB=%u/%u/%u",
+              p(&FrameMetrics::residentTextures, 50),
+              p(&FrameMetrics::residentTextures, 95),
+              p(&FrameMetrics::residentTextures, 99),
+              p(&FrameMetrics::residentTextureMB, 50),
+              p(&FrameMetrics::residentTextureMB, 95),
+              p(&FrameMetrics::residentTextureMB, 99));
         NSLog(@"PERF shadows totals/%zu frames: live=%llu received=%llu rendered=%llu "
                "triangles=%llu rejected(unavailable=%llu malformed=%llu target=%llu capacity=%llu)",
               kFrames, total(&FrameMetrics::shadowLive),
@@ -2305,7 +2314,11 @@ bool inputLogEnabled() {
     // whole renderer init - bloom is a cosmetic extra, never load-bearing.
     BOOL _bloomAvailable;
     std::unordered_map<uint32_t, id<MTLTexture>> _textures;
+    // The stable set is intentionally immutable during normal frames. Each
+    // frame slot owns the indirect textures its argument tables reference, so
+    // replacing an atlas cannot retain every historical version forever.
     id<MTLResidencySet> _resources;
+    id<MTLResidencySet> _textureResources[kFramesInFlight];
     id<MTL4CommandAllocator> _allocators[kFramesInFlight];
     id<MTL4CommandBuffer> _commandBuffers[kFramesInFlight];
     id<MTLBuffer> _vertexBuffers[kFramesInFlight];
@@ -2627,10 +2640,19 @@ bool inputLogEnabled() {
         _allocators[index] = [_device newCommandAllocator];
         _commandBuffers[index] = [_device newCommandBuffer];
         _commandBuffers[index].label = [NSString stringWithFormat:@"DK2 frame %lu", index];
-        if (!_allocators[index] || !_commandBuffers[index]) {
+        MTLResidencySetDescriptor *textureResidencyDescriptor =
+            [[MTLResidencySetDescriptor alloc] init];
+        textureResidencyDescriptor.initialCapacity = 1024;
+        textureResidencyDescriptor.label =
+            [NSString stringWithFormat:@"DK2 frame textures %lu", index];
+        _textureResources[index] =
+            [_device newResidencySetWithDescriptor:textureResidencyDescriptor error:&error];
+        if (!_allocators[index] || !_commandBuffers[index] || !_textureResources[index]) {
             fail(@"Metal 4 frame resource creation failed.");
             return nil;
         }
+        [_textureResources[index] requestResidency];
+        [_queue addResidencySet:_textureResources[index]];
         const MTLResourceOptions uploadOptions = MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined;
         _vertexBuffers[index] = [_device newBufferWithLength:kVertexBufferSize options:uploadOptions];
         _indexBuffers[index] = [_device newBufferWithLength:kIndexBufferSize options:uploadOptions];
@@ -3105,6 +3127,11 @@ static void *renderWorker(void *context) {
             return;
         }
 
+        id<MTLResidencySet> frameTextures = _textureResources[slot];
+        // This slot's previous GPU work has completed above. Rebuild the set
+        // from textures actually referenced by the new frame; the other two
+        // sets retain everything their in-flight command buffers still need.
+        [frameTextures removeAllAllocations];
         [_allocators[slot] reset];
         id<MTL4CommandBuffer> commandBuffer = _commandBuffers[slot];
         [commandBuffer beginCommandBufferWithAllocator:_allocators[slot]];
@@ -3112,7 +3139,6 @@ static void *renderWorker(void *context) {
         const double t = update.targetPresentationTimestamp;
         const double pulse = 0.5 + 0.5 * std::sin(t * 1.8);
         MTLClearColor clearColor = MTLClearColorMake(0.025 + pulse * 0.035, 0.07, 0.10 + pulse * 0.08, 1.0);
-        __block BOOL residencyChanged = NO;
         std::unordered_set<uint32_t> shadowTargetIds;
         if (snapshot && _shadowsAvailable) {
             for (const CommandView &view : _commandViews) {
@@ -3175,8 +3201,6 @@ static void *renderWorker(void *context) {
             dyn.ringIndex = 0;
             dyn.ring[0] = promoted;
             _textures[textureId] = promoted;
-            [_resources addAllocation:promoted];
-            residencyChanged = YES;
         }
         if (snapshot) {
             for (const CommandView &view : _commandViews) {
@@ -3290,8 +3314,6 @@ static void *renderWorker(void *context) {
                                             stringWithFormat:@"DK2 dynamic %u/%u",
                                                              textureUpdate.texture_id, dyn.ringIndex];
                                     dyn.ring[dyn.ringIndex] = target;
-                                    [_resources addAllocation:target];
-                                    residencyChanged = YES;
                                 }
                             }
                             if (target) {
@@ -3306,8 +3328,6 @@ static void *renderWorker(void *context) {
                         } else if (hd) {
                             if (_textures[key] != hd) {
                                 _textures[key] = hd;
-                                [_resources addAllocation:hd];
-                                residencyChanged = YES;
                             }
                         } else {
                         id<MTLTexture> texture = _textures[key];
@@ -3327,8 +3347,6 @@ static void *renderWorker(void *context) {
                             if (texture) {
                                 texture.label = [NSString stringWithFormat:@"DK2 texture %u", textureUpdate.texture_id];
                                 _textures[key] = texture;
-                                [_resources addAllocation:texture];
-                                residencyChanged = YES;
                             }
                         }
                         if (texture) {
@@ -3392,11 +3410,8 @@ static void *renderWorker(void *context) {
             if (!texture) return;
             if (_textures[textureId] != texture) {
                 _textures[textureId] = texture;
-                [_resources addAllocation:texture];
-                residencyChanged = YES;
             }
         });
-        if (residencyChanged) [_resources commit];
 
         // Rasterize the original game's already-projected silhouettes. Each
         // 32x32 destination pixel corresponds to the same 8x8 subpixel block
@@ -3460,6 +3475,9 @@ static void *renderWorker(void *context) {
                     shadow.target_height > target.height - shadow.target_y) {
                     ++metrics.shadowRejectTarget;
                     continue;
+                }
+                if (![frameTextures containsAllocation:target]) {
+                    [frameTextures addAllocation:target];
                 }
 
                 const NSUInteger availableVertices =
@@ -3677,6 +3695,9 @@ static void *renderWorker(void *context) {
                 if (!texture) {
                     ++metrics.missingTextures;
                     return std::nullopt;
+                }
+                if (![frameTextures containsAllocation:texture]) {
+                    [frameTextures addAllocation:texture];
                 }
                 const TextureBinding binding = {bank, static_cast<uint16_t>(nextSlot[bank])};
                 _frameTextureBindings.push_back({textureId, binding});
@@ -4263,6 +4284,12 @@ static void *renderWorker(void *context) {
                                 drawableTexture:update.drawable.texture];
         }
         [commandBuffer endCommandBuffer];
+        [frameTextures commit];
+        metrics.residentTextures = static_cast<uint32_t>(std::min<NSUInteger>(
+            frameTextures.allocationCount, UINT32_MAX));
+        metrics.residentTextureMB = static_cast<uint32_t>(std::min<uint64_t>(
+            (frameTextures.allocatedSize + 1024 * 1024 - 1) / (1024 * 1024),
+            UINT32_MAX));
 
         const auto drawableWaitStarted = TelemetryClock::now();
         [_queue waitForDrawable:update.drawable];
