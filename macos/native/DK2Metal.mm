@@ -495,11 +495,31 @@ id<MTLTexture> lookup(id<MTLDevice> device, const uint8_t *pixels,
                       uint32_t width, uint32_t height, uint32_t pitch) {
     NSString *dir = directory();
     if (!dir) return nil;
-    static std::unordered_map<uint64_t, id<MTLTexture>> loaded;
+    // Keeping every HD page ever seen resident cost ~1GB (176 files x ~5.6MB
+    // as mipmapped BGRA). Evict pages not referenced for a while - they
+    // reload from disk transparently on the next reference.
+    struct LoadedHd {
+        id<MTLTexture> texture;
+        uint64_t lastUsed;
+    };
+    static std::unordered_map<uint64_t, LoadedHd> loaded;
     static std::unordered_set<uint64_t> missing;
+    static uint64_t useTick = 0;
+    ++useTick;
+    if ((useTick & 1023) == 0) {
+        for (auto it = loaded.begin(); it != loaded.end();) {
+            // ~4096 references at a few dozen page touches per frame is on
+            // the order of a couple of minutes off-screen
+            if (useTick - it->second.lastUsed > 4096) it = loaded.erase(it);
+            else ++it;
+        }
+    }
     const uint64_t hash = texdump::contentHash(pixels, width, height, pitch);
     auto found = loaded.find(hash);
-    if (found != loaded.end()) return found->second;
+    if (found != loaded.end()) {
+        found->second.lastUsed = useTick;
+        return found->second.texture;
+    }
     if (missing.count(hash)) return nil;
     NSString *path = [dir stringByAppendingPathComponent:
             [NSString stringWithFormat:@"%016llx.png", hash]];
@@ -507,7 +527,7 @@ id<MTLTexture> lookup(id<MTLDevice> device, const uint8_t *pixels,
             ? loadFile(device, path, hash)
             : nil;
     if (texture) {
-        loaded.emplace(hash, texture);
+        loaded.emplace(hash, LoadedHd{texture, useTick});
         NSLog(@"texhd: %016llx replaced with %lux%lu",
               hash, (unsigned long)texture.width, (unsigned long)texture.height);
     } else {
