@@ -41,7 +41,16 @@ These bugs, I consider them critical, and those are the ones I will focus on fix
 You can vote for an bug that you consider critical at your discretion by placing a rocket emoji(?) on the corresponding issue
 
 
-## How to install
+## How to install (macOS, Apple Silicon)
+
+1) Download `Flametal-*-macos.zip` from the [releases](https://github.com/nasedkinpv/Flametal/releases) page and unzip it
+2) The app is not notarized yet, so macOS will report the freshly downloaded app as "damaged". Clear the quarantine flag once:
+   ```sh
+   xattr -cr "/path/to/Dungeon Keeper II.app"
+   ```
+3) Open the app; on first launch point it at your own Dungeon Keeper 2 (GOG 1.7) installation — it is imported into a private prefix and the original stays untouched
+
+## How to install (Windows, upstream Flame)
 1) Go to the [releases](https://github.com/DiaLight/Flame/releases) page and download the Flame-1.7.0-*.zip file of the newest release
 2) Extract the zip file into your Dungeon Keeper 2 game directory
 3) That's it. Now you can run `DKII-DX.exe` as usual
