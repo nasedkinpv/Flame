@@ -11,6 +11,7 @@
 #include "dk2/MySurfDesc.h"
 #include "dk2/SurfaceHolder.h"
 #include "dk2/MyDirectDraw.h"
+#include "dk2/TextureDump.h"
 #include <cstdint>
 #include <cstring>
 #include "dk2_functions.h"
@@ -225,6 +226,13 @@ dk2::MyCESurfHandle *dk2::MyCESurfHandle::paint(MySurface *surf, char computeCrc
         if ((int) crc == this->crc16Hash) return this;  // unchanged - skip repaint
         this->crc16Hash = (int) crc;
     }
+    // Named texture dump hook: `surf` is the decoded-but-not-yet-composited
+    // source surface for this handle's resource name, the narrowest point
+    // where both are available together (see TextureDump.cpp for why here).
+    // No-op unless flametal:TextureDump is set.
+    patch::texture_dump::onDecodedSurface(
+            MyStringHashMap_MyCESurfHandle_instance.entries.buf[this->mapIdx].name, surf);
+
     void *pixels = this->cesurf->v_lockBuf();
     MySurface local;  // the original never destroys it either
     local.constructor(&surf->size, &desc, pixels, 0);

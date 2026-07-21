@@ -18,6 +18,9 @@ target_include_directories(toml INTERFACE Toml11-4.4.0)
 
 add_subdirectory(lzma2)
 
+# https://github.com/werkt/kwd (MIT) -- .kwd/.kld level format structs
+add_subdirectory(kwd)
+
 # https://github.com/lvandeve/lodepng
 add_library(lodepng STATIC lodepng-20221108/lodepng.cpp)
 target_include_directories(lodepng PUBLIC lodepng-20221108)

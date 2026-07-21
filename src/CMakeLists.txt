@@ -95,6 +95,8 @@ add_library(${TARGET} SHARED
         dk2/engine/WinEventHandlers.cpp
         dk2/engine/DdModeList.cpp
 
+        dk2/TextureDump.cpp
+
         dk2/engine/scene/scene.cpp
         dk2/engine/scene/surface.cpp
         dk2/engine/scene/MyCESurfHandle.cpp
