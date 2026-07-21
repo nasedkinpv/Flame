@@ -50,6 +50,9 @@ flametal_config::define_flame_option<bool> o_flametal_debugProbes(
     false
 );
 
+namespace dk2 {
+extern bool g_inMainScenePass;
+}
 
 namespace {
 
@@ -138,7 +141,12 @@ struct SceneLightForGpu {   // mirrors Obj57BCB0.cpp's SceneLight view
 };
 
 bool meshGpuActive() {
-    return *o_gog_meshGpuPath && gog::metal_bridge::isEnabled();
+    // DK2 also renders cursor/portrait mini-scenes with different global
+    // camera matrices. The bridge currently has one mesh camera per frame,
+    // so those draws must stay on the legacy CPU path and must never win the
+    // frame camera dedup race ahead of the main world pass.
+    return *o_gog_meshGpuPath && gog::metal_bridge::isEnabled() &&
+           dk2::g_inMainScenePass;
 }
 
 // SceneObject2E carries the final flags consumed by DirectDraw_prepareTexture;
@@ -195,9 +203,10 @@ uint32_t packBaseColor(const dk2::Vec3f &colour) {
     return 0xFF000000u | (clampByte(colour.x) << 16) | (clampByte(colour.y) << 8) | clampByte(colour.z);
 }
 
-// viewProj = P * [M|T] assembled from the same globals RenderData_addToArr
-// projects with: screen_x = Ax*F/z*x + Cx, screen_y = Ay*F/z*y + Cy, near
-// depth = zAdd3 - zMul3*F/z, view = g_mat_77F3A8 * v + g_vec_77F4C0.
+// viewProj = P * [M|T] assembled from the canonical camera globals.
+// g_mat_77F3A8/g_vec_77F4C0 are the per-object model-view scratch written by
+// __renderFun_setSceneObject2E; reading those here made whichever object was
+// first in the frame become the camera for every GPU mesh draw.
 void emitMeshCamera() {
     // thousands of entries per frame share one camera - build it once
     static uint32_t lastFrame = 0xFFFFFFFFu;
@@ -214,8 +223,8 @@ void emitMeshCamera() {
     const float Cy = *reinterpret_cast<const float *>(0x0077F930);
     const float zAdd3 = dk2::g_zAdd3_7793A0;
     const float zMul3 = dk2::g_zMul3_77F934;
-    const auto &M = dk2::g_mat_77F3A8;
-    const auto &T = dk2::g_vec_77F4C0;
+    const auto &M = dk2::g_mat_77F498;
+    const auto &T = *reinterpret_cast<const dk2::Vec3f *>(0x00780940);
     const float sx = 2.0f * Ax * F / static_cast<float>(w);
     const float ox = 2.0f * Cx / static_cast<float>(w) - 1.0f;
     const float sy = -2.0f * Ay * F / static_cast<float>(h);
@@ -590,6 +599,20 @@ int copyEntryGuarded(const MeshEntry &entry, uint32_t indexCount,
     }
 }
 
+int copyEntryPositionsGuarded(const MeshEntry &entry, uint32_t vertexCount,
+                              float *outPositions) {
+    __try {
+        for (uint32_t vertex = 0; vertex < vertexCount; ++vertex) {
+            outPositions[vertex * 3 + 0] = entry.vertices[vertex].position.x;
+            outPositions[vertex * 3 + 1] = entry.vertices[vertex].position.y;
+            outPositions[vertex * 3 + 2] = entry.vertices[vertex].position.z;
+        }
+        return 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 int describeEntryGuarded(const MeshEntry &entry, uint32_t indexCount,
                          uint32_t *vertexCountOut, uint64_t *signatureOut) {
     __try {
@@ -843,12 +866,19 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                 &retained)) {
             return false;
         }
-        const float world[12] = {
-            1, 0, 0, retained.origin.x,
-            0, 1, 0, retained.origin.y,
-            0, 0, 1, retained.origin.z};
-        dk2::meshgpu::emitRetained(
-            target, retained.meshId, world, lights,
+        static float positions[256 * 3];
+        if (!copyEntryPositionsGuarded(entry, vertexCount, positions)) {
+            return false;
+        }
+        static const float identity[12] = {
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0};
+        // MeshEntry storage is reused while the camera walks the static
+        // scene. Keep topology/attributes retained, but stream the current
+        // positions so an address-cache hit cannot resurrect old terrain.
+        dk2::meshgpu::emitDeformed(
+            target, retained.meshId, positions, vertexCount, identity, lights,
             ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
     }
     return true;

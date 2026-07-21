@@ -69,6 +69,9 @@
 # maximum shadow detail with the high-resolution camera.
 0058E080 int __cdecl shadows_process_58E080(int, int, int, int, int, int)
 
+# art loading (HD cursor substitution lives in the translation)
+005540B0 int *__cdecl loadArtToSurfaceEx(int *, MyDdSurfaceEx *, MyDir_CFileManager *, const char *, uint16_t)
+
 # CBridge
 0043E0F0 MySurface *CBridge::loadPng(const char *)
 0043E320 void CBridge::sub_43E320(uint32_t, uint32_t, MyTerrainDataObj *, CEngineStaticMeshDataArrays *)
