@@ -68,8 +68,8 @@ struct DK2DrawUniform {
     float bumpEnvMat1_11;
     float bumpEnvLScale1;
     float bumpEnvLOffset1;
-    // Metal shadows: 1 when D3DRS_ZENABLE was on for this draw (depth-tested
-    // world geometry, eligible for shadow-coverage darkening in
+    // Metal shadows: 1 when D3DRS_ZENABLE and D3DRS_ZWRITEENABLE were on for
+    // this draw (opaque world geometry, eligible for shadow darkening in
     // dk2_fragment). Mirrors kWorldGeometryShadowBit's meaning for the mesh
     // path - see DK2Metal.mm.
     uint worldGeometry;
