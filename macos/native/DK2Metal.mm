@@ -2665,8 +2665,13 @@ static void *renderWorker(void *context) {
     if (!getenv("DK2_GAME_RES")) {
         NSScreen *screen = _window.screen ?: NSScreen.mainScreen;
         const CGFloat height = MAX(screen.frame.size.height, (CGFloat)1);
-        long width = lround(1200.0 * screen.frame.size.width / height / 8.0) * 8;
-        width = MIN(MAX(width, 1600L), 2560L);
+        const long ideal = lround(1200.0 * screen.frame.size.width / height / 8.0) * 8;
+        // Only widths the engine is verified stable at: menu load crashes
+        // with high probability at 2136 (memcpy overread during the surface
+        // storm). Wider displays get the largest verified width, slightly
+        // letterboxed, until the overread is fixed.
+        long width = 1600;
+        if (ideal >= 1800) width = 1800;
         setenv("DK2_GAME_RES", [NSString stringWithFormat:@"%ldx1200", width].UTF8String, 0);
     }
     if (gGameRunnerPath) {
