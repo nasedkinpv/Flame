@@ -68,7 +68,19 @@ struct DK2DrawUniform {
     float bumpEnvMat1_11;
     float bumpEnvLScale1;
     float bumpEnvLOffset1;
+    // Metal shadows: 1 when D3DRS_ZENABLE was on for this draw (depth-tested
+    // world geometry, eligible for shadow-coverage darkening in
+    // dk2_fragment). Mirrors kWorldGeometryShadowBit's meaning for the mesh
+    // path - see DK2Metal.mm.
+    uint worldGeometry;
 };
+
+// Metal shadows: host-only bit (never a wire-protocol bit) stitched into
+// DK2RasterVertex.meshFlags for BOTH the legacy (via draw.worldGeometry) and
+// mesh (via MeshDrawUniform.flags) vertex stages, so dk2_fragment can gate
+// the darkening pass with one check regardless of which produced the
+// fragment. Must match kWorldGeometryShadowBit in DK2Metal.mm.
+constant uint kWorldGeometryShadowBit = 1u << 5;
 
 struct DK2RasterVertex {
     float4 position [[position]];
@@ -163,7 +175,7 @@ DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffu
     result.bumpEnvMat1_11 = draw.bumpEnvMat1_11;
     result.bumpEnvLScale1 = draw.bumpEnvLScale1;
     result.bumpEnvLOffset1 = draw.bumpEnvLOffset1;
-    result.meshFlags = 0;
+    result.meshFlags = draw.worldGeometry ? kWorldGeometryShadowBit : 0u;
     return result;
 }
 
@@ -441,8 +453,68 @@ bool dk2_apply_bump_env(uint op, float4 bumpTexColor,
     return true;
 }
 
+// --- Metal shadows: GPU shadow-coverage map for mesh-path casters ---
+// See DK2M_DRAW_MESH_SHADOW_CASTER in DK2BridgeProtocol.h and the session
+// report for the full derivation. Mirrors ShadowGlobalUniform in
+// DK2Metal.mm exactly (bound at buffer(7) in every argument table bank,
+// alongside the coverage texture at texture(128)).
+struct DK2ShadowGlobalUniform {
+    float4x4 invReconstruct;  // (ndcX*viewZ, ndcY*viewZ, viewZ, 1) -> world xyz1
+    float screenWidth;
+    float screenHeight;
+    float casterMinZ;
+    float casterMaxZ;
+    float upSign;             // +1: caster base = casterMinZ, -1: = casterMaxZ
+    float epsilon;
+    float darkenStrength;
+    uint active;               // 1 iff shadows enabled AND a camera AND casters arrived this frame
+    float shadowCenterX, shadowCenterY;
+    float shadowHalfExtentX, shadowHalfExtentY;
+    uint pad0, pad1, pad2, pad3;
+};
+
+// Reusing the caster vertex layout for the shadow pass's own vertex buffer -
+// identical bytes to DK2MeshVertexIn (36-byte DK2MMeshVertex), only position
+// is read here (casters arrive as world-space vertices with implicit
+// identity world transform, same as any other DRAW_MESH_INLINE).
+vertex float4 dk2_shadow_vertex(device const DK2MeshVertexIn *vertices [[buffer(0)]],
+                                constant DK2ShadowGlobalUniform &shadow [[buffer(1)]],
+                                uint vertexID [[vertex_id]]) {
+    const float3 p = float3(vertices[vertexID].position);
+    const float ndcX = (p.x - shadow.shadowCenterX) / max(shadow.shadowHalfExtentX, 0.0001f);
+    // Flipped so the UV formula used when SAMPLING the coverage map back in
+    // dk2_fragment (u,v = (world - center)/(2*halfExtent) + 0.5, standard
+    // Metal top-left-origin texture convention) lines up with this pass's
+    // NDC -> render-target-row mapping without a separate y-flip constant.
+    const float ndcY = -(p.y - shadow.shadowCenterY) / max(shadow.shadowHalfExtentY, 0.0001f);
+    return float4(ndcX, ndcY, 0.5, 1.0);
+}
+
+fragment float4 dk2_shadow_fragment() {
+    // Binary coverage: any caster triangle covering this texel writes full
+    // white (R8Unorm; only the red channel is read back). No blending, no
+    // depth test - overlapping casters are idempotent here.
+    return float4(1.0, 0.0, 0.0, 0.0);
+}
+
+// Cheap 5-tap cross box filter (see the task's "bilinear + poisson" note) -
+// softens the coverage map's hard silhouette edges without a separate blur
+// pass. Weighted 4:1:1:1:1 (center:N/S/E/W) so a fully-covered neighbourhood
+// still saturates to ~1.0.
+float dk2_sample_shadow_coverage(texture2d<float> tex, sampler smp, float2 uv) {
+    const float2 texel = float2(1.0 / float(tex.get_width()), 1.0 / float(tex.get_height()));
+    float sum = tex.sample(smp, uv).r * 4.0;
+    sum += tex.sample(smp, uv + float2(texel.x, 0.0)).r;
+    sum += tex.sample(smp, uv - float2(texel.x, 0.0)).r;
+    sum += tex.sample(smp, uv + float2(0.0, texel.y)).r;
+    sum += tex.sample(smp, uv - float2(0.0, texel.y)).r;
+    return saturate(sum / 8.0);
+}
+
 fragment float4 dk2_fragment(DK2RasterVertex input [[stage_in]],
-                             array<texture2d<float>, 128> textures [[texture(0)]],
+                             array<texture2d<float>, 127> textures [[texture(0)]],
+                             texture2d<float> shadowCoverage [[texture(127)]],
+                             constant DK2ShadowGlobalUniform &shadowGlobal [[buffer(7)]],
                              sampler textureSampler [[sampler(0)]]) {
     const float4 factor = dk2_unpack_color(input.textureFactor);
     float4 current = input.color;
@@ -518,6 +590,46 @@ fragment float4 dk2_fragment(DK2RasterVertex input [[stage_in]],
             dk2_alpha_op(input.alphaOp2, alphaArg1_2, alphaArg2_2,
                          input.color, textureColor2, factor, current));
         if (pendingLuminance >= 0.0) current.rgb *= pendingLuminance;
+    }
+
+    // Metal shadows: darken depth-tested world geometry (input.meshFlags has
+    // kWorldGeometryShadowBit - see DK2Metal.mm) that lies at/below the
+    // shadow casters' ground-contact height, using this frame's coverage map.
+    // Skipped entirely (one flag test) when disabled, no camera arrived, or
+    // no casters this frame (shadowGlobal.active == 0).
+    if ((input.meshFlags & kWorldGeometryShadowBit) != 0u && shadowGlobal.active != 0u) {
+        // input.position (fragment-stage [[position]]) is window-space: xy in
+        // pixels, w = 1/clipW. clipW equals viewZ for both vertex stages
+        // (dk2_make_vertex sets w=clipW=1/rhw=viewZ; dk2_vertex_mesh's
+        // position.w is camera.viewProj's w row, also viewZ) - see the
+        // session report.
+        const float clipW = 1.0 / input.position.w;
+        if (clipW > 1e-4) {
+            const float ndcX = (input.position.x / shadowGlobal.screenWidth) * 2.0 - 1.0;
+            const float ndcY = 1.0 - (input.position.y / shadowGlobal.screenHeight) * 2.0;
+            // Reconstruct the ORIGINAL clip-space vector (pre perspective
+            // divide) from screen xy + viewZ alone, deliberately NOT using
+            // the piecewise-remapped clip.z (see invertMatrix4x4 call site in
+            // DK2Metal.mm for why that row is excluded from the inverse).
+            const float4 reconVec = float4(ndcX * clipW, ndcY * clipW, clipW, 1.0);
+            const float3 worldPos = (shadowGlobal.invReconstruct * reconVec).xyz;
+            const float base = shadowGlobal.upSign > 0.0
+                ? shadowGlobal.casterMinZ : shadowGlobal.casterMaxZ;
+            const bool below = shadowGlobal.upSign > 0.0
+                ? worldPos.z <= base + shadowGlobal.epsilon
+                : worldPos.z >= base - shadowGlobal.epsilon;
+            if (below) {
+                const float u = (worldPos.x - shadowGlobal.shadowCenterX) /
+                    (2.0 * shadowGlobal.shadowHalfExtentX) + 0.5;
+                const float v = (worldPos.y - shadowGlobal.shadowCenterY) /
+                    (2.0 * shadowGlobal.shadowHalfExtentY) + 0.5;
+                if (u >= 0.0 && u <= 1.0 && v >= 0.0 && v <= 1.0) {
+                    const float coverage = dk2_sample_shadow_coverage(shadowCoverage, textureSampler,
+                                                                      float2(u, v));
+                    current.rgb *= (1.0 - shadowGlobal.darkenStrength * coverage);
+                }
+            }
+        }
     }
 
     return current;

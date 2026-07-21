@@ -7,6 +7,7 @@
 #include "dk2_memory.h"
 #include "dk2/sound/TbSysCommand_Process.h"
 #include "dk2/entities/CPlayer.h"
+#include "dk2/MeshGpuEmit.h"
 #include "math/int_float.h"
 #include <metal_bridge/MetalBridgeProducer.h>
 #include "patches/logging.h"
@@ -361,6 +362,17 @@ int dk2::MyGameSession::tick(int a2_isNeedBlt) {
             cameraStarted = std::chrono::steady_clock::now();
             this->pBridge->v_f2C_maybe_cameraFun(&this->gameTick278_last);
             cameraFinished = std::chrono::steady_clock::now();
+            // flametal:MetalShadows -- the host needs a fresh camera every
+            // frame to invert-project GPU shadow casters into its top-down
+            // shadow map, even on frames where no creature happens to be on
+            // screen (emitAnimShadowCaster/drawAnimOnGpu only push a camera
+            // as a side effect of actually drawing a mesh). emitCamera()
+            // itself is idempotent per producer frame (see emitMeshCamera's
+            // lastFrame guard in Obj57AD20.cpp), so this is a cheap no-op on
+            // every frame a mesh already pushed one.
+            if (dk2::meshgpu::shadowsActive()) {
+                dk2::meshgpu::emitCamera();
+            }
             playerStarted = cameraFinished;
             if (this->pPlayer) {
                 if (this->pBridge->v_f40_enableSmth()) {
