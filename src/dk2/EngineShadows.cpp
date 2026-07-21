@@ -1,5 +1,6 @@
 #include "dk2/engine/primitive/2d/world/CEngineDynamicMesh.h"
 
+#include "dk2/MeshVertEx.h"
 #include "dk2/MyEntryBuf_MyStringHashMap_MyMeshResourceHolder_entry.h"
 #include "dk2/MyMeshResourceHolder.h"
 #include "dk2/MyScaledSurface.h"
