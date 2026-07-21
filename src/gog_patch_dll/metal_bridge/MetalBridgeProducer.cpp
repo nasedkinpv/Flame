@@ -108,6 +108,11 @@ public:
             textureReleasesAcked_ = 0;
             textureReleasesEmitted_ = 0;
             textureReleaseLastSentFrame_ = 0;
+            // Same for atlas resets: a fresh host holds no page maps yet.
+            atlasResets_.clear();
+            atlasResetsAcked_ = 0;
+            atlasResetsEmitted_ = 0;
+            atlasResetLastSentFrame_ = 0;
             for (auto &entry : shadowMasks_) {
                 entry.second.lastSentGeneration = entry.second.generation;
             }
@@ -135,6 +140,19 @@ public:
                 textureReleases_.clear();
                 textureReleasesAcked_ = 0;
                 textureReleasesEmitted_ = 0;
+            }
+            if (atlasResetLastSentFrame_) {
+                if (consumer == atlasResetLastSentFrame_) {
+                    atlasResetsAcked_ = atlasResetsEmitted_;
+                } else {
+                    atlasResetsEmitted_ = atlasResetsAcked_;
+                }
+                atlasResetLastSentFrame_ = 0;
+            }
+            if (atlasResetsAcked_ == atlasResets_.size() && !atlasResets_.empty()) {
+                atlasResets_.clear();
+                atlasResetsAcked_ = 0;
+                atlasResetsEmitted_ = 0;
             }
         }
         lastConsumerSession_ = consumerSession;
@@ -177,7 +195,9 @@ public:
 
         // Maps precede full texture uploads. The host also pre-scans maps,
         // but keeping the stream ordered makes captures and other consumers
-        // self-contained without relying on a second pass.
+        // self-contained without relying on a second pass. Resets must land
+        // before the rects that describe the page's new layout.
+        emitAtlasResets();
         emitAtlasRects();
 
         for (DWORD stage = 0; stage < 3; ++stage) {
@@ -401,18 +421,23 @@ public:
         // Every engine reduction level is a valid atlas page. The resource
         // pack contains one canonical base image, so FooMM0..FooMM9 all map
         // to Foo; the host scales it to the selected rect and builds mips.
-        std::string name(rawName);
-        const size_t n = name.size();
-        if (n >= 3 && name[n - 3] == 'M' && name[n - 2] == 'M' &&
-            name[n - 1] >= '0' && name[n - 1] <= '9') {
-            name.resize(n - 3);
+        // Millions of calls per session hit this path: stay allocation-free
+        // until the per-page dedupe check has passed.
+        size_t n = std::strlen(rawName);
+        if (n >= 3 && rawName[n - 3] == 'M' && rawName[n - 2] == 'M' &&
+            rawName[n - 1] >= '0' && rawName[n - 1] <= '9') {
+            n -= 3;
             ++atlasMipCanonicalized_;
-            if (name.empty()) return;
+            if (!n) return;
         }
-        char dedupe[96];
-        std::snprintf(dedupe, sizeof(dedupe), "%p|%u|%u|%s",
-                      pageKey, x, y, name.c_str());
-        if (!atlasRectSeen_.insert(dedupe).second) return;
+        uint64_t rectKey = 1469598103934665603ull;  // FNV-1a over (x, y, name)
+        auto mix8 = [&rectKey](uint8_t b) { rectKey ^= b; rectKey *= 1099511628211ull; };
+        mix8(static_cast<uint8_t>(x)); mix8(static_cast<uint8_t>(x >> 8));
+        mix8(static_cast<uint8_t>(y)); mix8(static_cast<uint8_t>(y >> 8));
+        for (size_t i = 0; i < n; ++i) mix8(static_cast<uint8_t>(rawName[i]));
+        if (!atlasSeenByPage_[reinterpret_cast<uintptr_t>(pageKey)]
+                 .insert(rectKey).second) return;
+        std::string name(rawName, n);
         if ((++atlasReported_ % 250) == 1) {
             size_t pendingCount = 0;
             for (const auto &kv : pendingAtlasRects_) pendingCount += kv.second.size();
@@ -482,6 +507,51 @@ public:
             append(&cmd, sizeof(cmd));
             ++commandCount_;
             ++atlasRectsEmitted_;
+        }
+    }
+
+    // Engine repacked this atlas page (SurfHashList2 detach + recomposite):
+    // drop everything we believe about its layout and tell the host to do
+    // the same. Placements reported afterwards describe the new layout.
+    void atlasPageReset(const void *pageKey) {
+        if (!pageKey) return;
+        const uintptr_t key = reinterpret_cast<uintptr_t>(pageKey);
+        atlasSeenByPage_.erase(key);
+        pendingAtlasRects_.erase(key);
+        const auto found = surfaceTextures_.find(key);
+        if (found == surfaceTextures_.end()) return;
+        const uint32_t textureId = found->second;
+        const size_t oldSize = atlasRects_.size();
+        atlasRects_.erase(
+            std::remove_if(atlasRects_.begin(), atlasRects_.end(),
+                           [textureId](const DK2MPageAtlasMapCommand &rect) {
+                               return rect.textureId == textureId;
+                           }),
+            atlasRects_.end());
+        if (atlasRects_.size() != oldSize) {
+            // Watermark indices shifted; replay the live map from zero.
+            atlasRectsAcked_ = 0;
+            atlasRectsEmitted_ = 0;
+            atlasLastSentFrame_ = 0;
+        }
+        atlasResets_.push_back(textureId);
+        if ((++atlasResetCount_ % 100) == 1) {
+            gog_debugf("atlas-map: page resets=%u live-rects=%u",
+                       atlasResetCount_, static_cast<unsigned>(atlasRects_.size()));
+        }
+        if (active_) emitAtlasResets();
+    }
+
+    void emitAtlasResets() {
+        while (atlasResetsEmitted_ < atlasResets_.size()) {
+            DK2MPageAtlasResetCommand command = {};
+            command.header.type = DK2M_COMMAND_PAGE_ATLAS_RESET;
+            command.header.size = sizeof(command);
+            command.texture_id = atlasResets_[atlasResetsEmitted_];
+            if (used_ + sizeof(command) > DK2M_SLOT_CAPACITY) break;
+            append(&command, sizeof(command));
+            ++commandCount_;
+            ++atlasResetsEmitted_;
         }
     }
 
@@ -626,6 +696,7 @@ public:
         if (textureReleasesEmitted_ > textureReleasesAcked_) {
             textureReleaseLastSentFrame_ = frame_;
         }
+        if (atlasResetsEmitted_ > atlasResetsAcked_) atlasResetLastSentFrame_ = frame_;
         for (auto &entry : textures_) {
             TextureCache &texture = entry.second;
             if (texture.sentInCurrentFrame) {
@@ -2075,16 +2146,7 @@ private:
         deadSurfaces_.erase(
             std::remove(deadSurfaces_.begin(), deadSurfaces_.end(), key),
             deadSurfaces_.end());
-        char prefix[32];
-        std::snprintf(prefix, sizeof(prefix), "%p|", key);
-        const size_t prefixLength = std::strlen(prefix);
-        for (auto it = atlasRectSeen_.begin(); it != atlasRectSeen_.end();) {
-            if (it->compare(0, prefixLength, prefix) == 0) {
-                it = atlasRectSeen_.erase(it);
-            } else {
-                ++it;
-            }
-        }
+        atlasSeenByPage_.erase(pageKey);
     }
 
     void append(const void *data, uint32_t size) {
@@ -2105,7 +2167,12 @@ private:
     uint32_t atlasMipCanonicalized_ = 0;
     uint32_t atlasRejectedInvalid_ = 0;
     std::unordered_map<uintptr_t, std::vector<PendingAtlasRect>> pendingAtlasRects_;
-    std::unordered_set<std::string> atlasRectSeen_;
+    std::unordered_map<uintptr_t, std::unordered_set<uint64_t>> atlasSeenByPage_;
+    std::vector<uint32_t> atlasResets_;
+    size_t atlasResetsAcked_ = 0;
+    size_t atlasResetsEmitted_ = 0;
+    uint32_t atlasResetLastSentFrame_ = 0;
+    uint32_t atlasResetCount_ = 0;
     std::vector<uint32_t> textureReleases_;
     size_t textureReleasesAcked_ = 0;
     size_t textureReleasesEmitted_ = 0;
@@ -2349,6 +2416,11 @@ void surfaceReleased(const void *key) {
 
 void textureReleased(DWORD textureId, const void *key) {
     if (isEnabled()) producer.textureReleased(textureId, key);
+}
+
+void atlasPageReset(const void *pageKey) {
+    if (!isEnabled()) return;
+    producer.atlasPageReset(pageKey);
 }
 
 void reportAtlasRect(const void *pageKey, const char *name, uint32_t x, uint32_t y,

@@ -103,6 +103,10 @@ int dk2::SurfHashList2::_probablySort() {
             if (!v22)
                 this->deleteHolder(j);
         }
+        // The page is recomposited from scratch: invalidate its atlas map on
+        // both bridge sides before the new placements arrive, or historical
+        // rects keep getting composed into the reused page.
+        gog::metal_bridge::atlasPageReset(atlasPageKey(fD8_holder_first->surf));
         this->sub_593880(fD8_holder_first, 0, 0, this->holder_size, this->holder_size, 3);
         if (auto *fD0_ddsurf = this->ddsurf)
             fD8_holder_first->surf->paintSurf((CEngineSurface *) fD0_ddsurf, 0, 0);

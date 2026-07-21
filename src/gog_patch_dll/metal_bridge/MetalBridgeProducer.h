@@ -94,6 +94,9 @@ void textureReleased(DWORD textureId, const void *key = nullptr);
 // Mip-suffixed names are filtered producer-side: "…MM0" is stripped, deeper
 // mips are dropped. Reports made before the page has a texture id are queued
 // and flushed when the id first appears.
+// Atlas page repack: drop the page's map on both sides (see
+// DK2M_COMMAND_PAGE_ATLAS_RESET).
+void atlasPageReset(const void *pageKey);
 void reportAtlasRect(const void *pageKey, const char *name, uint32_t x, uint32_t y,
                      uint32_t w, uint32_t h);
 // Replaces the CPU coverage build for one original DK2 shadow surface. The

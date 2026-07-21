@@ -54,6 +54,13 @@ enum DK2MCommandType {
     // The game-side owner released this bridge texture id. The host drops
     // both the Metal texture and persistent named-atlas metadata for it.
     DK2M_COMMAND_TEXTURE_RELEASE = 15,
+    // Atlas page repack: the engine detached this page's handles and will
+    // recomposite it from scratch (SurfHashList2 repack). The host must
+    // drop every PAGE_ATLAS_MAP rect it holds for `texture_id`; placements
+    // that follow describe the new layout. Without this, historical rects
+    // keep getting composed into reused pages (stale sprites glued into
+    // unrelated textures).
+    DK2M_COMMAND_PAGE_ATLAS_RESET = 16,
 };
 
 struct DK2MPageAtlasMapCommand {
@@ -211,6 +218,11 @@ typedef struct DK2MTextureReleaseCommand {
     DK2MCommandHeader header;
     uint32_t texture_id;
 } DK2MTextureReleaseCommand;
+
+typedef struct DK2MPageAtlasResetCommand {
+    DK2MCommandHeader header;
+    uint32_t texture_id;
+} DK2MPageAtlasResetCommand;
 
 typedef struct DK2MRenderStateCommand {
     DK2MCommandHeader header;

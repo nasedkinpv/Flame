@@ -977,6 +977,21 @@ void release(uint32_t textureId) {
     pages().erase(textureId);
 }
 
+// PAGE_ATLAS_RESET: the engine repacked this page. Forget every rect and
+// tear down the composed HD page; the new layout's placements re-populate
+// it. Keeping pixels1x is fine (a full upload always precedes reuse), but
+// the composed texture must go now or stale sprites linger until then.
+void pageReset(uint32_t textureId) {
+    auto it = pages().find(textureId);
+    if (it == pages().end()) return;
+    PageState &st = it->second;
+    st.rects.clear();
+    st.hdTexture = nil;
+    st.dirty = false;
+    st.demoted = false;
+    st.rebuilds = 0;
+}
+
 uint64_t &pngCacheEpoch() {
     static uint64_t epoch = 1;
     return epoch;
@@ -2364,6 +2379,7 @@ bool inputLogEnabled() {
     struct DynamicTexture {
         uint32_t misses = 0;
         uint32_t retry = 0;   // periodic HD re-probe while classified dynamic
+        uint32_t recoverStreak = 0;  // consecutive successful re-probes
         uint32_t sourceWidth = 0;
         uint32_t sourceHeight = 0;
         uint8_t ringIndex = 0;
@@ -3107,6 +3123,17 @@ static void *renderWorker(void *context) {
                 respack::release(release.texture_id);
             }
             for (const CommandView &view : _commandViews) {
+                // Page repack: the engine recomposited this page from
+                // scratch. Drop its whole atlas map; the placements for the
+                // new layout follow in this same (or a later) frame.
+                if (view.type != DK2M_COMMAND_PAGE_ATLAS_RESET ||
+                    view.size != sizeof(DK2MPageAtlasResetCommand)) continue;
+                DK2MPageAtlasResetCommand reset = {};
+                std::memcpy(&reset, snapshot->bytes.data() + view.offset, sizeof(reset));
+                if (!reset.texture_id) continue;
+                respack::pageReset(reset.texture_id);
+            }
+            for (const CommandView &view : _commandViews) {
                 if (view.type != DK2M_COMMAND_PAGE_ATLAS_MAP) continue;
                 ++metrics.packMapCommands;
                 DK2MPageAtlasMapCommand map = {};
@@ -3269,10 +3296,21 @@ static void *renderWorker(void *context) {
                             if (hd) {
                                 dyn.misses = 0;
                                 if (dyn.dynamic) {
-                                    dyn.dynamic = false;
-                                    NSLog(@"texture id %u recovered from dynamic: HD lookup back on",
-                                          textureUpdate.texture_id);
+                                    // One hit is not proof: a single stale
+                                    // pack/hash match must not flip an
+                                    // animated page back into HD. Require two
+                                    // consecutive successful re-probes.
+                                    if (++dyn.recoverStreak >= 2) {
+                                        dyn.dynamic = false;
+                                        dyn.recoverStreak = 0;
+                                        NSLog(@"texture id %u recovered from dynamic: HD lookup back on",
+                                              textureUpdate.texture_id);
+                                    } else {
+                                        hd = nil;  // stay dynamic this round
+                                    }
                                 }
+                            } else if (dyn.dynamic) {
+                                dyn.recoverStreak = 0;
                             } else if (!dyn.dynamic &&
                                        (texhd::directory() != nil || respack::directory() != nil) &&
                                        ++dyn.misses > 8 && !cursorTexture) {
