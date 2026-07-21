@@ -2,7 +2,9 @@
 
 #include "dk2/AnimVertEx.h"
 #include "dk2/MeshGpuEmit.h"
+#include "patches/logging.h"
 #include <metal_bridge/DK2BridgeProtocol.h>
+#include <windows.h>
 #include "dk2/MyMeshResourceHolder.h"
 #include "dk2/MyScaledSurface.h"
 #include "dk2/Obj57BCB0.h"
@@ -21,6 +23,8 @@
 
 
 namespace {
+
+uint32_t g_animModePlain, g_animModeBlend, g_animModeOther, g_animGpuHit, g_animGpuMiss;
 
 using VertexFun = int (__cdecl *)(uint32_t, dk2::Vec3f *);
 using TriangleFun = int (__cdecl *)(uint32_t, uint32_t, uint32_t);
@@ -299,13 +303,16 @@ void dk2::CEngineAnimMesh::sub_5836A0(int animation, SceneObject2E *scene) {
     const uint8_t *indices = reinterpret_cast<const uint8_t *>(entry.plod_list[lod]);
     const uint32_t triangleCount = static_cast<uint8_t>(entry.lod_list[lod]);
 
-    if (dk2::meshgpu::active() &&
-        drawAnimOnGpu(this, scene, surface, resource, animation, frame,
-                      frameIndex, entry, indices, triangleCount, ambient,
-                      (scene->drawFlags_x2[0] & 0x40) != 0,
-                      *reinterpret_cast<float *>(&field_38))) {
-        f50_pMeshHolder->markUsed();
-        return;
+    if (dk2::meshgpu::active()) {
+        if (drawAnimOnGpu(this, scene, surface, resource, animation, frame,
+                          frameIndex, entry, indices, triangleCount, ambient,
+                          (scene->drawFlags_x2[0] & 0x40) != 0,
+                          *reinterpret_cast<float *>(&field_38))) {
+            ++g_animGpuHit;
+            f50_pMeshHolder->markUsed();
+            return;
+        }
+        ++g_animGpuMiss;
     }
 
     for (uint32_t triangle = 0; triangle < triangleCount; ++triangle, indices += 3) {
@@ -347,11 +354,22 @@ void dk2::CEngineAnimMesh::sub_5836A0(int animation, SceneObject2E *scene) {
 
 void dk2::CEngineAnimMesh::fun_5848B0(int mode, SceneObject2E *scene) {
     if (mode >= 2000) {
+        ++g_animModeOther;
         using OriginalFun = void (__thiscall *)(CEngineAnimMesh *, int, SceneObject2E *);
         reinterpret_cast<OriginalFun>(0x00583CA0)(this, mode - 2000, scene);
     } else if (mode >= 1000) {
+        ++g_animModeBlend;
         sub_583DC0(mode - 1000, scene);
     } else {
+        ++g_animModePlain;
         sub_5836A0(mode, scene);
+    }
+    static DWORD lastTick = 0;
+    const DWORD now = GetTickCount();
+    if (now - lastTick > 3000) {
+        lastTick = now;
+        patch::log::dbg("anim modes: plain=%u blend=%u other=%u gpuHit=%u gpuMiss=%u",
+                        g_animModePlain, g_animModeBlend, g_animModeOther,
+                        g_animGpuHit, g_animGpuMiss);
     }
 }
