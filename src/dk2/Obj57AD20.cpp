@@ -869,6 +869,14 @@ int *dk2::Obj57AD20::sub_57A9A0(
         int a7,
         float scale) {
     if (selectExtendedPath) {
+        // GPU path: use the translated extended emitter, whose GPU branch
+        // keeps only the vector-field displacement on the CPU. The original
+        // stays the default for the legacy renderer until the translation
+        // has a frame-level differential test.
+        if (meshGpuActive()) {
+            return sub_57B0E0(entryIndex, scene, a4, lights,
+                              selectExtendedPath, a6, a7, scale);
+        }
         using OriginalExtendedFun = int *(__thiscall *)(
                 Obj57AD20 *, int, SceneObject2E *, int, uint32_t *,
                 int, int, int, float);
