@@ -19,6 +19,7 @@ readonly SIGNING_IDENTITY="${DK2_CODESIGN_IDENTITY:--}"
 /bin/rm -rf -- "${APP}"
 /bin/mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 /bin/cp "${SCRIPT_DIR}/native/Info.plist" "${APP}/Contents/Info.plist"
+/bin/cp "${SCRIPT_DIR}/AppIcon.icns" "${APP}/Contents/Resources/AppIcon.icns"
 
 /usr/bin/xcrun --sdk macosx metal \
   -c "${SCRIPT_DIR}/native/DK2Shaders.metal" \

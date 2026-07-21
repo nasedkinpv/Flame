@@ -56,6 +56,7 @@ trap '/bin/rm -rf -- "${stage_root}"' EXIT
 stage="${stage_root}/Dungeon Keeper II.app"
 /bin/mkdir -p "${stage}/Contents/MacOS" "${stage}/Contents/Resources/Flametal/flametal"
 /bin/cp "${SCRIPT_DIR}/MetalInfo.plist" "${stage}/Contents/Info.plist"
+/bin/cp "${SCRIPT_DIR}/AppIcon.icns" "${stage}/Contents/Resources/AppIcon.icns"
 /bin/cp "${NATIVE_APP}/Contents/MacOS/DK2Metal" "${stage}/Contents/MacOS/DK2Metal"
 /bin/cp "${NATIVE_APP}/Contents/Resources/DK2Shaders.metallib" "${stage}/Contents/Resources/DK2Shaders.metallib"
 /bin/cp "${SCRIPT_DIR}/dk2-metal-launcher.zsh" "${stage}/Contents/Resources/dk2-game-runner"

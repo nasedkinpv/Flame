@@ -8,6 +8,8 @@
 	<string>Dungeon Keeper II</string>
 	<key>CFBundleExecutable</key>
 	<string>DK2Metal</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.dungeonkeeperfx.dk2metal</string>
 	<key>CFBundleInfoDictionaryVersion</key>
