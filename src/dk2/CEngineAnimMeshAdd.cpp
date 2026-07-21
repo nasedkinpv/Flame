@@ -2,6 +2,7 @@
 
 #include "dk2/MeshGpuEmit.h"
 #include "dk2/MyCESurfHandle.h"
+#include "dk2/MyCESurfScale.h"
 #include "dk2/MyScaledSurface.h"
 #include "dk2/Obj57BCB0.h"
 #include "dk2/ScreenObjectArr.h"
