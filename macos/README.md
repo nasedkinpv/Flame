@@ -2,7 +2,7 @@
 
 The current native pipeline keeps the original 32-bit game simulation isolated in Wine and renders it in a separate arm64 AppKit/Metal 4 host:
 
-`DK2 + Flametal (i386/Wine) → shared protocol v11 → AppKit + Metal 4 (arm64)`
+`DK2 + Flametal (i386/Wine) → shared protocol v12 → AppKit + Metal 4 (arm64)`
 
 Flametal (the underlying [DiaLight/Flame](https://github.com/DiaLight/Flame) patch layer this fork is built on) captures the game's Direct3D 3 command stream without asking WineD3D to render it. The native host owns presentation, scaling, focus, keyboard and mouse input. Absolute pointer coordinates use AppKit, raw relative motion and keyboard state use GameController, and scrolling uses AppKit's precise wheel events.
 
@@ -46,6 +46,22 @@ vertex copies, ~1300 small draws) every frame. `mesh_gpu_path` therefore stays
 off by default (see Settings below); the mesh path becomes worthwhile once
 static geometry is registered once (`MESH_REGISTER` + per-frame `DRAW_MESH`
 transforms) instead of re-crossing the bridge inline every frame.
+
+The renderer deliberately uses one `CAMetalLayer`. World geometry and the
+legacy/UI overlay stay ordered in the same scene render pass; only real data
+dependencies get separate passes (shadow-mask resolve and the bloom chain).
+This follows Apple's tile-rendering guidance: splitting UI/world into Core
+Animation layers or extra passes would add attachment load/store traffic and
+would not improve texture ownership.
+
+Texture residency is frame-local. Three residency sets mirror the three
+in-flight frame slots and contain only textures referenced by that slot's
+argument tables; replacing an atlas therefore cannot keep every historical
+version resident. Protocol v12 also retires the host texture, its dynamic ring,
+and named-atlas metadata when the owning DirectDraw surface is destroyed.
+Metal I/O remains a future loading optimization, not a lifetime manager;
+sparse textures are intentionally not used for DK2's small 256→1024 atlas
+pages, where tile mapping and access-counter LRU would cost more than they save.
 
 ## Settings
 
@@ -93,11 +109,10 @@ pretending a live in-place change happened.
 The host watches the file (a `DISPATCH_SOURCE_TYPE_VNODE` source, re-armed
 across the atomic-replace renames a save performs) and live-applies bloom,
 metal_shadows, render_scale and hd_textures the moment the file changes,
-whether edited by hand or through Settings. Toggling `hd_textures` off does
-not retroactively evict HD textures already resident on the GPU; only newly
-loaded/reloaded texture pages are affected from that point on, so the effect
-converges as the existing LRU cache (`textures-hd` lookup) turns over rather
-than applying to every visible pixel instantly.
+whether edited by hand or through Settings. Toggling `hd_textures` marks every
+mapped atlas page dirty: off rebuilds pages from their stored original pixels,
+and on recomposes them from the named pack. Rebuilds are budgeted across frames,
+so the visible transition is live but may take several frames.
 
 **Env overrides are a debug-only layer**, documented here once instead of
 scattered across the source: any `DK2_*` variable already present in the
@@ -112,8 +127,12 @@ without touching the config file, not for regular use:
   `dk2-runner.zsh` from `[game]`/`[patches]`/`[debug]`; set any of these
   before launching (or export them in a dev shell) to override that one key.
 - `DK2_TEXTURE_HD` selects the HD texture directory (default
-  `.../Dungeon Keeper II/textures-hd`) — unrelated to the `hd_textures`
-  on/off toggle, which has no env override (settings.toml always governs it).
+  `.../Dungeon Keeper II/textures-hd`) for legacy whole-texture hash matches.
+- `DK2_RESOURCE_PACK_DIR` selects the named atlas pack (default
+  `.../Dungeon Keeper II/resource-pack/textures`). A file such as
+  `Slab Floor.png` replaces that named resource wherever DK2 packs it, while
+  unmapped pixels preserve the original page. Both directories obey the same
+  live `hd_textures` toggle, which has no environment override.
 - `DK2_METAL_INPUT_LOG`, `DK2_MESH_DEBUG`, `DK2_MESH_NO_TEXTURE`,
   `DK2_TEXTURE_DUMP`, `DK2_METAL_HUD`, `DK2_FULLSCREEN`
   remain plain debug/dev knobs with no settings.toml equivalent — see their
@@ -237,4 +256,4 @@ The private prefix exposes only its `C:` drive. Wine's `Z:` drive and links to m
 
 Apple's D3DMetal translation path is not used because DK2 is a 32-bit Direct3D 3/DirectDraw title. Metal 4 is used directly by the native renderer, following the lifecycle, display-link, residency, and input patterns in the GPTK 4 beta samples mounted with the toolkit.
 
-References: [Apple Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/), [Apple GPTK repository](https://github.com/apple/game-porting-toolkit/), [Gcenx macOS Wine builds](https://github.com/Gcenx/macOS_Wine_builds), [WineHQ Dungeon Keeper 2 entry](https://appdb.winehq.org/objectManager.php?sClass=version&iId=3696), [Flame](https://github.com/DiaLight/Flame), [Flametal releases](https://github.com/nasedkinpv/Flametal/releases).
+References: [Apple Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/), [Metal residency sets](https://developer.apple.com/documentation/metal/mtlresidencyset), [Metal resource loading](https://developer.apple.com/documentation/metal/resource-loading), [Metal sparse texture memory](https://developer.apple.com/documentation/metal/managing-sparse-texture-memory), [Apple GPTK repository](https://github.com/apple/game-porting-toolkit/), [Gcenx macOS Wine builds](https://github.com/Gcenx/macOS_Wine_builds), [WineHQ Dungeon Keeper 2 entry](https://appdb.winehq.org/objectManager.php?sClass=version&iId=3696), [Flame](https://github.com/DiaLight/Flame), [Flametal releases](https://github.com/nasedkinpv/Flametal/releases).
