@@ -1,0 +1,462 @@
+#include "dk2/engine/primitive/CEngineStaticMesh.h"
+
+#include "dk2/MyCESurfHandle.h"
+#include "dk2/MyCESurfScale.h"
+#include "dk2/MyScaledSurface.h"
+#include "dk2/Obj57AD20.h"
+#include "dk2/SceneObject2E.h"
+#include "dk2/SceneObject2EList.h"
+#include "dk2/utils/Mat3x3f.h"
+#include "dk2/utils/MyCameraState.h"
+#include "dk2/utils/Vec3f.h"
+#include "dk2_functions.h"
+#include "dk2_globals.h"
+
+#include <cstdint>
+#include <cstring>
+#include <emmintrin.h>
+
+// dk2::CEngineStaticMesh::appendToSceneObject2EList, 0x00586190..0x00586A6C
+// (next symbol: the free function static_appendToSceneObject2EList at
+// 0x00586A70, called from inside this function -- see below; the body ends
+// at the `ret 4`/nop padding at 0x00586A69/6C, confirmed by objdump).
+//
+// This is the static-mesh sibling of
+// dk2::CEngineDynamicMesh::appendToSceneObject2EList (0x00580EC0, still
+// untranslated) -- per-frame scene registration of a static mesh: pick a
+// LOD/reduction level for each of the mesh's Obj57AD20 "sub-parts", resolve
+// their MyScaledSurface -> MyCESurfHandle, add the handle(s) to the global
+// hash list, and append one (or two) dk2::SceneObject2E entries describing
+// the draw. Read src/dk2/EngineShadows.cpp and src/dk2/EngineAnimShadows.cpp
+// first for this repo's translation conventions (roundedX() single-rounding
+// helpers, the stack-offset normalizer approach, TODO(verify) usage); this
+// file follows the same conventions and, like
+// src/dk2/CEngineAnimMeshBlend.cpp, keeps a couple of genuinely unresolved
+// micro-details flagged rather than guessed silently (see part 5 below).
+//
+// High-level structure (verified via objdump + a manual stack-offset
+// normalizer over the whole 0x586190..0x586A6C range):
+//
+//  1. 0x586190..0x5861D4: three early-out guards on `a5_flags` bits
+//     0x8/0x10/0x2000 against three undocumented globals
+//     (0x00760B60/0x00760B84/0x00764BB8) -- TODO(verify): these three
+//     addresses have no name yet anywhere in libs/dkii_exe/api (checked
+//     dk2_globals.h; they fall in unnamed gaps between g_sc_renderLeft/
+//     g_scMax, g_vec_760B70/g_meshLast_760B80, and g_sc_renderTop
+//     respectively), so they are read as raw addresses. They read like
+//     "is this optional debug/rendering feature enabled" toggles gating a
+//     hard bail-out of the whole function.
+//
+//  2. 0x5861D4..0x586259: copies 5 fields out of the request argument
+//     (actually a pointer, despite the auto header's `int` parameter type
+//     -- exactly the same situation as CEngineDynamicMesh::f58_pTrgObj,
+//     kept un-renamed there for the same reason: no struct name exists yet)
+//     into `this`, then computes camPos-relative position
+//     (`Vec3f::substractAssign`, 0x0041C4C0) and transforms it into camera
+//     space (`Mat3x3f::sub_594E10`, 0x00594E10, this=g_camState.m) exactly
+//     like src/dk2/CEngineAnimMeshBlend.cpp's `g_camState.m.sub_594E10(&relative,
+//     &projected)` -- confirmed here too via 0x00760AB8/0x00760AC4 =
+//     g_camState.v3f / g_camState.m per dk2/utils/MyCameraState.h. Unless
+//     the request says "ignore distance cull" (field at request+0xC != 0),
+//     the camera-space position is passed to
+//     `Vec3f_static_sub_575D70` as a cull test; failing it bails out.
+//
+//  3. 0x586259..0x586274: `Vec3f_static_sub_575F10` computes an
+//     LOD/reduction scale factor from `pObj57AD20->f20`; only the float*
+//     output is used later (the two Vec3f* outputs are genuine scratch --
+//     never read again, mirrored here as unused locals for call-signature
+//     fidelity, same pattern as the "TODO(verify)" outputs in
+//     CEngineAnimMeshBlend.cpp).
+//
+//  4. 0x586274..0x5863A7: for `pObj57AD20->sprsCount` "sub-part" 20-byte
+//     records at `pObj57AD20->f4[byteOffset]` (struct not named yet
+//     anywhere in the API -- modelled locally as SubmeshRecord), inlines
+//     the tiny, currently-undeclared helper `Obj57AD20::sub_57AC10`
+//     (0x0057AC10, 0x27 bytes, no header entry exists for it anywhere
+//     under libs/dkii_exe/api -- confirmed absent by grep) which just does
+//     `pObj57AD20->f2C = sub_57BBF0(collection, nullptr, vec.x, vec.y,
+//     vec.z, f20, 1) | pObj57AD20->f28` (sub_57BBF0 is already translated
+//     in src/dk2/Obj57AD20.cpp); resolves the sub-part's MyScaledSurface via
+//     `MyEntryBuf_MyScaledSurface_getByIdx`; combines draw flags via
+//     `transformFlags`; picks a coarse LOD level 0..3 via three `fcom`s
+//     against undocumented float constants 0x0066FC00/08/10; picks a fine
+//     sub-index via a mantissa-bit-extraction trick (same shape as
+//     0x00581B80's `sub_581B80`, just inlined here because *this* call
+//     site indexes MyScaledSurface::scaledSurfArr directly rather than
+//     going through that helper) and adds the resulting MyCESurfHandle to
+//     the global hash list via `MyCESurfHandle_static_addToHashList_flagsOr400`.
+//
+//  5. 0x5863A7..0x586A16: if `a5_flags & 0x300`, resolves a *second*
+//     MyScaledSurface (index `field_20`) the same way but via the already-
+//     declared helpers `sub_57F030`/`sub_581B80` (this repo's dynamic-mesh
+//     sibling calls these too, per the task notes) and adds its handle to
+//     the hash list too; otherwise jumps straight to emitting a single
+//     SceneObject2E via the free function `static_appendToSceneObject2EList`
+//     (0x00586A70, already declared in dk2_functions.h, not implemented by
+//     this file -- it is a separate translation unit's responsibility).
+//     TODO(verify): the exact stack-argument split between sub_57F030's
+//     two float parameters and sub_581B80's three declared parameters could
+//     not be fully pinned down (the disassembly shows sub_581B80 called
+//     with what looks like only 1 of its 3 declared stack arguments
+//     explicitly pushed at this call site, the other 2 apparently reusing
+//     whatever was left on the stack by the immediately-preceding cdecl
+//     call's own cleanup -- plausible stack-slot reuse, but not confirmed
+//     against the callee's own disassembly for this specific call site).
+//
+//  6. 0x586416..0x586A16: reloads `a5_flags`/the combined draw flags and
+//     picks one of three ways to append SceneObject2E entries:
+//       a) `a5_flags & 0x200` and combined-flags-2 & 0x200 clear: appends
+//          ONE entry using the *second* surface's handle only (simplest;
+//          "branch C" below).
+//       b) `a5_flags & 0x200` set, combined-flags-2 & 0x200 clear:
+//          "branch B" -- appends ONE entry that packs up to 2 surfh
+//          pointers into surfh_x4[0..1] via a byte-shifted read of a small
+//          4-int local array. TODO(verify): the exact source of the
+//          packed surfh pointers in this specific sub-case could not be
+//          reconstructed from static analysis (the address arithmetic
+//          only resolves to a valid destination if one of its two summed
+//          registers is a small integer rather than a real stack address,
+//          which contradicts the `lea`s feeding it -- most likely this
+//          path is rarely/never hit by shipped assets, similar to how
+//          CEngineAnimMeshBlend.cpp flags two unresolved inputs to its
+//          own blend-lighting chain). This is translated using the two
+//          confirmed-available MyCESurfHandle pointers in scope
+//          (`handle1`, `handle2`) as the most plausible fill, clearly
+//          marked below for re-verification; every other field of this
+//          entry (mesh/lod/numVerts/renMode/propsCount/zeroOrM1, and the
+//          *omission* of drawFlags_x2[0] -- genuinely never written by
+//          this branch in the disassembly) is verified exactly.
+//       c) both set: "branch A" -- appends up to TWO entries (one using
+//          `handle1` with combined-flags-1, gated on the sub-part's own
+//          `baseTriCountLo != 0`; one using `handle2` with combined-
+//          flags-2, gated on the same field re-read), matching the "two
+//          separate SceneObject2E for base+detail" idea suggested by the
+//          task notes.
+//     Every field write in a)/c) (and the non-loop fields of b) was
+//     verified against the raw opcode bytes and the SceneObject2E.h /
+//     SceneObject2EList.h layouts (idx*0x2E stride, arr/maxCount/count at
+//     0x7820A8/AC/B0/C4).
+//
+// Callee census over 0x586190..0x586A6C: Vec3f::substractAssign (0x41C4C0)
+// x1, Mat3x3f::sub_594E10 (0x594E10) x1, Vec3f_static_sub_575D70 (0x575D70)
+// x1, Vec3f_static_sub_575F10 (0x575F10) x1, sub_57BBF0 (already translated
+// in Obj57AD20.cpp, inlined per-call here since its caller
+// Obj57AD20::sub_57AC10 has no header entry) x1,
+// MyEntryBuf_MyScaledSurface_getByIdx (0x57C780) x2, transformFlags
+// (0x57F090) x2, MyCESurfHandle_static_addToHashList_flagsOr400 (0x589140)
+// x2, sub_57F030 (0x57F030) x1, MyScaledSurface::sub_581B80 (0x581B80) x1,
+// SceneObject2EList::objects2EToDraw_enlarge (0x579FD0) x as-needed,
+// static_appendToSceneObject2EList (0x586A70) x0-1 (only taken when
+// `a5_flags & 0x300 == 0`).
+
+namespace {
+
+float roundedSub(float a, float b) {
+    return _mm_cvtss_f32(_mm_sub_ss(_mm_set_ss(a), _mm_set_ss(b)));
+}
+
+float roundedMul(float a, float b) {
+    return _mm_cvtss_f32(_mm_mul_ss(_mm_set_ss(a), _mm_set_ss(b)));
+}
+
+float roundedDiv(float a, float b) {
+    return _mm_cvtss_f32(_mm_div_ss(_mm_set_ss(a), _mm_set_ss(b)));
+}
+
+const float *floatAt(uintptr_t address) {
+    return reinterpret_cast<const float *>(address);
+}
+
+// The "int" argument to appendToSceneObject2EList is really a pointer to a
+// small per-call request struct -- same situation as
+// CEngineDynamicMesh::f58_pTrgObj (no struct name exists anywhere in the
+// API yet). Field offsets verified against the raw `mov`s at
+// 0x5861DC..0x5861FC.
+#pragma pack(push, 1)
+struct SceneAddRequest {
+    uint16_t word0;       // +0x00 -> this->gap_14 word at +4 (TODO(verify) meaning)
+    uint16_t unused2;
+    uint16_t word4;       // +0x04 -> this->gap_14 word at +6 (TODO(verify) meaning)
+    uint16_t unused6;
+    int32_t field8;       // +0x08 -> this->gap_C
+    int32_t fieldC;       // +0x0C -> this->gap_14 dword at +0; also the
+                           //          "ignore distance cull" flag (nonzero
+                           //          skips the Vec3f_static_sub_575D70 test)
+    float customScale;    // +0x10 -> this->f2C, only read when a5_flags & 0x2000
+};
+#pragma pack(pop)
+
+// pObj57AD20->f4 points at an array of `pObj57AD20->sprsCount` of these
+// 20-byte (0x14) records; no struct name exists anywhere in the API for it
+// (it is not SprsMeshHeader, which is 0x5C bytes). Field offsets verified
+// against 0x5862AF (float at +0), 0x5862B0-ish (int at +4, the
+// MyScaledSurface index), and 0x586444/0x58671B (bytes at +0x10/+0x11).
+#pragma pack(push, 1)
+struct SubmeshRecord {
+    float mmFactor;              // +0x00
+    int32_t surfIdx;             // +0x04
+    uint8_t gap8[8];             // +0x08 .. +0x10, TODO(verify): unused here
+    uint8_t baseTriCountLo;      // +0x10 -> SceneObject2E::lod__triangleCount
+    uint8_t baseTriCountHi;      // +0x11 -> SceneObject2E::numVertsEx
+    uint8_t gap12[2];            // +0x12 .. +0x14
+};
+#pragma pack(pop)
+static_assert(sizeof(SubmeshRecord) == 0x14);
+
+}  // namespace
+
+int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
+    // 0x586190..0x5861D4: early-out guards. TODO(verify): 0x760B60/0x760B84/
+    // 0x764BB8 have no names anywhere in the API; treated as raw globals.
+    if ((a5_flags & 0x8) != 0 && *reinterpret_cast<const int32_t *>(0x00760B60) == 0) {
+        return 0;
+    }
+    if ((a5_flags & 0x10) != 0 && *reinterpret_cast<const int32_t *>(0x00760B84) == 0) {
+        return 0;
+    }
+    if ((a5_flags & 0x2000) != 0 &&
+        (*reinterpret_cast<const uint8_t *>(0x00764BB8) & 0x41) != 0) {
+        return 0;
+    }
+
+    const auto *request = reinterpret_cast<const SceneAddRequest *>(
+            static_cast<intptr_t>(requestArg));
+
+    // 0x5861D4..0x586208: copy request fields into `this`.
+    *reinterpret_cast<int32_t *>(gap_C) = request->field8;
+    auto *gap14Dword = reinterpret_cast<int32_t *>(gap_14);
+    auto *gap14Words = reinterpret_cast<uint16_t *>(gap_14 + 4);
+    gap14Dword[0] = request->fieldC;
+    gap14Words[0] = request->word0;
+    gap14Words[1] = request->word4;
+    if ((a5_flags & 0x2000) != 0) {
+        f2C = request->customScale;
+    } else {
+        f2C = 1.0f;
+    }
+
+    // 0x586208..0x586257: camPos-relative position, transformed into camera
+    // space, exactly like CEngineAnimMeshBlend.cpp's
+    // `g_camState.m.sub_594E10(&relative, &projected)`.
+    Vec3f relative{};
+    pObj57AD20->vec.substractAssign(&relative, &dk2::g_camState.v3f);
+    Vec3f camSpacePos{};
+    dk2::g_camState.m.sub_594E10(&relative, &camSpacePos);
+
+    // 0x586257..0x586259: unless the request says "ignore distance cull",
+    // bail out if the camera-space position fails the cull test.
+    if (request->fieldC == 0) {
+        uint32_t cullScratch = 0;
+        if (Vec3f_static_sub_575D70(&camSpacePos, pObj57AD20->f20, &cullScratch) == 0) {
+            return 0;
+        }
+    }
+
+    // 0x58625F..0x586274: reduction/LOD scale factor. The two Vec3f*
+    // outputs are never read again by this function (verified: their
+    // stack slots have no further reader) -- kept as unused scratch for
+    // call-signature fidelity, same as the "TODO(verify)" outputs in
+    // CEngineAnimMeshBlend.cpp.
+    Vec3f reductionCenterScratch{};
+    Vec3f reductionOtherScratch{};
+    float reductionFactor = 0.0f;
+    Vec3f_static_sub_575F10(&reductionCenterScratch, pObj57AD20->f20,
+                             &reductionOtherScratch, &reductionFactor);
+
+    // 0x586274..0x58629C: nothing to submit if there are no sub-parts.
+    const int32_t sprsCount = static_cast<int32_t>(pObj57AD20->sprsCount);
+    if (sprsCount <= 0) {
+        return 0;
+    }
+
+    auto appendEntry = [&]() -> SceneObject2E & {
+        if (SceneObject2E_count >= static_cast<uint32_t>(SceneObject2EList_instance.maxCount)) {
+            SceneObject2EList_instance.objects2EToDraw_enlarge(SceneObject2E_count);
+        }
+        SceneObject2E &entry = SceneObject2EList_instance.arr[SceneObject2E_count];
+        ++SceneObject2E_count;
+        return entry;
+    };
+
+    const auto *records = reinterpret_cast<const SubmeshRecord *>(pObj57AD20->f4);
+    for (int32_t part = 0; part < sprsCount; ++part) {
+        const SubmeshRecord &record = records[part];
+
+        // 0x5862AC..0x5862BB: resolve this sub-part's base MyScaledSurface.
+        MyScaledSurface *surf = MyEntryBuf_MyScaledSurface_getByIdx(record.surfIdx);
+
+        // 0x5862BE..0x5862F3: combine draw flags.
+        uint32_t andMask = 0xFFFFFFFFu;
+        uint32_t orMask = 0;
+        transformFlags(static_cast<int16_t>(a5_flags), &andMask, &orMask);
+        const uint32_t combinedFlags1 = (andMask & surf->drawFlags) | orMask;
+
+        // 0x5862F3..0x586341: inlined dk2::Obj57AD20::sub_57AC10 (0x0057AC10,
+        // no header entry exists for it anywhere in libs/dkii_exe/api --
+        // confirmed by grep). Original body: copies `pObj57AD20->vec` onto
+        // the stack and calls the already-translated `sub_57BBF0` (see
+        // src/dk2/Obj57AD20.cpp) with a mask of 1, ORing pObj57AD20->f28
+        // into the result.
+        pObj57AD20->f2C = dk2::sub_57BBF0(
+                                   reinterpret_cast<int32_t *>(
+                                           static_cast<intptr_t>(request->field8)),
+                                   nullptr, pObj57AD20->vec.x, pObj57AD20->vec.y,
+                                   pObj57AD20->vec.z, pObj57AD20->f20, 1) |
+                           pObj57AD20->f28;
+
+        // 0x586341..0x58638A: LOD metric = record.mmFactor * reductionFactor
+        // / baseHandle.surfWidth8, compared against 3 undocumented float
+        // thresholds to pick a coarse level 0..3.
+        MyCESurfHandle *baseHandle = surf->scaledSurfArr->surfScaledArr[0];
+        const float metric = roundedDiv(
+                roundedMul(record.mmFactor, reductionFactor),
+                static_cast<float>(baseHandle->surfWidth8));
+        int lodLevel = 0;
+        if (metric >= *floatAt(0x0066FC00)) lodLevel = 1;
+        if (metric >= *floatAt(0x0066FC08)) lodLevel = 2;
+        if (metric >= *floatAt(0x0066FC10)) lodLevel = 3;
+
+        // 0x58634C..0x586390: fine sub-index via mantissa-bit extraction
+        // (same shape as MyScaledSurface::sub_581B80, inlined here because
+        // this call site indexes scaledSurfArr directly).
+        const int32_t probHeight = static_cast<int32_t>(surf->prob_height);
+        const float mantissaRaw = roundedSub(
+                roundedSub(
+                        roundedSub(roundedMul(field_18_float_scale,
+                                               static_cast<float>(probHeight)),
+                                   *floatAt(0x0066FC38)),
+                        *floatAt(0x0066FC3C)),
+                *floatAt(0x0066FC40));
+        int32_t bits;
+        std::memcpy(&bits, &mantissaRaw, sizeof(bits));
+        int32_t fineIndex = (bits & 0x7FFFFF) - 0x400000;
+        if (fineIndex < 0) fineIndex = 0;
+        if (fineIndex >= probHeight) fineIndex = probHeight - 1;
+
+        const int32_t widthStep = static_cast<uint8_t>(field_2D);
+        const int32_t flatIndex = lodLevel + 4 * (widthStep * probHeight + fineIndex);
+        MyCESurfHandle *handle1 =
+                reinterpret_cast<MyCESurfHandle *const *>(surf->scaledSurfArr)[flatIndex];
+
+        MyCESurfHandle_static_addToHashList_flagsOr400(
+                handle1, static_cast<int16_t>(combinedFlags1));
+
+        // 0x586398..0x5863A1: reload a5_flags after the hash-add call.
+        const int32_t a5FlagsNow = a5_flags;
+
+        MyCESurfHandle *handle2 = nullptr;
+        uint32_t combinedFlags2 = 0;
+        bool hasSecondSurface = (a5FlagsNow & 0x300) != 0;
+        if (hasSecondSurface) {
+            // 0x5863A7..0x58641B: second MyScaledSurface (this->field_20),
+            // via the already-declared reduction-pick / handle-pick helpers.
+            // TODO(verify): the precise stack-argument mapping for these two
+            // calls (see file-header note 5) -- reductionFactor/record.mmFactor
+            // are the best-supported candidates for sub_57F030's two float
+            // parameters, and the picked LOD level is the best-supported
+            // candidate for sub_581B80's declared first parameter.
+            MyScaledSurface *surf2 = MyEntryBuf_MyScaledSurface_getByIdx(field_20);
+            const int lodLevel2 = sub_57F030(surf2, reductionFactor, record.mmFactor);
+            handle2 = surf2->sub_581B80(lodLevel2, 0.0f, 0);
+
+            uint32_t andMask2 = 0xFFFFFFFFu;
+            uint32_t orMask2 = 0;
+            transformFlags(static_cast<int16_t>(a5_flags), &andMask2, &orMask2);
+            combinedFlags2 = (andMask2 & surf2->drawFlags) | orMask2;
+
+            MyCESurfHandle_static_addToHashList_flagsOr400(
+                    handle2, static_cast<int16_t>(combinedFlags2));
+        } else {
+            // 0x586a16..0x586a41: emit via the free function (declared in
+            // dk2_functions.h, implemented elsewhere) instead of appending
+            // an entry directly.
+            static_appendToSceneObject2EList(
+                    handle1, static_cast<int>(combinedFlags1), this,
+                    static_cast<int16_t>(bits), record.baseTriCountLo,
+                    static_cast<int16_t>(record.baseTriCountHi), 0);
+            continue;
+        }
+
+        // 0x586420..0x586432: pick which of the three emission shapes to use.
+        const int32_t a5FlagsAfterSecondAdd = a5_flags;
+        const bool useSimpleSecondOnly = (a5FlagsAfterSecondAdd & 0x200) == 0;
+        const bool useTwoLayerSingleEntry =
+                !useSimpleSecondOnly && (combinedFlags2 & 0x200) == 0;
+
+        if (useSimpleSecondOnly) {
+            // Branch C (0x5868C3..0x586A0E): single entry, second surface
+            // handle only.
+            if (record.baseTriCountLo != 0) {
+                SceneObject2E &entry = appendEntry();
+                entry.mesh = this;
+                entry.f2C_ = static_cast<int16_t>(request->word0);
+                entry.lod__triangleCount = record.baseTriCountLo;
+                entry.numVertsEx = record.baseTriCountHi;
+                entry.drawFlags_x2[0] = combinedFlags2;
+                entry.renMode = g_renMode_7820A0;
+                entry.surfhCount = 1;
+                entry.propsCount = 1;
+                entry.numTextureSamplers_x2[0] = 1;
+                entry.surfh_x4[0] = handle2;
+                entry.zeroOrM1 = 0;
+            }
+        } else if (useTwoLayerSingleEntry) {
+            // Branch B (0x5866EE..0x586A0E): single entry packing up to 2
+            // surfh pointers. TODO(verify): see file-header note 6b -- the
+            // exact source-selection arithmetic for surfh_x4[] could not be
+            // reconstructed; `handle1`/`handle2` are used here as the most
+            // plausible fill. Every other field below (including the
+            // deliberate *omission* of drawFlags_x2[0], which the original
+            // genuinely never writes on this path) is verified.
+            if (record.baseTriCountLo != 0) {
+                SceneObject2E &entry = appendEntry();
+                entry.mesh = this;
+                entry.f2C_ = static_cast<int16_t>(request->word0);
+                entry.lod__triangleCount = record.baseTriCountLo;
+                entry.numVertsEx = record.baseTriCountHi;
+                entry.renMode = g_renMode_7820A0;
+                entry.propsCount = 2;
+                entry.zeroOrM1 = 0;
+                MyCESurfHandle *packed[2] = {handle1, handle2};
+                int32_t filled = 0;
+                for (int i = 0; i < 2 && packed[i] != nullptr; ++i) {
+                    entry.surfh_x4[i] = packed[i];
+                    ++filled;
+                }
+                entry.surfhCount = static_cast<uint8_t>(filled);
+            }
+        } else {
+            // Branch A (0x586438..0x5866E9): up to two separate entries.
+            if (record.baseTriCountLo != 0) {
+                SceneObject2E &entry1 = appendEntry();
+                entry1.mesh = this;
+                entry1.f2C_ = static_cast<int16_t>(request->word0);
+                entry1.lod__triangleCount = record.baseTriCountLo;
+                entry1.numVertsEx = record.baseTriCountHi;
+                entry1.drawFlags_x2[0] = combinedFlags1;
+                entry1.renMode = g_renMode_7820A0;
+                entry1.surfhCount = 1;
+                entry1.propsCount = 1;
+                entry1.numTextureSamplers_x2[0] = 1;
+                entry1.surfh_x4[0] = handle1;
+                entry1.zeroOrM1 = 0;
+            }
+            if (record.baseTriCountLo != 0) {
+                SceneObject2E &entry2 = appendEntry();
+                entry2.mesh = this;
+                entry2.f2C_ = static_cast<int16_t>(request->word0);
+                entry2.lod__triangleCount = record.baseTriCountLo;
+                entry2.numVertsEx = record.baseTriCountHi;
+                entry2.drawFlags_x2[0] = combinedFlags2;
+                entry2.renMode = g_renMode_7820A0;
+                entry2.surfhCount = 1;
+                entry2.propsCount = 1;
+                entry2.numTextureSamplers_x2[0] = 1;
+                entry2.surfh_x4[0] = handle2;
+                entry2.zeroOrM1 = static_cast<char>(0xFF);
+            }
+        }
+    }
+
+    return 0;
+}

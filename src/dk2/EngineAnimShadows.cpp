@@ -15,6 +15,7 @@
 
 #include <tools/flametal_config.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <emmintrin.h>
@@ -253,26 +254,35 @@ void buildAnimShadowMatrix(
 //   an identical result into whichever pool slot it would have anyway,
 //   completely unaware anything was skipped.
 //
-// Cache key: (resource pointer, LOD, the exact bit pattern of the finished
-// shadowMatrix, and the creature's animation state). The matrix is compared
-// bit-exact (no quantization): while a creature is idle or walking in a
-// straight line it recomputes to the identical bits frame over frame (the
-// world-position terms cancel via the `- resource->pos` subtraction before
-// projection), so exact comparison already gets real hits without adding
-// visible lag on top of the deliberate frame quantization below.
-// field_60/field_64 (the resource->sub_57E5B0 blend inputs) are the only
-// lossy part: field_60 is quantized to int(...) per the task's stated
-// tolerance (pose may lag pose changes by at most one quantization step);
-// field_64 is already a small integer and kept exact.
+// Cache key: (resource pointer, LOD, a QUANTIZED snapshot of the finished
+// shadowMatrix, and the creature's animation state).
+//
+// CORRECTED (was bit-exact matrix comparison): field measurements showed the
+// exact-bits key made creatures slower than the pre-cache baseline
+// (~180-200us -> ~290-390us/creature). A moving creature's shadowMatrix is
+// light-relative (see buildAnimShadowMatrix above: it depends on the
+// creature's absolute position relative to the light, not just its facing),
+// so it recomputes to different float bits practically every step -- the
+// hashing + coverage copy-out was pure overhead with near-zero hit rate.
+// Quantizing each of the 9 elements to steps of 1/64 (~0.0156, chosen per
+// the task's tolerance -- invisible for a 32px silhouette) turns "creature
+// took one more foot-fall in roughly the same spot relative to the light"
+// into an exact key match, without perceptibly changing the rendered
+// shadow's orientation. field_60/field_64 (the resource->sub_57E5B0 blend
+// inputs) remain the other lossy dimension: field_60 quantized to int(...)
+// per the task's stated tolerance (pose may lag by at most one quantization
+// step); field_64 is already a small integer and kept exact.
 namespace shadow_cache {
+
+constexpr float kMatrixQuantStep = 64.0f;  // 1/64 per element, see note above
 
 #pragma pack(push, 1)
 struct AnimShadowCacheKey {
     const void *resource;
     int lod;
-    int quantFrame;          // int(field_60) -- see note above
-    int field64;              // field_64, exact (already integer)
-    uint32_t matrixBits[9];  // raw bits of the finished shadowMatrix
+    int quantFrame;             // int(field_60) -- see note above
+    int field64;                 // field_64, exact (already integer)
+    int32_t matrixQuant[9];  // round(m[r][c] * kMatrixQuantStep)
 };
 #pragma pack(pop)
 
@@ -314,6 +324,42 @@ AnimShadowCacheEntry &lookup(const AnimShadowCacheKey &key, bool &hit) {
     const uint32_t slot = fnv1a(&key, sizeof(key)) % kCacheSize;
     AnimShadowCacheEntry &entry = g_cache[slot];
     hit = entry.valid && std::memcmp(&entry.key, &key, sizeof(key)) == 0;
+    return entry;
+}
+
+// ---------------------------------------------------------------------------
+// Per-resource bypass counter (pathological-case guard).
+//
+// Some creatures (e.g. sprinting across the map, or in a fight where they
+// never stand still long enough for the quantized matrix to repeat) will
+// still miss on essentially every call. For those, paying the key-build +
+// hash + copy-out cost on top of a full rebuild is strictly worse than not
+// caching at all. Track a small consecutive-miss streak per resource
+// pointer; once it crosses a threshold, skip the cache entirely (no key
+// build, no hash, no lookup, no copy-out) for a while, periodically
+// allowing one real attempt to detect the creature settling back into a
+// cacheable pattern (idle, or walking a repeating path).
+constexpr size_t kBypassTableSize = 64;
+constexpr int kBypassThreshold = 3;      // consecutive misses before bypassing
+constexpr int kBypassRetryInterval = 30;  // calls between retry attempts while bypassed
+
+struct AnimShadowBypassEntry {
+    const void *resource = nullptr;
+    int missStreak = 0;
+    int retryCountdown = 0;
+};
+AnimShadowBypassEntry g_bypassTable[kBypassTableSize];
+
+// Direct-mapped by resource pointer alone; a collision just resets the
+// slot to the new resource (this is a perf heuristic only, never a
+// correctness concern -- worst case is an extra cache attempt or an extra
+// bypass window for the aliased resource).
+AnimShadowBypassEntry &bypassEntryFor(const void *resource) {
+    const uint32_t slot = fnv1a(&resource, sizeof(resource)) % kBypassTableSize;
+    AnimShadowBypassEntry &entry = g_bypassTable[slot];
+    if (entry.resource != resource) {
+        entry = AnimShadowBypassEntry{resource, 0, 0};
+    }
     return entry;
 }
 
@@ -366,18 +412,44 @@ int dk2::CEngineAnimMesh::sub_5855E0(CAnimMeshResource *resource, int lightIndex
     // cache, so it is left untouched.
     const bool cachingActive = g_shadowLevel >= 2 && o_flametal_shadowCache.get();
     bool cacheHit = false;
+    bool cacheBypassed = false;
     shadow_cache::AnimShadowCacheEntry *cacheEntry = nullptr;
+    shadow_cache::AnimShadowBypassEntry *bypass = nullptr;
     if (cachingActive) {
+        // Pathological-case guard (see shadow_cache::AnimShadowBypassEntry):
+        // a creature that has missed the cache kBypassThreshold times in a
+        // row (its quantized matrix keeps landing on a fresh value every
+        // call -- e.g. sprinting, or mid-combat) gets skipped
+        // entirely for a while, rather than paying key-build+hash+copy-out
+        // on top of a full rebuild every single time. Periodically retried
+        // in case the creature settles back into a repeating pose/position.
+        bypass = &shadow_cache::bypassEntryFor(resource);
+        if (bypass->missStreak >= shadow_cache::kBypassThreshold) {
+            if (bypass->retryCountdown > 0) {
+                --bypass->retryCountdown;
+                cacheBypassed = true;
+            } else {
+                bypass->retryCountdown = shadow_cache::kBypassRetryInterval;
+            }
+        }
+    }
+    if (cachingActive && !cacheBypassed) {
         shadow_cache::AnimShadowCacheKey key{};
         key.resource = resource;
         key.lod = lod;
         key.quantFrame = static_cast<int>(field_60);
         key.field64 = field_64;
-        std::memcpy(key.matrixBits, &shadowMatrix, sizeof(key.matrixBits));
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                key.matrixQuant[r * 3 + c] = static_cast<int32_t>(std::lround(
+                        shadowMatrix.m[r][c] * shadow_cache::kMatrixQuantStep));
+            }
+        }
         cacheEntry = &shadow_cache::lookup(key, cacheHit);
         if (cacheHit) {
             std::memcpy(dk2::shadows_surfaceData, cacheEntry->coverage,
                         sizeof(cacheEntry->coverage));
+            bypass->missStreak = 0;
         } else {
             cacheEntry->key = key;
         }
@@ -476,10 +548,12 @@ int dk2::CEngineAnimMesh::sub_5855E0(CAnimMeshResource *resource, int lightIndex
     }
     }  // !cacheHit
 
-    if (cachingActive && !cacheHit) {
+    if (cachingActive && !cacheBypassed && !cacheHit) {
         std::memcpy(cacheEntry->coverage, dk2::shadows_surfaceData,
                     sizeof(cacheEntry->coverage));
         cacheEntry->valid = true;
+        // saturate rather than risk wraparound in a very long play session
+        if (bypass->missStreak < 1'000'000) ++bypass->missStreak;
     }
 
     shadows_end_58E470();
