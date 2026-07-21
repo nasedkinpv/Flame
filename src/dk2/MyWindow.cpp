@@ -124,7 +124,12 @@ int dk2::MyWindow::prepareScreenEx(
     // its size to appear in EnumDisplayModes rejects valid window sizes on
     // drivers that expose only the display's native modes (for example Wine's
     // macOS driver).
-    if (!patch::control_windowed_mode::enabled
+    // Under the Metal bridge the "display" is a virtual surface scraped by the
+    // host, so any requested mode is renderable regardless of what the Wine
+    // driver enumerates (only 4:3 modes) - widescreen would be rejected here.
+    static const bool metalBridgeActive =
+            GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", nullptr, 0) != 0;
+    if (!patch::control_windowed_mode::enabled && !metalBridgeActive
         && this->last_selected_dd_idx < g_ge_ddraw_device_count) {
         DxDeviceInfo * dev = &g_ge_ddraw_devices[this->last_selected_dd_idx];
         bool found = false;

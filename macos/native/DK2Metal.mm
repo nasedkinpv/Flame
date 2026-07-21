@@ -2620,6 +2620,17 @@ static void *renderWorker(void *context) {
 }
 
 - (void)startBundledGameRunner {
+    // Pick the game resolution to match this display's aspect (height stays
+    // 1200, the largest the engine's font/UI tables are tuned for). The
+    // bridge-side mode check accepts any size, so widescreen just works.
+    // ponytail: clamp 1600..2560, revisit if ultrawide displays misbehave.
+    if (!getenv("DK2_GAME_RES")) {
+        NSScreen *screen = _window.screen ?: NSScreen.mainScreen;
+        const CGFloat height = MAX(screen.frame.size.height, (CGFloat)1);
+        long width = lround(1200.0 * screen.frame.size.width / height / 8.0) * 8;
+        width = MIN(MAX(width, 1600L), 2560L);
+        setenv("DK2_GAME_RES", [NSString stringWithFormat:@"%ldx1200", width].UTF8String, 0);
+    }
     if (gGameRunnerPath) {
         // Dev flow: keep the Wine runner tied to the native app lifecycle.
         _gameRunner = [[NSTask alloc] init];
