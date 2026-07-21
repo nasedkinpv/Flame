@@ -14,9 +14,19 @@
 #include "dk2_functions.h"
 #include "dk2_globals.h"
 
+#include <tools/flametal_config.h>
+
 #include <cstdint>
 #include <cstring>
 #include <emmintrin.h>
+
+
+// flametal:ShadowCache is registered in EngineAnimShadows.cpp (the hotter
+// of the two shadow call sites -- see that file for the full investigation
+// writeup of shadows_begin_ge23/shadows_end_58E470's surface lifecycle,
+// which is identical for this dynamic-mesh path). Reused here rather than
+// re-declared so both translation units agree on one flag.
+extern flametal_config::define_flame_option<bool> o_flametal_shadowCache;
 
 
 // NOTE ON shadows_process_58E080 (0058E080..0058E2C0):
@@ -164,6 +174,70 @@ int buildShadowMatrix(
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Shadow silhouette coverage cache (flametal:ShadowCache) -- dynamic-mesh
+// side. See src/dk2/EngineAnimShadows.cpp (just above CEngineAnimMesh::
+// sub_5855E0) for the full disassembly-backed writeup of why this caches
+// the raw 32x32 coverage bitmap rather than the engine's rotating surface
+// handle. Summary: shadows_begin_ge23() always clears the SAME global
+// `shadows_surfaceData` scratch buffer and separately round-robins an
+// unrelated 64-slot output-surface pool, so nothing about "the surface" can
+// be retained across calls -- only the coverage bytes we copy out ourselves.
+//
+// Key here has no anim-frame component (CPolyMeshResource meshes are not
+// posed/animated the way CAnimMeshResource creatures are): the coverage
+// bitmap is a pure function of (resource pointer, LOD, the finished
+// shadowMatrix), so an exact bit-match on the matrix is both correct and
+// sufficient -- it already yields hits for a stationary or straight-line-
+// moving object (the world-position terms cancel via `- resource->pos`
+// before projection, same as the anim-mesh sibling) or for two placed
+// instances of the same object type sharing a facing and light.
+namespace shadow_cache {
+
+#pragma pack(push, 1)
+struct DynShadowCacheKey {
+    const void *resource;
+    int lod;
+    uint32_t matrixBits[9];  // raw bits of the finished shadowMatrix
+};
+#pragma pack(pop)
+
+struct DynShadowCacheEntry {
+    bool valid = false;
+    DynShadowCacheKey key{};
+    uint8_t coverage[1024];
+};
+
+constexpr size_t kCacheSize = 256;
+DynShadowCacheEntry g_cache[kCacheSize];
+int g_cacheSession = -1;
+
+uint32_t fnv1a(const void *data, size_t size) {
+    const auto *bytes = static_cast<const uint8_t *>(data);
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+// Same session-keyed invalidation as the anim-mesh cache: dropped whole on
+// a level transition so a freed-then-reused CPolyMeshResource pointer can
+// never coincidentally hit a stale entry from the previous level.
+DynShadowCacheEntry &lookup(const DynShadowCacheKey &key, bool &hit) {
+    if (dk2::g_ddSceneSessionId != g_cacheSession) {
+        for (auto &entry : g_cache) entry.valid = false;
+        g_cacheSession = dk2::g_ddSceneSessionId;
+    }
+    const uint32_t slot = fnv1a(&key, sizeof(key)) % kCacheSize;
+    DynShadowCacheEntry &entry = g_cache[slot];
+    hit = entry.valid && std::memcmp(&entry.key, &key, sizeof(key)) == 0;
+    return entry;
+}
+
+}  // namespace shadow_cache
+
 }  // namespace
 
 
@@ -203,10 +277,36 @@ int dk2::CEngineDynamicMesh::shadow_sub_5808E0(CPolyMeshResource *resource, int 
                          // buildShadowMatrix is simply clobbered before the
                          // function's actual `mov eax,[esp+0x30]; ret 8` epilogue.
 
+    // flametal:ShadowCache -- only meaningful on the shadows_begin_ge23()
+    // branch above (g_shadowLevel >= 3): that is the only case where
+    // shadows_lpSurface/shadows_dword_780A64 point at the rasterizable
+    // shadows_surfaceData scratch buffer (see shadow_cache's writeup
+    // above). The <3 branch is already cheap via its own material-name
+    // blob cache and is left untouched.
+    const bool cachingActive = g_shadowLevel >= 3 && o_flametal_shadowCache.get();
+    bool cacheHit = false;
+    shadow_cache::DynShadowCacheEntry *cacheEntry = nullptr;
+    if (cachingActive) {
+        shadow_cache::DynShadowCacheKey key{};
+        key.resource = resource;
+        key.lod = lod;
+        std::memcpy(key.matrixBits, &shadowMatrix, sizeof(key.matrixBits));
+        cacheEntry = &shadow_cache::lookup(key, cacheHit);
+        if (cacheHit) {
+            std::memcpy(dk2::shadows_surfaceData, cacheEntry->coverage,
+                        sizeof(cacheEntry->coverage));
+        } else {
+            cacheEntry->key = key;
+        }
+    }
+
     // 00580B7F..00580DD1: for every SprsMeshHeader LOD entry of the resource,
     // project its vertices through shadowMatrix into the dk2::g_vec_766A78
     // scratch array, then rasterize each triangle of the current LOD via
-    // shadows_process_58E080.
+    // shadows_process_58E080. Skipped entirely on a cache hit: the coverage
+    // buffer was just restored above, byte-for-byte identical to what this
+    // loop would have produced.
+    if (!cacheHit) {
     Vec3f *scratch = &g_vec_766A78;
     for (int i = 0; i < resource->sprsCount; ++i) {
         SprsMeshHeader &entry = resource->ptr[i];
@@ -266,6 +366,13 @@ int dk2::CEngineDynamicMesh::shadow_sub_5808E0(CPolyMeshResource *resource, int 
             const int32_t y2 = toInt(scratch[tri.x].y);
             shadows_process_58E080(x0, y0, x1, y1, x2, y2);
         }
+    }
+    }  // !cacheHit
+
+    if (cachingActive && !cacheHit) {
+        std::memcpy(cacheEntry->coverage, dk2::shadows_surfaceData,
+                    sizeof(cacheEntry->coverage));
+        cacheEntry->valid = true;
     }
 
     shadows_end_58E470();

@@ -13,9 +13,25 @@
 #include "dk2_functions.h"
 #include "dk2_globals.h"
 
+#include <tools/flametal_config.h>
+
 #include <cstdint>
 #include <cstring>
 #include <emmintrin.h>
+
+
+// flametal:ShadowCache -- see the cache implementation below (just above
+// sub_5855E0) for the investigation writeup that justifies caching the raw
+// coverage bitmap rather than the engine's surface handle. Declared here
+// (rather than in EngineShadows.cpp, which also reads it) because this is
+// the hotter of the two call sites: CEngineAnimMesh::sub_5855E0 runs twice
+// per creature per frame, and creatures dominate the Shadows=3 cost.
+flametal_config::define_flame_option<bool> o_flametal_shadowCache(
+    "flametal:ShadowCache", flametal_config::OG_Config,
+    "Cache rasterized creature/object shadow silhouettes at high shadow "
+    "detail (Shadows>=3) instead of re-projecting and re-rasterizing them "
+    "every frame",
+    true);
 
 
 // NOTE: this is the CEngineAnimMesh counterpart of
@@ -197,6 +213,112 @@ void buildAnimShadowMatrix(
     scaled.multiply(&shadowMatrix, mesh.field_5C);
 }
 
+// ---------------------------------------------------------------------------
+// Shadow silhouette coverage cache (flametal:ShadowCache).
+//
+// Investigation (disassembly of 0x58E3E0 shadows_begin_ge23, 0x58E470
+// shadows_end_58E470, and the 32x32-surface-pool init block at 0x58E330,
+// cross-checked against the already-translated dk2::shadows_process_58E080
+// in Shadows.cpp and its dk2_globals.h names):
+//
+//   * shadows_begin_ge23() ALWAYS points the global `shadows_lpSurface`
+//     (0x78095C) at the SAME fixed 1024-byte scratch buffer,
+//     `shadows_surfaceData` (0x780A68, a 32x32 8x-supersampled coverage
+//     grid, stride `shadows_dword_780A64` == 0x20) -- and unconditionally
+//     zeroes all 1024 bytes of it on every single call via `rep stosd`.
+//     This is the buffer shadows_process_58E080 rasterizes triangles into.
+//   * Separately (and this is easy to conflate with the above), it also
+//     advances a 64-entry ring (`shad_dword_780E68` mod 0x40 indexing
+//     `g_MyEntryBuf_MyScaledSurface_idxs[64]`) to choose which of 64
+//     pre-created MyScaledSurface blit targets shadows_end_58E470() will
+//     bake the *finished* coverage into for actual rendering. That pool is
+//     initialized once (0x58E330) and never material/mesh-keyed -- slots
+//     are handed out purely round-robin, one per shadows_begin_ge23() call.
+//
+//   Consequence: neither the coverage buffer nor the output surface is
+//   pooled/retained per-mesh or per-frame in a way we could key on and
+//   reuse across frames. The coverage buffer is single, global, and
+//   destroyed (zeroed) on the very next call; the 64-slot output pool
+//   wraps within a single frame once shadow-caster count exceeds 64 (this
+//   game commonly has ~65 creatures alone, before dynamic-mesh casters),
+//   so a slot's *identity* this frame has no relation to which creature
+//   held it last frame. Retaining "the surface handle" is therefore unsafe.
+//
+//   What IS safe and sufficient: the coverage bitmap is a pure function of
+//   (resource geometry at this LOD, the decoded per-frame vertex pose, and
+//   the finished light/orientation shadowMatrix). Copy those 1024 bytes out
+//   after a real rasterization pass, and splice them back into
+//   shadows_surfaceData (between shadows_begin_ge23() and
+//   shadows_end_58E470()) on a cache hit -- shadows_end_58E470() then bakes
+//   an identical result into whichever pool slot it would have anyway,
+//   completely unaware anything was skipped.
+//
+// Cache key: (resource pointer, LOD, the exact bit pattern of the finished
+// shadowMatrix, and the creature's animation state). The matrix is compared
+// bit-exact (no quantization): while a creature is idle or walking in a
+// straight line it recomputes to the identical bits frame over frame (the
+// world-position terms cancel via the `- resource->pos` subtraction before
+// projection), so exact comparison already gets real hits without adding
+// visible lag on top of the deliberate frame quantization below.
+// field_60/field_64 (the resource->sub_57E5B0 blend inputs) are the only
+// lossy part: field_60 is quantized to int(...) per the task's stated
+// tolerance (pose may lag pose changes by at most one quantization step);
+// field_64 is already a small integer and kept exact.
+namespace shadow_cache {
+
+#pragma pack(push, 1)
+struct AnimShadowCacheKey {
+    const void *resource;
+    int lod;
+    int quantFrame;          // int(field_60) -- see note above
+    int field64;              // field_64, exact (already integer)
+    uint32_t matrixBits[9];  // raw bits of the finished shadowMatrix
+};
+#pragma pack(pop)
+
+struct AnimShadowCacheEntry {
+    bool valid = false;
+    AnimShadowCacheKey key{};
+    uint8_t coverage[1024];
+};
+
+// Fixed-size, direct-mapped (hash-and-evict-on-collision): bounded memory,
+// O(1) lookup, no bookkeeping beyond the entry itself. 256 slots comfortably
+// covers the handful of distinct (mesh, pose, orientation) combinations
+// active at once -- far more than the ~65-creature scene this is sized for.
+constexpr size_t kCacheSize = 256;
+AnimShadowCacheEntry g_cache[kCacheSize];
+int g_cacheSession = -1;
+
+uint32_t fnv1a(const void *data, size_t size) {
+    const auto *bytes = static_cast<const uint8_t *>(data);
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+// Returns the slot this key maps to, and whether it already holds a valid,
+// matching entry. On a scene-session change (level load/unload -- tracked
+// the same way CreateMeshes.cpp tracks g_ddSceneSessionId) the whole cache
+// is dropped rather than trusting per-entry staleness: resource pointers
+// can be freed and reused across a level transition, and a coincidental
+// pointer match must never resurrect a stale silhouette for the wrong mesh.
+AnimShadowCacheEntry &lookup(const AnimShadowCacheKey &key, bool &hit) {
+    if (dk2::g_ddSceneSessionId != g_cacheSession) {
+        for (auto &entry : g_cache) entry.valid = false;
+        g_cacheSession = dk2::g_ddSceneSessionId;
+    }
+    const uint32_t slot = fnv1a(&key, sizeof(key)) % kCacheSize;
+    AnimShadowCacheEntry &entry = g_cache[slot];
+    hit = entry.valid && std::memcmp(&entry.key, &key, sizeof(key)) == 0;
+    return entry;
+}
+
+}  // namespace shadow_cache
+
 }  // namespace
 
 
@@ -235,10 +357,39 @@ int dk2::CEngineAnimMesh::sub_5855E0(CAnimMeshResource *resource, int lightIndex
     Mat3x3f shadowMatrix;
     buildAnimShadowMatrix(*this, *resource, lightIndex, shadowMatrix);
 
+    // flametal:ShadowCache -- only meaningful on the shadows_begin_ge23()
+    // branch above (g_shadowLevel >= 2): that is the only case where
+    // shadows_lpSurface/shadows_dword_780A64 actually point at the
+    // rasterizable shadows_surfaceData scratch buffer (see the cache
+    // writeup above buildAnimShadowMatrix's definition). The <2 branch's
+    // surface is unrelated and already cheap via its own material-name
+    // cache, so it is left untouched.
+    const bool cachingActive = g_shadowLevel >= 2 && o_flametal_shadowCache.get();
+    bool cacheHit = false;
+    shadow_cache::AnimShadowCacheEntry *cacheEntry = nullptr;
+    if (cachingActive) {
+        shadow_cache::AnimShadowCacheKey key{};
+        key.resource = resource;
+        key.lod = lod;
+        key.quantFrame = static_cast<int>(field_60);
+        key.field64 = field_64;
+        std::memcpy(key.matrixBits, &shadowMatrix, sizeof(key.matrixBits));
+        cacheEntry = &shadow_cache::lookup(key, cacheHit);
+        if (cacheHit) {
+            std::memcpy(dk2::shadows_surfaceData, cacheEntry->coverage,
+                        sizeof(cacheEntry->coverage));
+        } else {
+            cacheEntry->key = key;
+        }
+    }
+
     // 00585872..00585AA6: for every SprsAnimHeader entry of the resource,
     // project its "Ex" vertices through shadowMatrix into the
     // dk2::g_vec_766A78 scratch array, then rasterize each triangle of the
-    // current LOD via shadows_process_58E080.
+    // current LOD via shadows_process_58E080. Skipped entirely on a cache
+    // hit: the coverage buffer was just restored above, byte-for-byte
+    // identical to what this loop would have produced.
+    if (!cacheHit) {
     Vec3f *scratch = &g_vec_766A78;
     for (int i = 0; i < resource->sprsCount; ++i) {
         SprsAnimHeader &entry = resource->buf[i];
@@ -322,6 +473,13 @@ int dk2::CEngineAnimMesh::sub_5855E0(CAnimMeshResource *resource, int lightIndex
             const int32_t y2 = toInt(scratch[tri.x].y);
             shadows_process_58E080(x0, y0, x1, y1, x2, y2);
         }
+    }
+    }  // !cacheHit
+
+    if (cachingActive && !cacheHit) {
+        std::memcpy(cacheEntry->coverage, dk2::shadows_surfaceData,
+                    sizeof(cacheEntry->coverage));
+        cacheEntry->valid = true;
     }
 
     shadows_end_58E470();

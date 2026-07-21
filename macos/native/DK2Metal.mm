@@ -898,6 +898,17 @@ constexpr uint32_t kD3DRenderStateAlphaBlendEnable = 27;
 constexpr uint32_t kD3DRenderStateTextureFactor = 60;
 static_assert(sizeof(DrawUniform) == 144);
 
+// Subtle bloom on lava/fire/torches: threshold-extract bright pixels, blur at
+// half resolution, add back at low intensity. On by default; DK2_BLOOM=0
+// disables it and restores the original direct-to-drawable resolve exactly.
+bool dk2BloomEnabled() {
+    static const bool enabled = [] {
+        const char *env = std::getenv("DK2_BLOOM");
+        return !env || std::strcmp(env, "0") != 0;
+    }();
+    return enabled;
+}
+
 // --- world-space mesh pipeline (protocol v9) ---
 // Mirrors DK2MeshDrawUniform in DK2Shaders.metal: rows of the 3x4 world
 // transform plus material inputs, one per DRAW_MESH instance.
@@ -1395,9 +1406,23 @@ bool inputLogEnabled() {
     id<MTLRenderPipelineState> _additivePipelines[2];
     id<MTLDepthStencilState> _depthStates[9][2];
     id<MTLSamplerState> _sampler;
+    id<MTLSamplerState> _bloomSampler;
     id<MTLTexture> _whiteTexture;
     id<MTLTexture> _multisampleColorTexture;
     id<MTLTexture> _depthTexture;
+    // Bloom chain (see dk2BloomEnabled): the multisample color resolves into
+    // _sceneColorTexture instead of straight to the drawable, gets
+    // threshold-extracted + blurred at half resolution in _bloomTextureA/B
+    // (ping-ponged), then composited additively onto the drawable in a final
+    // pass. All nil/unused when the feature is disabled.
+    id<MTLTexture> _sceneColorTexture;
+    id<MTLTexture> _bloomTextureA;
+    id<MTLTexture> _bloomTextureB;
+    id<MTLRenderPipelineState> _bloomThresholdPipeline;
+    id<MTLRenderPipelineState> _bloomBlurHorizontalPipeline;
+    id<MTLRenderPipelineState> _bloomBlurVerticalPipeline;
+    id<MTLRenderPipelineState> _bloomCompositePipeline;
+    id<MTL4ArgumentTable> _bloomArgumentTables[kFramesInFlight];
     std::unordered_map<uint32_t, id<MTLTexture>> _textures;
     id<MTLResidencySet> _resources;
     id<MTL4CommandAllocator> _allocators[kFramesInFlight];
@@ -1560,6 +1585,55 @@ bool inputLogEnabled() {
     samplerDescriptor.supportArgumentBuffers = YES;
     _sampler = [_device newSamplerStateWithDescriptor:samplerDescriptor];
 
+    if (dk2BloomEnabled()) {
+        // Clamp (not repeat) so the fullscreen bloom passes never sample
+        // across the opposite screen edge near the border.
+        MTLSamplerDescriptor *bloomSamplerDescriptor = [[MTLSamplerDescriptor alloc] init];
+        bloomSamplerDescriptor.label = @"DK2 bloom sampler";
+        bloomSamplerDescriptor.minFilter = MTLSamplerMinMagFilterLinear;
+        bloomSamplerDescriptor.magFilter = MTLSamplerMinMagFilterLinear;
+        bloomSamplerDescriptor.sAddressMode = MTLSamplerAddressModeClampToEdge;
+        bloomSamplerDescriptor.tAddressMode = MTLSamplerAddressModeClampToEdge;
+        bloomSamplerDescriptor.supportArgumentBuffers = YES;
+        _bloomSampler = [_device newSamplerStateWithDescriptor:bloomSamplerDescriptor];
+
+        id<MTLFunction> bloomVertexFunction = [library newFunctionWithName:@"dk2_bloom_vertex"];
+        id<MTLFunction> bloomThresholdFragment = [library newFunctionWithName:@"dk2_bloom_threshold"];
+        id<MTLFunction> bloomBlurHorizontalFragment = [library newFunctionWithName:@"dk2_bloom_blur_horizontal"];
+        id<MTLFunction> bloomBlurVerticalFragment = [library newFunctionWithName:@"dk2_bloom_blur_vertical"];
+        id<MTLFunction> bloomCompositeFragment = [library newFunctionWithName:@"dk2_bloom_composite"];
+
+        MTLRenderPipelineDescriptor *bloomPipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
+        bloomPipelineDescriptor.label = @"DK2 bloom threshold";
+        bloomPipelineDescriptor.vertexFunction = bloomVertexFunction;
+        bloomPipelineDescriptor.fragmentFunction = bloomThresholdFragment;
+        bloomPipelineDescriptor.colorAttachments[0].pixelFormat = _layer.pixelFormat;
+        bloomPipelineDescriptor.colorAttachments[0].blendingEnabled = NO;
+        _bloomThresholdPipeline = bloomVertexFunction && bloomThresholdFragment
+            ? [_device newRenderPipelineStateWithDescriptor:bloomPipelineDescriptor error:&error] : nil;
+
+        bloomPipelineDescriptor.label = @"DK2 bloom blur horizontal";
+        bloomPipelineDescriptor.fragmentFunction = bloomBlurHorizontalFragment;
+        _bloomBlurHorizontalPipeline = bloomVertexFunction && bloomBlurHorizontalFragment
+            ? [_device newRenderPipelineStateWithDescriptor:bloomPipelineDescriptor error:&error] : nil;
+
+        bloomPipelineDescriptor.label = @"DK2 bloom blur vertical";
+        bloomPipelineDescriptor.fragmentFunction = bloomBlurVerticalFragment;
+        _bloomBlurVerticalPipeline = bloomVertexFunction && bloomBlurVerticalFragment
+            ? [_device newRenderPipelineStateWithDescriptor:bloomPipelineDescriptor error:&error] : nil;
+
+        bloomPipelineDescriptor.label = @"DK2 bloom composite";
+        bloomPipelineDescriptor.fragmentFunction = bloomCompositeFragment;
+        _bloomCompositePipeline = bloomVertexFunction && bloomCompositeFragment
+            ? [_device newRenderPipelineStateWithDescriptor:bloomPipelineDescriptor error:&error] : nil;
+
+        if (!_bloomSampler || !_bloomThresholdPipeline || !_bloomBlurHorizontalPipeline ||
+            !_bloomBlurVerticalPipeline || !_bloomCompositePipeline) {
+            fail([NSString stringWithFormat:@"Metal bloom pipeline failed: %@", error.localizedDescription ?: @"library missing"]);
+            return nil;
+        }
+    }
+
     MTLTextureDescriptor *whiteDescriptor = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                     width:1 height:1 mipmapped:NO];
@@ -1636,6 +1710,21 @@ bool inputLogEnabled() {
             [_argumentTables[index][bank]
                 setSamplerState:_sampler.gpuResourceID atIndex:0];
         }
+        if (dk2BloomEnabled()) {
+            MTL4ArgumentTableDescriptor *bloomTableDescriptor =
+                [[MTL4ArgumentTableDescriptor alloc] init];
+            bloomTableDescriptor.maxTextureBindCount = 2;
+            bloomTableDescriptor.maxSamplerStateBindCount = 1;
+            bloomTableDescriptor.initializeBindings = YES;
+            bloomTableDescriptor.label = [NSString stringWithFormat:@"DK2 bloom arguments %lu", index];
+            _bloomArgumentTables[index] =
+                [_device newArgumentTableWithDescriptor:bloomTableDescriptor error:&error];
+            if (!_bloomArgumentTables[index]) {
+                fail(@"Metal bloom argument table creation failed.");
+                return nil;
+            }
+            [_bloomArgumentTables[index] setSamplerState:_bloomSampler.gpuResourceID atIndex:0];
+        }
     }
 
     id<MTLAllocation> allocations[kFramesInFlight * 7 + 1];
@@ -1676,6 +1765,9 @@ bool inputLogEnabled() {
         if (_frame && ![_completed waitUntilSignaledValue:_frame timeoutMS:1000]) return NO;
         if (_multisampleColorTexture) [_resources removeAllocation:_multisampleColorTexture];
         if (_depthTexture) [_resources removeAllocation:_depthTexture];
+        if (_sceneColorTexture) [_resources removeAllocation:_sceneColorTexture];
+        if (_bloomTextureA) [_resources removeAllocation:_bloomTextureA];
+        if (_bloomTextureB) [_resources removeAllocation:_bloomTextureB];
     }
     MTLTextureDescriptor *colorDescriptor = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:_layer.pixelFormat
@@ -1699,8 +1791,97 @@ bool inputLogEnabled() {
     _depthTexture.label = @"DK2 4x MSAA depth";
     id<MTLAllocation> targets[] = {_multisampleColorTexture, _depthTexture};
     [_resources addAllocations:targets count:2];
+
+    if (dk2BloomEnabled()) {
+        MTLTextureDescriptor *sceneDescriptor = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:_layer.pixelFormat
+                                        width:width height:height mipmapped:NO];
+        sceneDescriptor.storageMode = MTLStorageModePrivate;
+        sceneDescriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        _sceneColorTexture = [_device newTextureWithDescriptor:sceneDescriptor];
+        _sceneColorTexture.label = @"DK2 bloom scene color";
+
+        const NSUInteger bloomWidth = std::max<NSUInteger>(1, width / 2);
+        const NSUInteger bloomHeight = std::max<NSUInteger>(1, height / 2);
+        MTLTextureDescriptor *bloomDescriptor = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:_layer.pixelFormat
+                                        width:bloomWidth height:bloomHeight mipmapped:NO];
+        bloomDescriptor.storageMode = MTLStorageModePrivate;
+        bloomDescriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        _bloomTextureA = [_device newTextureWithDescriptor:bloomDescriptor];
+        _bloomTextureB = [_device newTextureWithDescriptor:bloomDescriptor];
+        if (!_sceneColorTexture || !_bloomTextureA || !_bloomTextureB) return NO;
+        _bloomTextureA.label = @"DK2 bloom half-res A";
+        _bloomTextureB.label = @"DK2 bloom half-res B";
+        id<MTLAllocation> bloomTargets[] = {_sceneColorTexture, _bloomTextureA, _bloomTextureB};
+        [_resources addAllocations:bloomTargets count:3];
+    }
+
     [_resources commit];
     return YES;
+}
+
+// Threshold -> half-res separable blur -> additive composite onto the
+// drawable. Runs entirely as small fullscreen-triangle render passes so it
+// slots into the existing MTL4 render-command-encoder flow without a compute
+// pipeline. Only called when dk2BloomEnabled() and the bloom targets exist.
+- (void)encodeBloomIntoCommandBuffer:(id<MTL4CommandBuffer>)commandBuffer
+                                 slot:(NSUInteger)slot
+                     drawableTexture:(id<MTLTexture>)drawableTexture {
+    id<MTL4ArgumentTable> table = _bloomArgumentTables[slot];
+
+    [table setTexture:_sceneColorTexture.gpuResourceID atIndex:0];
+    MTL4RenderPassDescriptor *thresholdPass = [[MTL4RenderPassDescriptor alloc] init];
+    thresholdPass.colorAttachments[0].texture = _bloomTextureA;
+    thresholdPass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    thresholdPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTL4RenderCommandEncoder> thresholdEncoder =
+        [commandBuffer renderCommandEncoderWithDescriptor:thresholdPass];
+    thresholdEncoder.label = @"DK2 bloom threshold";
+    [thresholdEncoder setArgumentTable:table atStages:MTLRenderStageFragment];
+    [thresholdEncoder setRenderPipelineState:_bloomThresholdPipeline];
+    [thresholdEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [thresholdEncoder endEncoding];
+
+    [table setTexture:_bloomTextureA.gpuResourceID atIndex:0];
+    MTL4RenderPassDescriptor *blurHorizontalPass = [[MTL4RenderPassDescriptor alloc] init];
+    blurHorizontalPass.colorAttachments[0].texture = _bloomTextureB;
+    blurHorizontalPass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    blurHorizontalPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTL4RenderCommandEncoder> blurHorizontalEncoder =
+        [commandBuffer renderCommandEncoderWithDescriptor:blurHorizontalPass];
+    blurHorizontalEncoder.label = @"DK2 bloom blur horizontal";
+    [blurHorizontalEncoder setArgumentTable:table atStages:MTLRenderStageFragment];
+    [blurHorizontalEncoder setRenderPipelineState:_bloomBlurHorizontalPipeline];
+    [blurHorizontalEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [blurHorizontalEncoder endEncoding];
+
+    [table setTexture:_bloomTextureB.gpuResourceID atIndex:0];
+    MTL4RenderPassDescriptor *blurVerticalPass = [[MTL4RenderPassDescriptor alloc] init];
+    blurVerticalPass.colorAttachments[0].texture = _bloomTextureA;
+    blurVerticalPass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    blurVerticalPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTL4RenderCommandEncoder> blurVerticalEncoder =
+        [commandBuffer renderCommandEncoderWithDescriptor:blurVerticalPass];
+    blurVerticalEncoder.label = @"DK2 bloom blur vertical";
+    [blurVerticalEncoder setArgumentTable:table atStages:MTLRenderStageFragment];
+    [blurVerticalEncoder setRenderPipelineState:_bloomBlurVerticalPipeline];
+    [blurVerticalEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [blurVerticalEncoder endEncoding];
+
+    [table setTexture:_sceneColorTexture.gpuResourceID atIndex:0];
+    [table setTexture:_bloomTextureA.gpuResourceID atIndex:1];
+    MTL4RenderPassDescriptor *compositePass = [[MTL4RenderPassDescriptor alloc] init];
+    compositePass.colorAttachments[0].texture = drawableTexture;
+    compositePass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    compositePass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTL4RenderCommandEncoder> compositeEncoder =
+        [commandBuffer renderCommandEncoderWithDescriptor:compositePass];
+    compositeEncoder.label = @"DK2 bloom composite";
+    [compositeEncoder setArgumentTable:table atStages:MTLRenderStageFragment];
+    [compositeEncoder setRenderPipelineState:_bloomCompositePipeline];
+    [compositeEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [compositeEncoder endEncoding];
 }
 
 static void *renderWorker(void *context) {
@@ -1964,8 +2145,9 @@ static void *renderWorker(void *context) {
         if (residencyChanged) [_resources commit];
         MTL4RenderPassDescriptor *pass = [[MTL4RenderPassDescriptor alloc] init];
         MTLRenderPassColorAttachmentDescriptor *color = pass.colorAttachments[0];
+        const BOOL bloomActive = dk2BloomEnabled() && _sceneColorTexture != nil;
         color.texture = _multisampleColorTexture;
-        color.resolveTexture = update.drawable.texture;
+        color.resolveTexture = bloomActive ? _sceneColorTexture : update.drawable.texture;
         color.loadAction = MTLLoadActionClear;
         color.storeAction = MTLStoreActionMultisampleResolve;
         color.clearColor = clearColor;
@@ -2599,6 +2781,11 @@ static void *renderWorker(void *context) {
             gBridgeFramesRendered.fetch_add(1, std::memory_order_relaxed);
         }
         [encoder endEncoding];
+        if (bloomActive) {
+            [self encodeBloomIntoCommandBuffer:commandBuffer
+                                           slot:slot
+                                drawableTexture:update.drawable.texture];
+        }
         [commandBuffer endCommandBuffer];
 
         const auto drawableWaitStarted = TelemetryClock::now();

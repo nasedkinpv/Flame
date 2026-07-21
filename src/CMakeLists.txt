@@ -57,11 +57,13 @@ add_library(${TARGET} SHARED
         dk2/Obj57AD20.cpp
         dk2/Obj58EF60.cpp
         dk2/CEngineAnimMesh.cpp
+        # dk2/CEngineAnimMeshBlend.cpp  # excluded: env-map UV chain not fully traced yet
         dk2/CEngineDynamicMesh.cpp
         dk2/CEngineUnlitProceduralMesh.cpp
         dk2/EngineShadows.cpp
         dk2/EngineAnimShadows.cpp
         dk2/Shadows.cpp
+        dk2/CreateMeshes.cpp
         dk2/MyComputerPlayer_drop_condition.cpp
         dk2/MyComputerPlayer_drop_condition.h
         dk2/computer_player_flags.cpp
