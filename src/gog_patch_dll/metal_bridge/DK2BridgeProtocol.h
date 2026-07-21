@@ -44,6 +44,7 @@ enum DK2MDrawMeshFlags {
     DK2M_DRAW_MESH_LIT = 1u << 0,          // apply point-light accumulation
     DK2M_DRAW_MESH_ALPHA_BLEND = 1u << 1,  // SRCALPHA/INVSRCALPHA blend
     DK2M_DRAW_MESH_ADDITIVE = 1u << 2,     // ONE/ONE additive blend
+    DK2M_DRAW_MESH_ALPHA_TEST = 1u << 3,   // discard texels below the ref, rest opaque
 };
 
 enum DK2MInputFlags {

@@ -2362,6 +2362,8 @@ static void *renderWorker(void *context) {
                         if (!meshDebug) {
                             if (inlineDraw.flags & 4u) pipeline = _meshAdditivePipeline;
                             else if (inlineDraw.flags & 2u) pipeline = _meshAlphaPipeline;
+                            // flag 8 (alpha test) stays on the opaque pipeline:
+                            // the shader discards sub-reference texels
                         }
                         [encoder setRenderPipelineState:pipeline];
                         const uint32_t effectiveZFunction = meshDebug ? 8 : (zEnabled ? zFunction : 8);

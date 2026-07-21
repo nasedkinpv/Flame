@@ -574,8 +574,13 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                             drawFlags, surface ? surface->flags : 0u);
         }
     }
-    if (drawFlags & (0x20u | 0x1000u | 0x200u)) meshFlags |= DK2M_DRAW_MESH_ALPHA_BLEND;
-    else if (drawFlags & 0x1u) meshFlags |= DK2M_DRAW_MESH_ADDITIVE;
+    if (drawFlags & 0x200u) meshFlags |= DK2M_DRAW_MESH_ALPHA_TEST;
+    else if (drawFlags & (0x20u | 0x1000u)) meshFlags |= DK2M_DRAW_MESH_ALPHA_BLEND;
+    else if (drawFlags & 0x1u) {
+        // additive surfaces (crystals, glows) draw UNLIT in the original -
+        // their emissive texture already carries the brightness
+        meshFlags = DK2M_DRAW_MESH_ADDITIVE;
+    }
     gog::metal_bridge::drawMeshInline(
         textureId, vertices, vertexCount, indices, indexCount, tint,
         meshFlags,

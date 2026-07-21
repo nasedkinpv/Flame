@@ -110,6 +110,7 @@ struct DK2RasterVertex {
     float bumpEnvMat1_11 [[flat]];
     float bumpEnvLScale1 [[flat]];
     float bumpEnvLOffset1 [[flat]];
+    uint meshFlags [[flat]];   // DK2M_DRAW_MESH_* for mesh-path draws, else 0
 };
 
 DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffuse,
@@ -162,6 +163,7 @@ DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffu
     result.bumpEnvMat1_11 = draw.bumpEnvMat1_11;
     result.bumpEnvLScale1 = draw.bumpEnvLScale1;
     result.bumpEnvLOffset1 = draw.bumpEnvLOffset1;
+    result.meshFlags = 0;
     return result;
 }
 
@@ -345,6 +347,7 @@ vertex DK2RasterVertex dk2_vertex_mesh(device const DK2MeshVertexIn *vertices [[
     result.bumpEnvMat1_11 = 1.0f;
     result.bumpEnvLScale1 = 1.0f;
     result.bumpEnvLOffset1 = 0.0f;
+    result.meshFlags = draw.flags;
     return result;
 }
 
@@ -468,7 +471,13 @@ fragment float4 dk2_fragment(DK2RasterVertex input [[stage_in]],
     // through a texture the game never bound (index 0 = the shared white
     // texture) and is otherwise a no-op.
     {
-        const float4 textureColor1 = textures[input.textureIndex1].sample(textureSampler, texCoord1);
+        // mesh-path alpha test: original cutouts (bars, wall-top holes) kill
+    // texels below the reference and draw the rest fully opaque
+    if ((input.meshFlags & 8u) != 0u) {
+        if (current.a < 0.5f) discard_fragment();
+        current.a = 1.0f;
+    }
+    const float4 textureColor1 = textures[input.textureIndex1].sample(textureSampler, texCoord1);
         if (!dk2_apply_bump_env(input.colorOp1, textureColor1,
                                 input.bumpEnvMat1_00, input.bumpEnvMat1_01,
                                 input.bumpEnvMat1_10, input.bumpEnvMat1_11,
