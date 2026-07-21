@@ -114,6 +114,30 @@ FakeSurface::FakeSurface(DDSURFACEDESC2 *desc) {
     if (!this->f8_surfDesc.dwWidth) gog_assert_failed("FakeSurface::FakeSurface:441");
     if (!this->f8_surfDesc.dwHeight) gog_assert_failed("FakeSurface::FakeSurface:442");
 
+    if (metal_bridge::headlessDirectDrawEnabled()) {
+        auto *backing = new FakeSurface4(&this->f8_surfDesc, true,
+                                         this->f84_isModSurf);
+        if (!backing->isValid()) {
+            backing->Release();
+            this->f88_orig_surf = nullptr;
+            return;
+        }
+        this->f88_orig_surf = backing;
+        if (!this->f84_isModSurf) return;
+        if (FakeSurface::instance_cpy)
+            gog_assert_failed("FakeSurface::FakeSurface:456");
+
+        DDSURFACEDESC2 copyDesc = this->f8_surfDesc;
+        auto *copyBacking = new FakeSurface4(&copyDesc, true);
+        if (!copyBacking->isValid()) {
+            copyBacking->Release();
+            return;
+        }
+        FakeSurface::instance_cpy = new FakeSurface(copyBacking);
+        copyBacking->Release();
+        return;
+    }
+
     static_assert(0x88760064 == DDERR_INVALIDCAPS);
     LPDIRECTDRAWSURFACE4 *p_f88_orig_surf = &this->f88_orig_surf;
     this->f88_orig_surf = nullptr;
@@ -195,12 +219,19 @@ FakeSurface::FakeSurface(DDSURFACEDESC2 *desc) {
 }
 
 HRESULT FakeSurface::QueryInterface(REFIID riid, LPVOID FAR *ppvObj) {
-    if (IsEqualGUID(IID_IDirectDrawSurface2, riid)) {
+    if (!ppvObj) return E_POINTER;
+    *ppvObj = nullptr;
+    if (IsEqualGUID(IID_IUnknown, riid) || IsEqualGUID(IID_IDirectDrawSurface2, riid)) {
         *ppvObj = this;
         this->AddRef();
         return DD_OK;
     } else if (IsEqualGUID(IID_IDirectDrawSurface4, riid)) {
-        *ppvObj = new FakeSurface4(this->f88_orig_surf, this->f84_isModSurf);
+        if (metal_bridge::headlessDirectDrawEnabled()) {
+            *ppvObj = this->f88_orig_surf;
+            this->f88_orig_surf->AddRef();
+        } else {
+            *ppvObj = new FakeSurface4(this->f88_orig_surf, this->f84_isModSurf);
+        }
         return DD_OK;
     } else {
         gog_unused_function_called("FakeSurface::QueryInterface");
@@ -251,6 +282,11 @@ HRESULT FakeSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE2 srcSurf_, LPRECT s
                                      srcSurf->f88_orig_surf, srcRect, flags);
         metal_bridge::overlayDrawn(dstRect);
     }
+    if (metal_bridge::headlessDirectDrawEnabled() &&
+        this == FakeSurface::instance_mod) {
+        if (srcSurf) metal_bridge::captureOverlay(srcSurf->f88_orig_surf);
+        return DD_OK;
+    }
     HRESULT hr;
     if (!orig::pIDirectDrawSurface4_640x480 || !this->f84_isModSurf || !srcSurf) {
         IDirectDrawSurface4 *src = nullptr;
@@ -300,6 +336,11 @@ HRESULT FakeSurface::BltFast(DWORD x, DWORD y, LPDIRECTDRAWSURFACE2 srcSurf_, LP
     if (this == FakeSurface::instance_cpy && f88_orig_surf)
         metal_bridge::overlayBltFast(this->f88_orig_surf, x, y,
                                      f88_orig_surf, srcRect, type);
+    if (metal_bridge::headlessDirectDrawEnabled() &&
+        this == FakeSurface::instance_mod) {
+        metal_bridge::captureOverlay(f88_orig_surf);
+        return DD_OK;
+    }
     hr = this->f88_orig_surf->BltFast(x, y, f88_orig_surf, srcRect, type);
     if (FAILED(hr)) return hr;
     if (this == FakeSurface::instance_cpy) {
@@ -338,7 +379,6 @@ HRESULT FakeSurface::EnumOverlayZOrders(DWORD, LPVOID, LPDDENUMSURFACESCALLBACK)
 
 HRESULT FakeSurface::Flip(LPDIRECTDRAWSURFACE2 a2, DWORD flags) {
     if (!this->f84_isModSurf) gog_assert_failed("FakeSurface::Flip:606");
-    if (!orig::pIDirectDrawSurface4_coop) gog_assert_failed("FakeSurface::Flip:607");
     if (a2 && a2 != FakeSurface::instance_cpy) gog_assert_failed("FakeSurface::Flip:608");
     if (gog::g_isSceneDrawing) gog_assert_failed("FakeSurface::Flip:609");
     if (metal_bridge::isEnabled()) {
@@ -347,6 +387,7 @@ HRESULT FakeSurface::Flip(LPDIRECTDRAWSURFACE2 a2, DWORD flags) {
         gog::g_isFlip = true;
         return DD_OK;
     }
+    if (!orig::pIDirectDrawSurface4_coop) gog_assert_failed("FakeSurface::Flip:607");
     if (cfg::iCpuIdle)
         Sleep(cfg::iCpuIdle);
     this->f88_orig_surf->Blt(NULL, FakeSurface::instance_cpy->f88_orig_surf, NULL, 0x1000000, NULL);

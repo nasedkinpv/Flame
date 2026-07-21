@@ -8,6 +8,9 @@
 namespace gog::metal_bridge {
 
 bool isEnabled();
+// Enabled by default for the native bridge. Set DK2_HEADLESS_DDRAW=0 for the
+// legacy WineD3D A/B fallback.
+bool headlessDirectDrawEnabled();
 void pollInput();
 void beginFrame(DWORD width, DWORD height);
 DWORD overlayClearColor();

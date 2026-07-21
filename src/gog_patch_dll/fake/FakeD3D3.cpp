@@ -53,7 +53,12 @@ HRESULT FakeD3D3::CreateDevice(REFCLSID riid, LPDIRECTDRAWSURFACE4 surf_, LPDIRE
     if (!surf) gog_assert_failed("FakeD3D3::CreateDevice:1012");
     if (!a4) gog_assert_failed("FakeD3D3::CreateDevice:1013");
     if (a5) gog_assert_failed("FakeD3D3::CreateDevice:1014");
-    if (surf->orig() != FakeSurface::instance_cpy->orig()) gog_assert_failed("FakeD3D3::CreateDevice:1015");
+    if (metal_bridge::headlessDirectDrawEnabled()) {
+        if (surf_ != FakeSurface::instance_cpy->orig())
+            gog_assert_failed("FakeD3D3::CreateDevice:1015");
+    } else if (surf->orig() != FakeSurface::instance_cpy->orig()) {
+        gog_assert_failed("FakeD3D3::CreateDevice:1015");
+    }
     if (metal_bridge::isEnabled()) {
         if (orig::pIDirect3DDevice3) gog_assert_failed("FakeD3D3::CreateDevice:1016");
     } else if (orig::pIDirect3DDevice3) {

@@ -5,7 +5,9 @@
 #include <gog_globals.h>
 #include <gog_cfg.h>
 #include <fake/FakeSurface.h>
+#include <fake/FakeDirectDraw1.h>
 #include <gog_debug.h>
+#include <metal_bridge/MetalBridgeProducer.h>
 
 using namespace gog;
 
@@ -22,6 +24,8 @@ HRESULT FakeDirectDraw2::Compact(void) {
 }
 
 HRESULT FakeDirectDraw2::CreateClipper(DWORD flags, LPDIRECTDRAWCLIPPER *clipper, IUnknown *outer) {
+    if (metal_bridge::headlessDirectDrawEnabled())
+        return createHeadlessClipper(flags, clipper, outer);
     return orig::pIDirectDraw4->CreateClipper(flags, clipper, outer);
 }
 
@@ -40,7 +44,7 @@ HRESULT FakeDirectDraw2::CreateSurface(LPDDSURFACEDESC pDesc, LPDIRECTDRAWSURFAC
         }
     }
     if (pDesc->ddpfPixelFormat.dwFlags != 4) gog_assert_failed("FakeDirectDraw2::CreateSurface:1161");
-    if (cfg::iDisableFourCC)
+    if (cfg::iDisableFourCC || metal_bridge::headlessDirectDrawEnabled())
         return DDERR_INVALIDPIXELFORMAT;
     *(LPDIRECTDRAWSURFACE2 *) ppSurf = new FakeSurface((LPDDSURFACEDESC2) pDesc);
     return DD_OK;
@@ -115,6 +119,8 @@ HRESULT FakeDirectDraw2::GetCaps(LPDDCAPS hwCaps, LPDDCAPS halCaps) {
 
 HRESULT FakeDirectDraw2::GetDisplayMode(LPDDSURFACEDESC desc) {
     if (!desc) return DDERR_INVALIDPARAMS;
+    if (metal_bridge::headlessDirectDrawEnabled())
+        return getHeadlessDisplayMode(desc);
     IDirectDraw2 *directDraw2 = nullptr;
     HRESULT hr = orig::pIDirectDraw4->QueryInterface(IID_IDirectDraw2,
                                                       reinterpret_cast<void **>(&directDraw2));

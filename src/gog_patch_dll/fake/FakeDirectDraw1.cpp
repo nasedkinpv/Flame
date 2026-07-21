@@ -12,10 +12,93 @@
 #include <gog_globals.h>
 #include <gog_fake.h>
 #include <gog_debug.h>
+#include <metal_bridge/MetalBridgeProducer.h>
 
 using namespace gog;
 
 FakeDirectDraw1 *FakeDirectDraw1::instance = nullptr;
+
+namespace {
+class HeadlessClipper final : public FakeUnknown<IDirectDrawClipper> {
+    HWND hwnd_ = nullptr;
+
+public:
+    STDMETHOD(QueryInterface)(THIS_ REFIID riid, LPVOID *object) override {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        if (!IsEqualGUID(IID_IUnknown, riid) &&
+            !IsEqualGUID(IID_IDirectDrawClipper, riid)) return E_NOINTERFACE;
+        *object = this;
+        AddRef();
+        return DD_OK;
+    }
+
+    STDMETHOD_(ULONG, Release)(THIS) override {
+        if (--refs) return refs;
+        delete this;
+        return 0;
+    }
+
+    STDMETHOD(GetClipList)(THIS_ LPRECT, LPRGNDATA, LPDWORD) override {
+        return DDERR_NOCLIPLIST;
+    }
+
+    STDMETHOD(GetHWnd)(THIS_ HWND *hwnd) override {
+        if (!hwnd) return DDERR_INVALIDPARAMS;
+        *hwnd = hwnd_;
+        return DD_OK;
+    }
+
+    STDMETHOD(Initialize)(THIS_ LPDIRECTDRAW, DWORD) override { return DD_OK; }
+
+    STDMETHOD(IsClipListChanged)(THIS_ BOOL *changed) override {
+        if (!changed) return DDERR_INVALIDPARAMS;
+        *changed = FALSE;
+        return DD_OK;
+    }
+
+    STDMETHOD(SetClipList)(THIS_ LPRGNDATA, DWORD) override { return DDERR_UNSUPPORTED; }
+
+    STDMETHOD(SetHWnd)(THIS_ DWORD, HWND hwnd) override {
+        hwnd_ = hwnd;
+        return DD_OK;
+    }
+};
+
+template <typename Desc>
+HRESULT fillHeadlessDisplayMode(Desc *desc, DWORD size) {
+    if (!desc || desc->dwSize < size) return DDERR_INVALIDPARAMS;
+    const DWORD requestedSize = desc->dwSize;
+    memset(desc, 0, size);
+    desc->dwSize = requestedSize;
+    desc->dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_PITCH | DDSD_PIXELFORMAT;
+    desc->dwWidth = g_dwWidth ? g_dwWidth : 640;
+    desc->dwHeight = g_dwHeight ? g_dwHeight : 480;
+    desc->lPitch = static_cast<LONG>(desc->dwWidth * 4);
+    desc->ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+    desc->ddpfPixelFormat.dwFlags = DDPF_RGB;
+    desc->ddpfPixelFormat.dwRGBBitCount = 32;
+    desc->ddpfPixelFormat.dwRBitMask = 0x00FF0000;
+    desc->ddpfPixelFormat.dwGBitMask = 0x0000FF00;
+    desc->ddpfPixelFormat.dwBBitMask = 0x000000FF;
+    return DD_OK;
+}
+}
+
+HRESULT gog::createHeadlessClipper(DWORD flags, LPDIRECTDRAWCLIPPER *clipper,
+                                   IUnknown *outer) {
+    if (!clipper || outer || flags) return DDERR_INVALIDPARAMS;
+    *clipper = new HeadlessClipper();
+    return DD_OK;
+}
+
+HRESULT gog::getHeadlessDisplayMode(LPDDSURFACEDESC desc) {
+    return fillHeadlessDisplayMode(desc, sizeof(DDSURFACEDESC));
+}
+
+HRESULT gog::getHeadlessDisplayMode(LPDDSURFACEDESC2 desc) {
+    return fillHeadlessDisplayMode(desc, sizeof(DDSURFACEDESC2));
+}
 
 HRESULT FakeDirectDraw1::QueryInterface(REFIID riid, LPVOID FAR *ppvObj) {
     if (IsEqualGUID(IID_IDirectDraw2, riid)) {
@@ -44,6 +127,8 @@ HRESULT FakeDirectDraw1::Compact(void) {
 }
 
 HRESULT FakeDirectDraw1::CreateClipper(DWORD a1, LPDIRECTDRAWCLIPPER *a2, IUnknown *a3) {
+    if (metal_bridge::headlessDirectDrawEnabled())
+        return createHeadlessClipper(a1, a2, a3);
     return orig::pIDirectDraw4->CreateClipper(a1, a2, a3);
 }
 
@@ -191,6 +276,8 @@ HRESULT FakeDirectDraw1::GetCaps(LPDDCAPS hwCaps, LPDDCAPS halCaps) {
 
 HRESULT FakeDirectDraw1::GetDisplayMode(LPDDSURFACEDESC desc) {
     if (!desc) return DDERR_INVALIDPARAMS;
+    if (metal_bridge::headlessDirectDrawEnabled())
+        return getHeadlessDisplayMode(desc);
     IDirectDraw *directDraw1 = nullptr;
     HRESULT hr = orig::pIDirectDraw4->QueryInterface(IID_IDirectDraw,
                                                       reinterpret_cast<void **>(&directDraw1));
@@ -245,6 +332,7 @@ HRESULT FakeDirectDraw1::SetCooperativeLevel(HWND hwnd, DWORD a3) {
         return DD_OK;
     }
     gog::g_hWnd = hwnd;
+    if (metal_bridge::headlessDirectDrawEnabled()) return DD_OK;
     HRESULT hr;
     if (cfg::iRealFullscreen)
         hr = orig::pIDirectDraw4->SetCooperativeLevel(hwnd, 0x11);

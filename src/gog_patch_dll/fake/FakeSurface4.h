@@ -20,7 +20,9 @@ namespace gog {
         DWORD f98_ownedSize;
     public:
         FakeSurface4(LPDIRECTDRAWSURFACE4 orig_surf, bool isModSurf);
-        explicit FakeSurface4(LPDDSURFACEDESC2 pDesc);
+        explicit FakeSurface4(LPDDSURFACEDESC2 pDesc,
+                              bool displaySurface = false,
+                              bool isModSurf = false);
 
         inline LPDIRECTDRAWSURFACE4 orig() { return f8_orig_surf; }
         inline bool isValid() const { return f8_orig_surf || f90_ownedPixels; }
