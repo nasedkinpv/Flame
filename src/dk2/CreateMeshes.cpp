@@ -40,7 +40,10 @@ namespace {
 // scene session (f4 == g_ddSceneSessionId) -- otherwise NewObj571B3B_add()
 // is called to either recycle the stale slot or allocate a fresh node.
 dk2::NewObj571B3B *findOrAddCell(int x, int y) {
-    dk2::NewObj571B3B *bucket = dk2::g_NewObj571B3B_hashTable[x & 0x3f][y & 0x3f];
+    // g_NewObj571B3B_hashTable (0x760B90) is declared in dk2_globals.h but not
+    // exported by the delinked import library - address it directly.
+    auto hashTable = reinterpret_cast<dk2::NewObj571B3B *(*)[64]>(0x00760B90);
+    dk2::NewObj571B3B *bucket = hashTable[x & 0x3f][y & 0x3f];
     if (bucket != nullptr
             && bucket->a2 == static_cast<int16_t>(x)
             && bucket->a3 == static_cast<int16_t>(y)
