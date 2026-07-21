@@ -2662,18 +2662,10 @@ static void *renderWorker(void *context) {
     // 1200, the largest the engine's font/UI tables are tuned for). The
     // bridge-side mode check accepts any size, so widescreen just works.
     // ponytail: clamp 1600..2560, revisit if ultrawide displays misbehave.
-    if (!getenv("DK2_GAME_RES")) {
-        NSScreen *screen = _window.screen ?: NSScreen.mainScreen;
-        const CGFloat height = MAX(screen.frame.size.height, (CGFloat)1);
-        const long ideal = lround(1200.0 * screen.frame.size.width / height / 8.0) * 8;
-        // Only widths the engine is verified stable at: menu load crashes
-        // with high probability at 2136 (memcpy overread during the surface
-        // storm). Wider displays get the largest verified width, slightly
-        // letterboxed, until the overread is fixed.
-        long width = 1600;
-        if (ideal >= 1800) width = 1800;
-        setenv("DK2_GAME_RES", [NSString stringWithFormat:@"%ldx1200", width].UTF8String, 0);
-    }
+    // Default stays 4:3 1600x1200: the in-game HUD lays out panel
+    // backgrounds for 4:3 widths, so wide game resolutions show black gaps
+    // beside the bottom toolbar. Widescreen (e.g. DK2_GAME_RES=1800x1200)
+    // remains an explicit override until the HUD layout is widescreen-aware.
     if (gGameRunnerPath) {
         // Dev flow: keep the Wine runner tied to the native app lifecycle.
         _gameRunner = [[NSTask alloc] init];
