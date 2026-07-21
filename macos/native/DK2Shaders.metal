@@ -217,11 +217,15 @@ struct DK2MeshDrawUniform {
     float4 world0;   // rows of the 3x4 world transform
     float4 world1;
     float4 world2;
+    float4 uvTransform;  // scaleU, scaleV, offsetU, offsetV
     float4 ambient;  // additive per-draw ambient (rgb), w unused
     uint textureIndex;
     uint tint;
     uint flags;      // DK2M_DRAW_MESH_LIT etc.
     uint pad;
+    uint lightCount;
+    ushort lightIndices[24];
+    uint lightPad0, lightPad1, lightPad2;
 };
 
 struct DK2MeshCamera {
@@ -251,11 +255,14 @@ struct DK2MeshLight {    // matches DK2MLight (48 bytes)
 };
 
 float3 dk2_mesh_accumulate_lights(float3 positionWorld, float3 normalWorld, float3 base,
+                                  thread const DK2MeshDrawUniform &draw,
                                   constant DK2MeshLightsHeader &header,
                                   device const DK2MeshLight *lights) {
     float3 color = base + float3(header.ambientR, header.ambientG, header.ambientB);
-    for (uint i = 0; i < header.count; ++i) {
-        const device DK2MeshLight &light = lights[i];
+    for (uint selection = 0; selection < draw.lightCount; ++selection) {
+        const uint index = draw.lightIndices[selection];
+        if (index >= header.count) continue;
+        const device DK2MeshLight &light = lights[index];
         const float3 d = positionWorld - float3(light.position);
         const float d2 = dot(d, d);
         if (!(d2 < light.distSqLimit)) continue;
@@ -263,9 +270,9 @@ float3 dk2_mesh_accumulate_lights(float3 positionWorld, float3 normalWorld, floa
         // is just round-to-nearest of (16*d2 - 0.49999) == floor(16*d2).
         // Metal's fast-math FMA fusion breaks the exact bit pattern, so
         // compute the index arithmetically instead.
-        const uint index = static_cast<uint>(16.0f * d2);
-        if (index >= 256u) continue;
-        const float atten = (light.distSqLimit - d2) * header.lut[index] * light.attenScale;
+        const uint lutIndex = static_cast<uint>(16.0f * d2);
+        if (lutIndex >= 256u) continue;
+        const float atten = (light.distSqLimit - d2) * header.lut[lutIndex] * light.attenScale;
         const float facing = dot(normalWorld, -d) * light.facingScale;
         if (facing < 0.0f) continue;
         const float factor = atten * facing;
@@ -287,13 +294,14 @@ vertex DK2RasterVertex dk2_vertex_mesh(device const DK2MeshVertexIn *vertices [[
     const float3 positionWorld = float3(dot(draw.world0, p), dot(draw.world1, p), dot(draw.world2, p));
     const float3 n = float3(inputVertex.normal);
     const float3 normalWorld = float3(dot(draw.world0.xyz, n), dot(draw.world1.xyz, n),
-                                      dot(draw.world2.xyz, n));
+                                      dot(draw.world2.xyz, n)) /
+                               max(length(draw.world0.xyz), 1e-8f);
     const float4 base = dk2_unpack_color(inputVertex.baseColor);
     const float4 tint = dk2_unpack_color(draw.tint);
     float3 lit = base.rgb + draw.ambient.rgb;
     if ((draw.flags & 1u) != 0u) {  // DK2M_DRAW_MESH_LIT
         lit = dk2_mesh_accumulate_lights(positionWorld, normalWorld,
-                                         base.rgb + draw.ambient.rgb,
+                                         base.rgb + draw.ambient.rgb, draw,
                                          lightsHeader, lights);
     }
     DK2RasterVertex result;
@@ -317,7 +325,9 @@ vertex DK2RasterVertex dk2_vertex_mesh(device const DK2MeshVertexIn *vertices [[
         }
     }
     result.color = float4(saturate(lit) * tint.rgb, base.a * tint.a);
-    result.texCoord = float2(inputVertex.u, inputVertex.v);
+    result.texCoord = float2(
+        inputVertex.u * draw.uvTransform.x + draw.uvTransform.z,
+        inputVertex.v * draw.uvTransform.y + draw.uvTransform.w);
     result.texCoord1 = result.texCoord;
     result.texCoord2 = result.texCoord;
     result.textureIndex = draw.textureIndex;

@@ -305,6 +305,7 @@ typedef struct DK2MDrawMeshCommand {
     uint32_t tint;    // ARGB modulated over the lit colour
     float ambient_r, ambient_g, ambient_b;  // additive per-draw ambient
     float world[12];
+    float uv_scale_u, uv_scale_v, uv_offset_u, uv_offset_v;
     uint32_t light_count;
     uint16_t light_indices[DK2M_MAX_LIGHTS_PER_DRAW];
 } DK2MDrawMeshCommand;
@@ -335,6 +336,7 @@ typedef struct DK2MDrawMeshDeformedCommand {
     uint32_t vertex_count;
     float ambient_r, ambient_g, ambient_b;
     float world[12];
+    float uv_scale_u, uv_scale_v, uv_offset_u, uv_offset_v;
     uint32_t light_count;
     uint16_t light_indices[DK2M_MAX_LIGHTS_PER_DRAW];
 } DK2MDrawMeshDeformedCommand;

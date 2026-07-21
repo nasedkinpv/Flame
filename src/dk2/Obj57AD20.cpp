@@ -576,31 +576,20 @@ int describeEntryGuarded(const MeshEntry &entry, uint32_t indexCount,
     }
 }
 
-uint32_t retainedEntryMeshId(const MeshEntry &entry, uint32_t textureId,
+uint32_t retainedEntryMeshId(const MeshEntry &entry,
                              uint32_t indexCount, uint32_t vertexCount,
-                             uint64_t signature, float uvScale,
-                             float uS, float vS, float uO, float vO) {
+                             uint64_t signature, float uvScale) {
     struct CacheEntry {
         const void *vertices;
         const void *indices;
-        uint32_t textureId;
         uint32_t indexCount;
         uint32_t vertexCount;
-        uint32_t uvBits[5];
         uint64_t signature;
         uint32_t meshId;
     };
     static CacheEntry cache[16384] = {};
-    uint32_t uvBits[5];
-    std::memcpy(&uvBits[0], &uvScale, 4);
-    std::memcpy(&uvBits[1], &uS, 4);
-    std::memcpy(&uvBits[2], &vS, 4);
-    std::memcpy(&uvBits[3], &uO, 4);
-    std::memcpy(&uvBits[4], &vO, 4);
     uintptr_t hash = reinterpret_cast<uintptr_t>(entry.vertices) >> 4;
     hash ^= reinterpret_cast<uintptr_t>(entry.triangleIndices) >> 3;
-    hash ^= static_cast<uintptr_t>(textureId) * 2654435761u;
-    hash ^= static_cast<uintptr_t>(uvBits[1]) * 2246822519u;
     uint32_t slot = static_cast<uint32_t>(hash) & 16383u;
     CacheEntry *available = nullptr;
     for (uint32_t probe = 0; probe < 64; ++probe, slot = (slot + 1) & 16383u) {
@@ -611,10 +600,8 @@ uint32_t retainedEntryMeshId(const MeshEntry &entry, uint32_t textureId,
         }
         if (candidate.vertices != entry.vertices ||
             candidate.indices != entry.triangleIndices ||
-            candidate.textureId != textureId ||
             candidate.indexCount != indexCount ||
-            candidate.vertexCount != vertexCount ||
-            std::memcmp(candidate.uvBits, uvBits, sizeof(uvBits)) != 0) {
+            candidate.vertexCount != vertexCount) {
             continue;
         }
         if (candidate.signature == signature) return candidate.meshId;
@@ -626,7 +613,7 @@ uint32_t retainedEntryMeshId(const MeshEntry &entry, uint32_t textureId,
     static uint16_t indices[765];
     uint32_t copiedVertices = 0;
     if (!copyEntryGuarded(entry, indexCount, &copiedVertices, vertices, 256,
-                          indices, uvScale, uS, vS, uO, vO) ||
+                          indices, uvScale, 1.0f, 1.0f, 0.0f, 0.0f) ||
         copiedVertices != vertexCount) {
         return 0;
     }
@@ -637,10 +624,8 @@ uint32_t retainedEntryMeshId(const MeshEntry &entry, uint32_t textureId,
     }
     available->vertices = entry.vertices;
     available->indices = entry.triangleIndices;
-    available->textureId = textureId;
     available->indexCount = indexCount;
     available->vertexCount = vertexCount;
-    std::memcpy(available->uvBits, uvBits, sizeof(uvBits));
     available->signature = signature;
     available->meshId = meshId;
     return meshId;
@@ -774,8 +759,7 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
             ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
     } else {
         const uint32_t meshId = retainedEntryMeshId(
-            entry, textureId, indexCount, vertexCount, signature,
-            uvScale, uS, vS, uO, vO);
+            entry, indexCount, vertexCount, signature, uvScale);
         if (!meshId) return false;
         static const float identity[12] = {
             1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
@@ -878,8 +862,10 @@ bool prepareTarget(dk2::SceneObject2E *scene, dk2::MyScaledSurface *surface,
 void emitRetained(const InlineTarget &target, uint32_t meshId,
                   const float world[12], const LightSelection &lights,
                   float ambientR, float ambientG, float ambientB) {
+    const float uvTransform[4] = {target.uS, target.vS, target.uO, target.vO};
     gog::metal_bridge::drawMesh(
-        meshId, target.textureId, world, target.tint, target.meshFlags,
+        meshId, target.textureId, world, uvTransform,
+        target.tint, target.meshFlags,
         lights.indices, lights.count, ambientR, ambientG, ambientB);
 }
 
@@ -887,9 +873,11 @@ void emitDeformed(const InlineTarget &target, uint32_t meshId,
                   const float *positions, uint32_t vertexCount,
                   const float world[12], const LightSelection &lights,
                   float ambientR, float ambientG, float ambientB) {
+    const float uvTransform[4] = {target.uS, target.vS, target.uO, target.vO};
     gog::metal_bridge::drawMeshDeformed(
         meshId, target.textureId, positions, vertexCount, world,
-        target.tint, target.meshFlags, lights.indices, lights.count,
+        uvTransform, target.tint, target.meshFlags,
+        lights.indices, lights.count,
         ambientR, ambientG, ambientB);
 }
 

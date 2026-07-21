@@ -64,13 +64,15 @@ void lightsSet(const void *lights, uint32_t lightCount,
 // One mesh instance; world = row-major 3x4. Depth/blend context comes from
 // the surrounding setRenderState stream, same as drawIndexed.
 void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12],
+              const float uvTransform[4],
               uint32_t tint, uint32_t flags,
               const uint16_t *lightIndices, uint32_t lightCount,
               float ambientR, float ambientG, float ambientB);
 // Retained topology/attributes with per-frame packed float3 positions.
 void drawMeshDeformed(uint32_t meshId, uint32_t textureId,
                       const float *positions, uint32_t vertexCount,
-                      const float world[12], uint32_t tint, uint32_t flags,
+                      const float world[12], const float uvTransform[4],
+                      uint32_t tint, uint32_t flags,
                       const uint16_t *lightIndices, uint32_t lightCount,
                       float ambientR, float ambientG, float ambientB);
 // Inline world-space draw for deformed geometry: vertices are DK2MMeshVertex

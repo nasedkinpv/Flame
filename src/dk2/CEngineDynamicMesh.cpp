@@ -98,26 +98,17 @@ void buildDirectionalLights(
 
 uint32_t retainedDynamicMesh(
         dk2::CPolyMeshResource *resource, dk2::SprsMeshHeader &entry,
-        const dk2::Triangle *triangles, uint32_t triangleCount,
-        const dk2::meshgpu::InlineTarget &target) {
+        const dk2::Triangle *triangles, uint32_t triangleCount) {
     struct CacheEntry {
         const void *resource;
         const void *vertices;
         const void *triangles;
         uint32_t triangleCount;
-        uint32_t textureId;
-        uint32_t uvBits[4];
         uint32_t meshId;
     };
     static CacheEntry cache[4096] = {};
-    uint32_t uvBits[4];
-    std::memcpy(&uvBits[0], &target.uS, 4);
-    std::memcpy(&uvBits[1], &target.vS, 4);
-    std::memcpy(&uvBits[2], &target.uO, 4);
-    std::memcpy(&uvBits[3], &target.vO, 4);
     uintptr_t hash = reinterpret_cast<uintptr_t>(resource) >> 4;
     hash ^= reinterpret_cast<uintptr_t>(triangles) >> 3;
-    hash ^= static_cast<uintptr_t>(target.textureId) * 2654435761u;
     uint32_t slot = static_cast<uint32_t>(hash) & 4095u;
     CacheEntry *available = nullptr;
     for (uint32_t probe = 0; probe < 32; ++probe, slot = (slot + 1) & 4095u) {
@@ -129,9 +120,7 @@ uint32_t retainedDynamicMesh(
         if (candidate.resource == resource &&
             candidate.vertices == entry.MeshVertEx_base &&
             candidate.triangles == triangles &&
-            candidate.triangleCount == triangleCount &&
-            candidate.textureId == target.textureId &&
-            std::memcmp(candidate.uvBits, uvBits, sizeof(uvBits)) == 0) {
+            candidate.triangleCount == triangleCount) {
             return candidate.meshId;
         }
     }
@@ -159,12 +148,8 @@ uint32_t retainedDynamicMesh(
                 vertex.ny = mv.y;
                 vertex.nz = mv.z;
                 const uint32_t packed = static_cast<uint32_t>(mv.uv);
-                vertex.u = target.uS *
-                               (static_cast<float>(packed & 0xFFFFu) * uvScale) +
-                           target.uO;
-                vertex.v = target.vS *
-                               (static_cast<float>(packed >> 16) * uvScale) +
-                           target.vO;
+                vertex.u = static_cast<float>(packed & 0xFFFFu) * uvScale;
+                vertex.v = static_cast<float>(packed >> 16) * uvScale;
                 vertex.base_color = 0xFF000000u;
                 mapped[source] = static_cast<uint16_t>(vertexCount++);
             }
@@ -180,8 +165,6 @@ uint32_t retainedDynamicMesh(
     available->vertices = entry.MeshVertEx_base;
     available->triangles = triangles;
     available->triangleCount = triangleCount;
-    available->textureId = target.textureId;
-    std::memcpy(available->uvBits, uvBits, sizeof(uvBits));
     available->meshId = meshId;
     return meshId;
 }
@@ -197,7 +180,7 @@ bool drawDynamicOnGpu(
         return false;
     }
     const uint32_t meshId = retainedDynamicMesh(
-        resource, entry, triangles, triangleCount, target);
+        resource, entry, triangles, triangleCount);
     if (!meshId) return false;
     dk2::meshgpu::LightSelection lights = {};
     auto *collection = lit

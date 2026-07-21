@@ -209,6 +209,10 @@ public:
         // frame directly (active_ is already set at this point).
         flushPendingLights();
         flushInlineBuckets();
+        // Retained opaque instances are grouped by mesh id during prepare so
+        // the host can issue one indexed instanced draw per topology. Append
+        // them to stagedMesh_ (after their registrations) before publishing.
+        flushRetainedBuckets(true);
         // Mesh commands staged during the game's prepare phase (sceneEmit runs
         // before BeginScene, i.e. between frames) flush into the frame head:
         // they draw first, and z-testing orders them against later draws.
@@ -666,6 +670,7 @@ public:
         if (!active_) return;
         flushPendingLights();
         flushInlineBuckets();
+        flushRetainedBuckets(false);
         const auto overlayStarted = PhaseClock::now();
         emitOverlay();
         emitCursor();
@@ -788,7 +793,11 @@ public:
         captured.rect = {mouseX - hotspotX, mouseY - hotspotY,
                          mouseX - hotspotX + static_cast<LONG>(width),
                          mouseY - hotspotY + static_cast<LONG>(height)};
-        normalizeCursorSize(captured);
+        // Draw at the full captured (game-resolution) size. The cursor is the
+        // 3D-rendered Hand of Evil, already rasterized at game scale - the
+        // old normalizeCursorSize() shrink to the 640x480 logical size threw
+        // that detail away AND desynced the game's tooltip layout, which is
+        // computed against the full-size cursor (the 2.5x tooltip gap).
         captured.visible = true;
 
         const uint64_t geometry = static_cast<uint64_t>(captured.width) |
@@ -1408,6 +1417,8 @@ private:
         return true;
     }
 
+    // No longer applied (see cursor()): kept as documentation of the 13
+    // composed Hand-of-Evil sizes at the 640x480 base resolution.
     void normalizeCursorSize(CursorSnapshot &cursor) const {
         struct CursorSize { uint16_t width; uint16_t height; };
         static constexpr CursorSize originalSizes[] = {
@@ -2194,8 +2205,34 @@ public:
         return true;
     }
 
+    std::map<uint32_t, std::vector<DK2MDrawMeshCommand>> retainedBuckets_;
+
+    void emitRetainedCommand(const DK2MDrawMeshCommand &command, bool stage) {
+        if (stage || !active_) {
+            stageBytes(&command, sizeof(command));
+            if (command.texture_id) {
+                stagedMeshTextures_.push_back(command.texture_id);
+            }
+            ++stagedMeshCommandCount_;
+            return;
+        }
+        if (command.texture_id) emitTexture(0, command.texture_id);
+        if (used_ + sizeof(command) > DK2M_SLOT_CAPACITY) return;
+        append(&command, sizeof(command));
+        ++commandCount_;
+    }
+
+    void flushRetainedBuckets(bool stage) {
+        for (auto &entry : retainedBuckets_) {
+            for (const DK2MDrawMeshCommand &command : entry.second) {
+                emitRetainedCommand(command, stage);
+            }
+            entry.second.clear();
+        }
+    }
+
     void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12],
-                  uint32_t tint, uint32_t flags,
+                  const float uvTransform[4], uint32_t tint, uint32_t flags,
                   const uint16_t *lightIndices, uint32_t lightCount,
                   float ambientR, float ambientG, float ambientB) {
         if (!prepareMeshRegistration(meshId)) return;
@@ -2210,27 +2247,28 @@ public:
         command.ambient_g = ambientG;
         command.ambient_b = ambientB;
         std::memcpy(command.world, world, sizeof(command.world));
+        command.uv_scale_u = uvTransform[0];
+        command.uv_scale_v = uvTransform[1];
+        command.uv_offset_u = uvTransform[2];
+        command.uv_offset_v = uvTransform[3];
         command.light_count = std::min<uint32_t>(
             lightCount, DK2M_MAX_LIGHTS_PER_DRAW);
         if (command.light_count) {
             std::memcpy(command.light_indices, lightIndices,
                         command.light_count * sizeof(uint16_t));
         }
-        if (!active_) {
-            stageBytes(&command, sizeof(command));
-            if (textureId) stagedMeshTextures_.push_back(textureId);
-            ++stagedMeshCommandCount_;
+        if ((flags & (DK2M_DRAW_MESH_ALPHA_BLEND |
+                      DK2M_DRAW_MESH_ADDITIVE)) == 0) {
+            retainedBuckets_[meshId].push_back(command);
             return;
         }
-        if (textureId) emitTexture(0, textureId);
-        if (used_ + sizeof(DK2MDrawMeshCommand) > DK2M_SLOT_CAPACITY) return;
-        append(&command, sizeof(command));
-        ++commandCount_;
+        emitRetainedCommand(command, !active_);
     }
 
     void drawMeshDeformed(uint32_t meshId, uint32_t textureId,
                           const float *positions, uint32_t vertexCount,
-                          const float world[12], uint32_t tint, uint32_t flags,
+                          const float world[12], const float uvTransform[4],
+                          uint32_t tint, uint32_t flags,
                           const uint16_t *lightIndices, uint32_t lightCount,
                           float ambientR, float ambientG, float ambientB) {
         if (!positions || !vertexCount || !prepareMeshRegistration(meshId)) return;
@@ -2248,6 +2286,10 @@ public:
         command.ambient_g = ambientG;
         command.ambient_b = ambientB;
         std::memcpy(command.world, world, sizeof(command.world));
+        command.uv_scale_u = uvTransform[0];
+        command.uv_scale_v = uvTransform[1];
+        command.uv_offset_u = uvTransform[2];
+        command.uv_offset_v = uvTransform[3];
         command.light_count = std::min<uint32_t>(
             lightCount, DK2M_MAX_LIGHTS_PER_DRAW);
         if (command.light_count) {
@@ -2510,20 +2552,23 @@ void lightsSet(const void *lights, uint32_t lightCount, float ambientR, float am
     producer.lightsSet(lights, lightCount, ambientR, ambientG, ambientB, falloffLut);
 }
 
-void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12], uint32_t tint,
-              uint32_t flags, const uint16_t *lightIndices, uint32_t lightCount,
+void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12],
+              const float uvTransform[4], uint32_t tint, uint32_t flags,
+              const uint16_t *lightIndices, uint32_t lightCount,
               float ambientR, float ambientG, float ambientB) {
-    producer.drawMesh(meshId, textureId, world, tint, flags,
+    producer.drawMesh(meshId, textureId, world, uvTransform, tint, flags,
                       lightIndices, lightCount, ambientR, ambientG, ambientB);
 }
 
 void drawMeshDeformed(uint32_t meshId, uint32_t textureId,
                       const float *positions, uint32_t vertexCount,
-                      const float world[12], uint32_t tint, uint32_t flags,
+                      const float world[12], const float uvTransform[4],
+                      uint32_t tint, uint32_t flags,
                       const uint16_t *lightIndices, uint32_t lightCount,
                       float ambientR, float ambientG, float ambientB) {
     producer.drawMeshDeformed(
-        meshId, textureId, positions, vertexCount, world, tint, flags,
+        meshId, textureId, positions, vertexCount, world, uvTransform,
+        tint, flags,
         lightIndices, lightCount, ambientR, ambientG, ambientB);
 }
 

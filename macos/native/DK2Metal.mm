@@ -1533,6 +1533,12 @@ struct FrameMetrics {
     uint32_t missingTextures = 0;
     uint32_t bindingOverflows = 0;
     uint32_t invalidDraws = 0;
+    uint32_t meshInstances = 0;
+    uint32_t meshBatches = 0;
+    uint32_t meshRetainedHits = 0;
+    uint32_t meshRetainedUploads = 0;
+    uint32_t meshDeformedDraws = 0;
+    uint32_t meshInlineDraws = 0;
     uint32_t packMapCommands = 0;
     uint32_t packMappedRects = 0;
     uint32_t packHits = 0;
@@ -1596,6 +1602,27 @@ public:
               p(&FrameMetrics::producerTextureUs, 95), p(&FrameMetrics::producerTextureUs, 99),
               p(&FrameMetrics::producerOverlayUs, 50), p(&FrameMetrics::producerOverlayUs, 95),
               p(&FrameMetrics::producerOverlayUs, 99));
+        NSLog(@"PERF mesh p50/p95/p99: instances=%u/%u/%u batches=%u/%u/%u "
+               "retained-hits=%u/%u/%u uploads=%u/%u/%u deformed=%u/%u/%u "
+               "inline=%u/%u/%u",
+              p(&FrameMetrics::meshInstances, 50),
+              p(&FrameMetrics::meshInstances, 95),
+              p(&FrameMetrics::meshInstances, 99),
+              p(&FrameMetrics::meshBatches, 50),
+              p(&FrameMetrics::meshBatches, 95),
+              p(&FrameMetrics::meshBatches, 99),
+              p(&FrameMetrics::meshRetainedHits, 50),
+              p(&FrameMetrics::meshRetainedHits, 95),
+              p(&FrameMetrics::meshRetainedHits, 99),
+              p(&FrameMetrics::meshRetainedUploads, 50),
+              p(&FrameMetrics::meshRetainedUploads, 95),
+              p(&FrameMetrics::meshRetainedUploads, 99),
+              p(&FrameMetrics::meshDeformedDraws, 50),
+              p(&FrameMetrics::meshDeformedDraws, 95),
+              p(&FrameMetrics::meshDeformedDraws, 99),
+              p(&FrameMetrics::meshInlineDraws, 50),
+              p(&FrameMetrics::meshInlineDraws, 95),
+              p(&FrameMetrics::meshInlineDraws, 99));
         NSLog(@"PERF frame texture residency p50/p95/p99: allocations=%u/%u/%u MB=%u/%u/%u",
               p(&FrameMetrics::residentTextures, 50),
               p(&FrameMetrics::residentTextures, 95),
@@ -1757,17 +1784,37 @@ struct MeshDrawUniform {
     float world0[4];
     float world1[4];
     float world2[4];
+    float uvTransform[4];
     float ambient[4];
     uint32_t textureIndex;
     uint32_t tint;
     uint32_t flags;
     uint32_t pad;
+    uint32_t lightCount;
+    uint16_t lightIndices[DK2M_MAX_LIGHTS_PER_DRAW];
+    uint32_t lightPad[3];
 };
-static_assert(sizeof(MeshDrawUniform) == 80);
+static_assert(sizeof(MeshDrawUniform) == 160);
 constexpr NSUInteger kMeshVertexStride = 36;  // sizeof(DK2MMeshVertex)
-constexpr NSUInteger kMeshVertexBufferSize = 4 * 1024 * 1024;
+// Retained meshes occupy the low half and survive frame-slot reuse; inline and
+// deformed vertices are streamed through the high half every frame. Keep the
+// partition aligned to the packed vertex stride so baseVertex stays exact.
+constexpr NSUInteger kRetainedMeshVertexCapacity =
+    (4 * 1024 * 1024 / kMeshVertexStride) * kMeshVertexStride;
+constexpr NSUInteger kTransientMeshVertexCapacity = 4 * 1024 * 1024;
+constexpr NSUInteger kMeshVertexBufferSize =
+    kRetainedMeshVertexCapacity + kTransientMeshVertexCapacity;
+constexpr NSUInteger kRetainedMeshIndexCapacity = 512 * 1024;
+constexpr NSUInteger kTransientMeshIndexCapacity = 512 * 1024;
+constexpr NSUInteger kMeshIndexBufferSize =
+    kRetainedMeshIndexCapacity + kTransientMeshIndexCapacity;
 constexpr NSUInteger kMaxMeshDrawsPerFrame = 8192;
 constexpr NSUInteger kMeshDrawBufferSize = kMaxMeshDrawsPerFrame * sizeof(MeshDrawUniform);
+struct RetainedMeshPlacement {
+    NSUInteger baseVertex;
+    NSUInteger indexByteOffset;
+    uint32_t indexCount;
+};
 // lights buffer layout: 16B header + 256-float LUT at +16, lights at +1040
 constexpr NSUInteger kLightsHeaderBytes = 16 + 256 * sizeof(float);
 constexpr NSUInteger kMaxLightsPerFrame = 1024;
@@ -2348,9 +2395,14 @@ bool inputLogEnabled() {
     id<MTLRenderPipelineState> _meshAlphaPipeline;
     id<MTLRenderPipelineState> _meshAdditivePipeline;
     id<MTLBuffer> _meshVertexBuffers[kFramesInFlight];
+    id<MTLBuffer> _meshIndexBuffers[kFramesInFlight];
     id<MTLBuffer> _meshDrawBuffers[kFramesInFlight];
     id<MTLBuffer> _lightsBuffers[kFramesInFlight];
     id<MTLBuffer> _cameraBuffers[kFramesInFlight];
+    std::unordered_map<uint32_t, RetainedMeshPlacement>
+        _retainedMeshPlacements[kFramesInFlight];
+    NSUInteger _retainedMeshVertexOffsets[kFramesInFlight];
+    NSUInteger _retainedMeshIndexOffsets[kFramesInFlight];
     // Original DK2 shadow masks, rasterized in a 256x256-subpixel scratch
     // atlas and resolved into their normal 32x32 texture-atlas regions.
     id<MTLRenderPipelineState> _shadowMaskPipeline;
@@ -2393,6 +2445,7 @@ bool inputLogEnabled() {
     TelemetryClock::time_point _lastBridgeArrival;
     TelemetryClock::time_point _submittedAt[kFramesInFlight];
     uint64_t _submittedValue[kFramesInFlight];
+    std::atomic_flag _encodingFrame;
     uint64_t _frame;
     uint64_t _appliedDrawableSize;
     uint32_t _lastBridgeFrame;
@@ -2402,6 +2455,7 @@ bool inputLogEnabled() {
 - (instancetype)initWithLayer:(CAMetalLayer *)layer {
     self = [super init];
     if (!self) return nil;
+    _encodingFrame.clear(std::memory_order_relaxed);
 
     _layer = layer;
     _device = MTLCreateSystemDefaultDevice();
@@ -2682,15 +2736,18 @@ bool inputLogEnabled() {
         _drawBuffers[index].label = [NSString stringWithFormat:@"DK2 draw uniforms %lu", index];
 
         _meshVertexBuffers[index] = [_device newBufferWithLength:kMeshVertexBufferSize options:uploadOptions];
+        _meshIndexBuffers[index] = [_device newBufferWithLength:kMeshIndexBufferSize options:uploadOptions];
         _meshDrawBuffers[index] = [_device newBufferWithLength:kMeshDrawBufferSize options:uploadOptions];
         _lightsBuffers[index] = [_device newBufferWithLength:kLightsBufferSize options:uploadOptions];
         _cameraBuffers[index] = [_device newBufferWithLength:kCameraBufferSize options:uploadOptions];
         _meshVertexBuffers[index].label = [NSString stringWithFormat:@"DK2 mesh vertices %lu", index];
+        _meshIndexBuffers[index].label = [NSString stringWithFormat:@"DK2 mesh indices %lu", index];
         _meshDrawBuffers[index].label = [NSString stringWithFormat:@"DK2 mesh draws %lu", index];
         _lightsBuffers[index].label = [NSString stringWithFormat:@"DK2 lights %lu", index];
         _cameraBuffers[index].label = [NSString stringWithFormat:@"DK2 camera %lu", index];
         if (!_vertexBuffers[index] || !_indexBuffers[index] || !_drawBuffers[index] ||
-            !_meshVertexBuffers[index] || !_meshDrawBuffers[index] ||
+            !_meshVertexBuffers[index] || !_meshIndexBuffers[index] ||
+            !_meshDrawBuffers[index] ||
             !_lightsBuffers[index] || !_cameraBuffers[index]) {
             fail(@"Metal dynamic frame buffer creation failed.");
             return nil;
@@ -2790,18 +2847,19 @@ bool inputLogEnabled() {
         }
     }
 
-    id<MTLAllocation> allocations[kFramesInFlight * 7 + 1];
+    id<MTLAllocation> allocations[kFramesInFlight * 8 + 1];
     for (NSUInteger index = 0; index < kFramesInFlight; ++index) {
-        allocations[index * 7] = _vertexBuffers[index];
-        allocations[index * 7 + 1] = _indexBuffers[index];
-        allocations[index * 7 + 2] = _drawBuffers[index];
-        allocations[index * 7 + 3] = _meshVertexBuffers[index];
-        allocations[index * 7 + 4] = _meshDrawBuffers[index];
-        allocations[index * 7 + 5] = _lightsBuffers[index];
-        allocations[index * 7 + 6] = _cameraBuffers[index];
+        allocations[index * 8] = _vertexBuffers[index];
+        allocations[index * 8 + 1] = _indexBuffers[index];
+        allocations[index * 8 + 2] = _drawBuffers[index];
+        allocations[index * 8 + 3] = _meshVertexBuffers[index];
+        allocations[index * 8 + 4] = _meshIndexBuffers[index];
+        allocations[index * 8 + 5] = _meshDrawBuffers[index];
+        allocations[index * 8 + 6] = _lightsBuffers[index];
+        allocations[index * 8 + 7] = _cameraBuffers[index];
     }
-    allocations[kFramesInFlight * 7] = _whiteTexture;
-    [_resources addAllocations:allocations count:kFramesInFlight * 7 + 1];
+    allocations[kFramesInFlight * 8] = _whiteTexture;
+    [_resources addAllocations:allocations count:kFramesInFlight * 8 + 1];
     if (_shadowsAvailable) {
         id<MTLAllocation> shadowAllocations[kFramesInFlight * 3];
         for (NSUInteger index = 0; index < kFramesInFlight; ++index) {
@@ -3058,6 +3116,16 @@ static void *renderWorker(void *context) {
 }
 
 - (void)metalDisplayLink:(CAMetalDisplayLink *)link needsUpdate:(CAMetalDisplayLinkUpdate *)update {
+    // CAMetalDisplayLink can transiently deliver one deferred callback on the
+    // main run loop while the dedicated render run loop is still encoding
+    // (observed during full-screen activation). Metal 4 command allocators and
+    // residency sets are deliberately single-encoder here, so drop the stale
+    // overlapping callback instead of entering the driver concurrently.
+    if (_encodingFrame.test_and_set(std::memory_order_acquire)) return;
+    struct EncodingFrameGuard {
+        std::atomic_flag &flag;
+        ~EncodingFrameGuard() { flag.clear(std::memory_order_release); }
+    } encodingFrameGuard{_encodingFrame};
     @autoreleasepool {
         const auto encodeStarted = TelemetryClock::now();
         FrameMetrics metrics = {};
@@ -3817,10 +3885,119 @@ static void *renderWorker(void *context) {
                 cam[0] = cam[5] = cam[10] = cam[15] = 1.0f;
                 std::memset(_lightsBuffers[slot].contents, 0, 16);
             }
-            NSUInteger meshVertexOffset = 0;
+            NSUInteger meshVertexOffset = kRetainedMeshVertexCapacity;
+            NSUInteger meshIndexOffset = kRetainedMeshIndexCapacity;
             NSUInteger meshDrawCount = 0;
             struct MeshPlacement { NSUInteger baseVertex; NSUInteger indexByteOffset; uint32_t indexCount; };
+            struct MeshIndexPlacement { NSUInteger byteOffset; uint32_t indexCount; };
             std::unordered_map<uint32_t, MeshPlacement> meshPlacements;
+            std::unordered_map<uint32_t, MeshIndexPlacement> meshIndexPlacements;
+            bool retainedMeshUsedThisFrame = false;
+            auto ensureRetainedMesh = [&](uint32_t meshId, const MeshBlob &blob)
+                    -> const RetainedMeshPlacement * {
+                auto &placements = _retainedMeshPlacements[slot];
+                if (const auto found = placements.find(meshId);
+                    found != placements.end()) {
+                    ++metrics.meshRetainedHits;
+                    return &found->second;
+                }
+                for (int attempt = 0; attempt < 2; ++attempt) {
+                    const NSUInteger indexStart =
+                        (_retainedMeshIndexOffsets[slot] + 3u) &
+                        ~static_cast<NSUInteger>(3u);
+                    if (_retainedMeshVertexOffsets[slot] + blob.vertices.size() <=
+                            kRetainedMeshVertexCapacity &&
+                        indexStart + blob.indices.size() <=
+                            kRetainedMeshIndexCapacity) {
+                        const RetainedMeshPlacement placement = {
+                            _retainedMeshVertexOffsets[slot] / kMeshVertexStride,
+                            indexStart,
+                            blob.indexCount};
+                        std::memcpy(
+                            static_cast<uint8_t *>(
+                                _meshVertexBuffers[slot].contents) +
+                                _retainedMeshVertexOffsets[slot],
+                            blob.vertices.data(), blob.vertices.size());
+                        std::memcpy(
+                            static_cast<uint8_t *>(
+                                _meshIndexBuffers[slot].contents) + indexStart,
+                            blob.indices.data(), blob.indices.size());
+                        _retainedMeshVertexOffsets[slot] += blob.vertices.size();
+                        _retainedMeshIndexOffsets[slot] = indexStart +
+                            ((blob.indices.size() + 3u) &
+                             ~static_cast<NSUInteger>(3u));
+                        ++metrics.meshRetainedUploads;
+                        return &placements.emplace(meshId, placement).first->second;
+                    }
+                    // A frame slot is idle when it is handed back to us. If
+                    // nothing encoded this frame references its old arena yet,
+                    // recycle the fixed cache instead of growing memory across
+                    // level changes. Otherwise this mesh uses the transient
+                    // half for the current frame.
+                    if (attempt == 0 && !retainedMeshUsedThisFrame) {
+                        placements.clear();
+                        _retainedMeshVertexOffsets[slot] = 0;
+                        _retainedMeshIndexOffsets[slot] = 0;
+                        continue;
+                    }
+                    break;
+                }
+                return nullptr;
+            };
+            struct PendingMeshInstances {
+                bool active = false;
+                NSUInteger baseVertex = 0;
+                NSUInteger indexByteOffset = 0;
+                uint32_t indexCount = 0;
+                uint32_t vertexCount = 0;
+                uint32_t pipelineKind = 0;  // 0 opaque, 1 alpha, 2 additive
+                uint32_t zFunction = 4;
+                uint32_t zWrite = 1;
+                uint32_t cull = 1;
+                uint16_t bank = 0;
+                NSUInteger baseInstance = 0;
+                NSUInteger instanceCount = 0;
+            } pendingMeshInstances;
+            auto flushPendingMeshInstances = [&] {
+                if (!pendingMeshInstances.active) return;
+                id<MTLRenderPipelineState> pipeline = _meshOpaquePipeline;
+                if (pendingMeshInstances.pipelineKind == 1) {
+                    pipeline = _meshAlphaPipeline;
+                } else if (pendingMeshInstances.pipelineKind == 2) {
+                    pipeline = _meshAdditivePipeline;
+                }
+                [encoder setRenderPipelineState:pipeline];
+                [encoder setDepthStencilState:
+                    _depthStates[pendingMeshInstances.zFunction]
+                                [pendingMeshInstances.zWrite]];
+                [encoder setCullMode:pendingMeshInstances.cull == 1
+                    ? MTLCullModeNone : MTLCullModeBack];
+                [encoder setFrontFacingWinding:pendingMeshInstances.cull == 3
+                    ? MTLWindingClockwise : MTLWindingCounterClockwise];
+                if (boundArgumentTableBank != pendingMeshInstances.bank) {
+                    boundArgumentTableBank = pendingMeshInstances.bank;
+                    [encoder setArgumentTable:
+                        _argumentTables[slot][boundArgumentTableBank]
+                                     atStages:MTLRenderStageVertex |
+                                              MTLRenderStageFragment];
+                }
+                [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                    indexCount:pendingMeshInstances.indexCount
+                                     indexType:MTLIndexTypeUInt16
+                                   indexBuffer:_meshIndexBuffers[slot].gpuAddress +
+                                       pendingMeshInstances.indexByteOffset
+                             indexBufferLength:pendingMeshInstances.indexCount * 2
+                                 instanceCount:pendingMeshInstances.instanceCount
+                                    baseVertex:pendingMeshInstances.baseVertex
+                                  baseInstance:pendingMeshInstances.baseInstance];
+                ++metrics.drawCalls;
+                ++metrics.meshBatches;
+                metrics.vertices += pendingMeshInstances.vertexCount *
+                                    pendingMeshInstances.instanceCount;
+                metrics.indices += pendingMeshInstances.indexCount *
+                                   pendingMeshInstances.instanceCount;
+                pendingMeshInstances.active = false;
+            };
             [encoder setArgumentTable:_argumentTables[slot][boundArgumentTableBank]
                              atStages:MTLRenderStageVertex | MTLRenderStageFragment];
             // Two passes over the stream: mesh-pipeline commands encode FIRST
@@ -3832,12 +4009,16 @@ static void *renderWorker(void *context) {
             for (int meshPass = 1; meshPass >= 0; --meshPass) {
             for (const CommandView &view : _commandViews) {
                 const size_t commandOffset = view.offset;
+                if (view.type != DK2M_COMMAND_DRAW_MESH) {
+                    flushPendingMeshInstances();
+                }
                 const bool isMeshCommand =
                     view.type == DK2M_COMMAND_MESH_REGISTER ||
                     view.type == DK2M_COMMAND_CAMERA_SET ||
                     view.type == DK2M_COMMAND_LIGHTS_SET ||
                     view.type == DK2M_COMMAND_DRAW_MESH ||
-                    view.type == DK2M_COMMAND_DRAW_MESH_INLINE;
+                    view.type == DK2M_COMMAND_DRAW_MESH_INLINE ||
+                    view.type == DK2M_COMMAND_DRAW_MESH_DEFORMED;
                 if (isMeshCommand != (meshPass == 1)) continue;
                 if (view.type == DK2M_COMMAND_SET_TEXTURE &&
                     view.size == sizeof(DK2MSetTextureCommand)) {
@@ -3956,23 +4137,50 @@ static void *renderWorker(void *context) {
                         MeshBlob &blob = meshFound->second;
                         auto placed = meshPlacements.find(meshDraw.mesh_id);
                         if (placed == meshPlacements.end()) {
-                            const NSUInteger vertexBytes = blob.vertices.size();
-                            const NSUInteger indexBytes = blob.indices.size();
-                            const NSUInteger alignedIndexOffset = (indexOffset + 3u) & ~static_cast<NSUInteger>(3u);
-                            if (meshVertexOffset + vertexBytes <= kMeshVertexBufferSize &&
-                                alignedIndexOffset + indexBytes <= kIndexBufferSize) {
-                                std::memcpy(static_cast<uint8_t *>(_meshVertexBuffers[slot].contents) +
-                                                meshVertexOffset,
-                                            blob.vertices.data(), vertexBytes);
-                                std::memcpy(static_cast<uint8_t *>(_indexBuffers[slot].contents) +
-                                                alignedIndexOffset,
-                                            blob.indices.data(), indexBytes);
+                            if (const RetainedMeshPlacement *retained =
+                                    ensureRetainedMesh(meshDraw.mesh_id, blob)) {
+                                placed = meshPlacements.emplace(
+                                    meshDraw.mesh_id,
+                                    MeshPlacement{retained->baseVertex,
+                                                  retained->indexByteOffset,
+                                                  retained->indexCount}).first;
+                                meshIndexPlacements.emplace(
+                                    meshDraw.mesh_id,
+                                    MeshIndexPlacement{retained->indexByteOffset,
+                                                       retained->indexCount});
+                                retainedMeshUsedThisFrame = true;
+                            } else {
+                                const NSUInteger vertexBytes = blob.vertices.size();
+                                const NSUInteger indexBytes = blob.indices.size();
+                                const NSUInteger alignedIndexOffset =
+                                    (meshIndexOffset + 3u) &
+                                    ~static_cast<NSUInteger>(3u);
+                                if (meshVertexOffset + vertexBytes <= kMeshVertexBufferSize &&
+                                    alignedIndexOffset + indexBytes <= kMeshIndexBufferSize) {
+                                    std::memcpy(
+                                        static_cast<uint8_t *>(
+                                            _meshVertexBuffers[slot].contents) +
+                                            meshVertexOffset,
+                                        blob.vertices.data(), vertexBytes);
+                                    std::memcpy(
+                                        static_cast<uint8_t *>(
+                                            _meshIndexBuffers[slot].contents) +
+                                            alignedIndexOffset,
+                                        blob.indices.data(), indexBytes);
                                 const MeshPlacement placement = {
                                     meshVertexOffset / kMeshVertexStride, alignedIndexOffset,
                                     blob.indexCount};
-                                indexOffset = alignedIndexOffset + ((indexBytes + 3u) & ~static_cast<NSUInteger>(3u));
-                                meshVertexOffset += vertexBytes;
-                                placed = meshPlacements.emplace(meshDraw.mesh_id, placement).first;
+                                    meshIndexOffset = alignedIndexOffset +
+                                        ((indexBytes + 3u) &
+                                         ~static_cast<NSUInteger>(3u));
+                                    meshVertexOffset += vertexBytes;
+                                    placed = meshPlacements.emplace(
+                                        meshDraw.mesh_id, placement).first;
+                                    meshIndexPlacements.emplace(
+                                        meshDraw.mesh_id,
+                                        MeshIndexPlacement{alignedIndexOffset,
+                                                           blob.indexCount});
+                                }
                             }
                         }
                         if (placed == meshPlacements.end() || meshDrawCount >= kMaxMeshDrawsPerFrame ||
@@ -3988,6 +4196,10 @@ static void *renderWorker(void *context) {
                             std::memcpy(uniform.world0, meshDraw.world + 0, 16);
                             std::memcpy(uniform.world1, meshDraw.world + 4, 16);
                             std::memcpy(uniform.world2, meshDraw.world + 8, 16);
+                            uniform.uvTransform[0] = meshDraw.uv_scale_u;
+                            uniform.uvTransform[1] = meshDraw.uv_scale_v;
+                            uniform.uvTransform[2] = meshDraw.uv_offset_u;
+                            uniform.uvTransform[3] = meshDraw.uv_offset_v;
                             uniform.ambient[0] = meshDraw.ambient_r;
                             uniform.ambient[1] = meshDraw.ambient_g;
                             uniform.ambient[2] = meshDraw.ambient_b;
@@ -3996,34 +4208,191 @@ static void *renderWorker(void *context) {
                             uniform.tint = meshDraw.tint;
                             uniform.flags = meshDraw.flags;
                             uniform.pad = 0;
-                            id<MTLRenderPipelineState> pipeline = _meshOpaquePipeline;
-                            if (alphaBlendEnabled || (meshDraw.flags & 2u)) {
-                                pipeline = sourceBlend == 2 && destinationBlend == 2
-                                               ? _meshAdditivePipeline : _meshAlphaPipeline;
-                            }
-                            [encoder setRenderPipelineState:pipeline];
+                            uniform.lightCount = std::min<uint32_t>(
+                                meshDraw.light_count, DK2M_MAX_LIGHTS_PER_DRAW);
+                            std::memset(uniform.lightIndices, 0,
+                                        sizeof(uniform.lightIndices));
+                            std::memcpy(uniform.lightIndices, meshDraw.light_indices,
+                                        uniform.lightCount * sizeof(uint16_t));
+                            std::memset(uniform.lightPad, 0, sizeof(uniform.lightPad));
                             const uint32_t effectiveZFunction = zEnabled ? zFunction : 8;
                             const uint32_t effectiveZWrite = zEnabled && zWriteEnabled ? 1 : 0;
-                            [encoder setDepthStencilState:_depthStates[effectiveZFunction][effectiveZWrite]];
-                            [encoder setCullMode:cullMode == 1 ? MTLCullModeNone : MTLCullModeBack];
-                            [encoder setFrontFacingWinding:cullMode == 3 ? MTLWindingClockwise
-                                                                        : MTLWindingCounterClockwise];
+                            const uint32_t pipelineKind = (meshDraw.flags & 4u) ? 2u
+                                : (meshDraw.flags & 2u) ? 1u : 0u;
+                            const bool canInstance = pipelineKind == 0;
+                            const bool compatible = pendingMeshInstances.active &&
+                                canInstance &&
+                                pendingMeshInstances.baseVertex ==
+                                    placed->second.baseVertex &&
+                                pendingMeshInstances.indexByteOffset ==
+                                    placed->second.indexByteOffset &&
+                                pendingMeshInstances.indexCount ==
+                                    placed->second.indexCount &&
+                                pendingMeshInstances.pipelineKind == pipelineKind &&
+                                pendingMeshInstances.zFunction == effectiveZFunction &&
+                                pendingMeshInstances.zWrite == effectiveZWrite &&
+                                pendingMeshInstances.cull == cullMode &&
+                                pendingMeshInstances.bank == binding.bank &&
+                                pendingMeshInstances.baseInstance +
+                                    pendingMeshInstances.instanceCount == meshDrawCount;
+                            if (!compatible) {
+                                flushPendingMeshInstances();
+                                pendingMeshInstances.active = true;
+                                pendingMeshInstances.baseVertex =
+                                    placed->second.baseVertex;
+                                pendingMeshInstances.indexByteOffset =
+                                    placed->second.indexByteOffset;
+                                pendingMeshInstances.indexCount =
+                                    placed->second.indexCount;
+                                pendingMeshInstances.vertexCount = blob.vertexCount;
+                                pendingMeshInstances.pipelineKind = pipelineKind;
+                                pendingMeshInstances.zFunction = effectiveZFunction;
+                                pendingMeshInstances.zWrite = effectiveZWrite;
+                                pendingMeshInstances.cull = cullMode;
+                                pendingMeshInstances.bank = binding.bank;
+                                pendingMeshInstances.baseInstance = meshDrawCount;
+                                pendingMeshInstances.instanceCount = 0;
+                            }
+                            ++pendingMeshInstances.instanceCount;
+                            ++meshDrawCount;
+                            ++metrics.meshInstances;
+                            // Blended instances must preserve primitive order;
+                            // only opaque/alpha-test draws are coalesced.
+                            if (!canInstance) flushPendingMeshInstances();
+                        }
+                    }
+                } else if (view.type == DK2M_COMMAND_DRAW_MESH_DEFORMED &&
+                           view.size >= sizeof(DK2MDrawMeshDeformedCommand)) {
+                    DK2MDrawMeshDeformedCommand meshDraw;
+                    std::memcpy(&meshDraw, snapshot->bytes.data() + commandOffset,
+                                sizeof(meshDraw));
+                    const auto meshFound = _meshes.find(meshDraw.mesh_id);
+                    const size_t positionBytes =
+                        static_cast<size_t>(meshDraw.vertex_count) * 3 * sizeof(float);
+                    if (meshFound == _meshes.end() || meshFound->second.vertices.empty() ||
+                        meshDraw.vertex_count != meshFound->second.vertexCount ||
+                        sizeof(meshDraw) + positionBytes > view.size ||
+                        !meshDraw.vertex_count ||
+                        meshDrawCount >= kMaxMeshDrawsPerFrame ||
+                        !snapshot->width || !snapshot->height) {
+                        ++metrics.invalidDraws;
+                    } else {
+                        MeshBlob &blob = meshFound->second;
+                        auto indexPlaced = meshIndexPlacements.find(meshDraw.mesh_id);
+                        if (indexPlaced == meshIndexPlacements.end()) {
+                            if (const RetainedMeshPlacement *retained =
+                                    ensureRetainedMesh(meshDraw.mesh_id, blob)) {
+                                indexPlaced = meshIndexPlacements.emplace(
+                                    meshDraw.mesh_id,
+                                    MeshIndexPlacement{retained->indexByteOffset,
+                                                       retained->indexCount}).first;
+                                retainedMeshUsedThisFrame = true;
+                            } else {
+                                const NSUInteger alignedIndexOffset =
+                                    (meshIndexOffset + 3u) &
+                                    ~static_cast<NSUInteger>(3u);
+                                if (alignedIndexOffset + blob.indices.size() <=
+                                        kMeshIndexBufferSize) {
+                                    std::memcpy(
+                                        static_cast<uint8_t *>(
+                                            _meshIndexBuffers[slot].contents) +
+                                            alignedIndexOffset,
+                                        blob.indices.data(), blob.indices.size());
+                                    meshIndexOffset = alignedIndexOffset +
+                                        ((blob.indices.size() + 3u) &
+                                         ~static_cast<NSUInteger>(3u));
+                                    indexPlaced = meshIndexPlacements.emplace(
+                                        meshDraw.mesh_id,
+                                        MeshIndexPlacement{alignedIndexOffset,
+                                                           blob.indexCount}).first;
+                                }
+                            }
+                        }
+                        if (indexPlaced == meshIndexPlacements.end() ||
+                            meshVertexOffset + blob.vertices.size() > kMeshVertexBufferSize) {
+                            ++metrics.invalidDraws;
+                        } else {
+                            uint8_t *vertices =
+                                static_cast<uint8_t *>(_meshVertexBuffers[slot].contents) +
+                                meshVertexOffset;
+                            std::memcpy(vertices, blob.vertices.data(), blob.vertices.size());
+                            const uint8_t *positions =
+                                snapshot->bytes.data() + commandOffset + sizeof(meshDraw);
+                            for (uint32_t vertex = 0; vertex < meshDraw.vertex_count; ++vertex) {
+                                std::memcpy(vertices + vertex * kMeshVertexStride,
+                                            positions + vertex * 3 * sizeof(float),
+                                            3 * sizeof(float));
+                            }
+                            const NSUInteger baseVertex =
+                                meshVertexOffset / kMeshVertexStride;
+                            meshVertexOffset += blob.vertices.size();
+
+                            const TextureBinding binding = meshDraw.texture_id
+                                ? resolveTextureBinding(meshDraw.texture_id)
+                                : TextureBinding{
+                                      static_cast<uint16_t>(boundArgumentTableBank), 0};
+                            auto *uniforms = static_cast<MeshDrawUniform *>(
+                                _meshDrawBuffers[slot].contents);
+                            MeshDrawUniform &uniform = uniforms[meshDrawCount];
+                            std::memcpy(uniform.world0, meshDraw.world + 0, 16);
+                            std::memcpy(uniform.world1, meshDraw.world + 4, 16);
+                            std::memcpy(uniform.world2, meshDraw.world + 8, 16);
+                            uniform.uvTransform[0] = meshDraw.uv_scale_u;
+                            uniform.uvTransform[1] = meshDraw.uv_scale_v;
+                            uniform.uvTransform[2] = meshDraw.uv_offset_u;
+                            uniform.uvTransform[3] = meshDraw.uv_offset_v;
+                            uniform.ambient[0] = meshDraw.ambient_r;
+                            uniform.ambient[1] = meshDraw.ambient_g;
+                            uniform.ambient[2] = meshDraw.ambient_b;
+                            uniform.ambient[3] = 0.0f;
+                            uniform.textureIndex = binding.slot;
+                            uniform.tint = meshDraw.tint;
+                            uniform.flags = meshDraw.flags;
+                            uniform.pad = 0;
+                            uniform.lightCount = std::min<uint32_t>(
+                                meshDraw.light_count, DK2M_MAX_LIGHTS_PER_DRAW);
+                            std::memset(uniform.lightIndices, 0,
+                                        sizeof(uniform.lightIndices));
+                            std::memcpy(uniform.lightIndices,
+                                        meshDraw.light_indices,
+                                        uniform.lightCount * sizeof(uint16_t));
+                            std::memset(uniform.lightPad, 0,
+                                        sizeof(uniform.lightPad));
+
+                            id<MTLRenderPipelineState> pipeline = _meshOpaquePipeline;
+                            if (meshDraw.flags & 4u) pipeline = _meshAdditivePipeline;
+                            else if (meshDraw.flags & 2u) pipeline = _meshAlphaPipeline;
+                            [encoder setRenderPipelineState:pipeline];
+                            const uint32_t effectiveZFunction =
+                                zEnabled ? zFunction : 8;
+                            const uint32_t effectiveZWrite =
+                                zEnabled && zWriteEnabled ? 1 : 0;
+                            [encoder setDepthStencilState:
+                                _depthStates[effectiveZFunction][effectiveZWrite]];
+                            [encoder setCullMode:cullMode == 1
+                                ? MTLCullModeNone : MTLCullModeBack];
+                            [encoder setFrontFacingWinding:cullMode == 3
+                                ? MTLWindingClockwise : MTLWindingCounterClockwise];
                             if (boundArgumentTableBank != binding.bank) {
                                 boundArgumentTableBank = binding.bank;
-                                [encoder setArgumentTable:_argumentTables[slot][boundArgumentTableBank]
-                                                 atStages:MTLRenderStageVertex | MTLRenderStageFragment];
+                                [encoder setArgumentTable:
+                                    _argumentTables[slot][boundArgumentTableBank]
+                                    atStages:MTLRenderStageVertex |
+                                             MTLRenderStageFragment];
                             }
                             [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                                indexCount:placed->second.indexCount
+                                                indexCount:indexPlaced->second.indexCount
                                                  indexType:MTLIndexTypeUInt16
-                                               indexBuffer:_indexBuffers[slot].gpuAddress +
-                                                           placed->second.indexByteOffset
-                                         indexBufferLength:placed->second.indexCount * 2
+                                               indexBuffer:_meshIndexBuffers[slot].gpuAddress +
+                                                   indexPlaced->second.byteOffset
+                                         indexBufferLength:
+                                             indexPlaced->second.indexCount * 2
                                              instanceCount:1
-                                                baseVertex:placed->second.baseVertex
+                                                baseVertex:baseVertex
                                               baseInstance:meshDrawCount];
                             ++meshDrawCount;
                             ++metrics.drawCalls;
+                            ++metrics.meshDeformedDraws;
                             metrics.vertices += blob.vertexCount;
                             metrics.indices += blob.indexCount;
                         }
@@ -4037,11 +4406,12 @@ static void *renderWorker(void *context) {
                         static_cast<size_t>(inlineDraw.vertex_count) * kMeshVertexStride;
                     const size_t indexBytes =
                         (static_cast<size_t>(inlineDraw.index_count) * 2 + 3) & ~static_cast<size_t>(3);
-                    const NSUInteger alignedIndexOffset = (indexOffset + 3u) & ~static_cast<NSUInteger>(3u);
+                    const NSUInteger alignedIndexOffset =
+                        (meshIndexOffset + 3u) & ~static_cast<NSUInteger>(3u);
                     if (!inlineDraw.vertex_count || !inlineDraw.index_count ||
                         sizeof(inlineDraw) + vertexBytes + indexBytes > view.size ||
                         meshVertexOffset + vertexBytes > kMeshVertexBufferSize ||
-                        alignedIndexOffset + indexBytes > kIndexBufferSize ||
+                        alignedIndexOffset + indexBytes > kMeshIndexBufferSize ||
                         meshDrawCount >= kMaxMeshDrawsPerFrame ||
                         !snapshot->width || !snapshot->height) {
                         ++metrics.invalidDraws;
@@ -4051,12 +4421,12 @@ static void *renderWorker(void *context) {
                         std::memcpy(static_cast<uint8_t *>(_meshVertexBuffers[slot].contents) +
                                         meshVertexOffset,
                                     payload, vertexBytes);
-                        std::memcpy(static_cast<uint8_t *>(_indexBuffers[slot].contents) +
+                        std::memcpy(static_cast<uint8_t *>(_meshIndexBuffers[slot].contents) +
                                         alignedIndexOffset,
                                     payload + vertexBytes, indexBytes);
                         const NSUInteger baseVertex = meshVertexOffset / kMeshVertexStride;
                         meshVertexOffset += vertexBytes;
-                        indexOffset = alignedIndexOffset + indexBytes;
+                        meshIndexOffset = alignedIndexOffset + indexBytes;
                         static NSTimeInterval lastInlineLog = 0;
                         const NSTimeInterval nowInline = CACurrentMediaTime();
                         if (nowInline - lastInlineLog > 3.0) {
@@ -4085,6 +4455,10 @@ static void *renderWorker(void *context) {
                         std::memcpy(uniform.world0, kIdentityRows + 0, 16);
                         std::memcpy(uniform.world1, kIdentityRows + 4, 16);
                         std::memcpy(uniform.world2, kIdentityRows + 8, 16);
+                        uniform.uvTransform[0] = 1.0f;
+                        uniform.uvTransform[1] = 1.0f;
+                        uniform.uvTransform[2] = 0.0f;
+                        uniform.uvTransform[3] = 0.0f;
                         uniform.ambient[0] = inlineDraw.ambient_r;
                         uniform.ambient[1] = inlineDraw.ambient_g;
                         uniform.ambient[2] = inlineDraw.ambient_b;
@@ -4093,6 +4467,13 @@ static void *renderWorker(void *context) {
                         uniform.tint = meshDebug ? 0xFFFFFFFFu : inlineDraw.tint;
                         uniform.flags = inlineDraw.flags;
                         uniform.pad = 0;
+                        uniform.lightCount = std::min<uint32_t>(
+                            inlineDraw.light_count, DK2M_MAX_LIGHTS_PER_DRAW);
+                        std::memset(uniform.lightIndices, 0,
+                                    sizeof(uniform.lightIndices));
+                        std::memcpy(uniform.lightIndices, inlineDraw.light_indices,
+                                    uniform.lightCount * sizeof(uint16_t));
+                        std::memset(uniform.lightPad, 0, sizeof(uniform.lightPad));
                         // pipeline strictly from the draw's own flags: mesh
                         // commands sit at the frame head and must not inherit
                         // whatever blend state the previous frame replay left on
@@ -4119,7 +4500,7 @@ static void *renderWorker(void *context) {
                         [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                             indexCount:inlineDraw.index_count
                                              indexType:MTLIndexTypeUInt16
-                                           indexBuffer:_indexBuffers[slot].gpuAddress +
+                                           indexBuffer:_meshIndexBuffers[slot].gpuAddress +
                                                        alignedIndexOffset
                                      indexBufferLength:inlineDraw.index_count * 2
                                          instanceCount:1
@@ -4127,6 +4508,7 @@ static void *renderWorker(void *context) {
                                           baseInstance:meshDrawCount];
                         ++meshDrawCount;
                         ++metrics.drawCalls;
+                        ++metrics.meshInlineDraws;
                         metrics.vertices += inlineDraw.vertex_count;
                         metrics.indices += inlineDraw.index_count;
                     }
@@ -4267,6 +4649,7 @@ static void *renderWorker(void *context) {
                     }
                 }
             }
+            flushPendingMeshInstances();
             }
             gBridgeFramesRendered.fetch_add(1, std::memory_order_relaxed);
         }
