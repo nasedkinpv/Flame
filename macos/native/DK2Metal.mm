@@ -3778,7 +3778,7 @@ static void *renderWorker(void *context) {
 // the file being the primary source of truth. [renderer] controls apply live;
 // everything else is marked "restart required" and only takes effect the
 // next time the game (not the host) launches.
-@interface DK2PreferencesWindowController : NSWindowController
+@interface DK2PreferencesWindowController : NSWindowController <NSTextFieldDelegate>
 + (instancetype)shared;
 @end
 
@@ -3795,6 +3795,7 @@ static void *renderWorker(void *context) {
     NSPopUpButton *_shadowLevel;
     NSComboBox *_resolution;
     NSTextField *_level;
+    NSTextField *_levelWarning;
     NSTextField *_winedebug;
 }
 
@@ -3862,8 +3863,8 @@ static void *renderWorker(void *context) {
     const CGFloat hintX = 410, hintWidth = 130;
     const CGFloat rowHeight = 24, rowGap = 10, headerGap = 30;
     const CGFloat topMargin = 40, bottomMargin = 20;
-    const int headerCount = 4;   // Renderer, Game, Patches, Debug
-    const int rowCount = 12;     // 4 + 4 + 3 + 1
+    const int headerCount = 4;   // Renderer, Game, Patches, Developer
+    const int rowCount = 14;     // 4 + 3 + 3 + (caption + level + warning + winedebug)
     const CGFloat contentWidth = 560;
     const CGFloat contentHeight = topMargin + bottomMargin +
         headerCount * (headerGap + rowHeight + rowGap) +
@@ -3888,6 +3889,14 @@ static void *renderWorker(void *context) {
     auto addRowLabel = [&](NSString *title) {
         [container addSubview:[self labelWithFrame:NSMakeRect(labelX, y, labelWidth, rowHeight)
                                                text:title bold:NO]];
+    };
+    auto addCaption = [&](NSString *text) {
+        NSTextField *caption = [self labelWithFrame:NSMakeRect(labelX, y, hintX + hintWidth - labelX, rowHeight)
+                                                text:text bold:NO];
+        caption.font = [NSFont systemFontOfSize:11];
+        caption.textColor = NSColor.secondaryLabelColor;
+        [container addSubview:caption];
+        y -= rowHeight + rowGap;
     };
 
     addHeader(@"Renderer (applies immediately)");
@@ -3952,16 +3961,6 @@ static void *renderWorker(void *context) {
     addHint(y);
     y -= rowHeight + rowGap;
 
-    addRowLabel(@"Level");
-    _level = [[NSTextField alloc] initWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)];
-    _level.stringValue = @(s.level.c_str());
-    _level.placeholderString = @"empty = normal menu";
-    _level.target = self;
-    _level.action = @selector(controlChanged:);
-    [container addSubview:_level];
-    addHint(y);
-    y -= rowHeight + rowGap;
-
     addHeader(@"Patches");
     addRowLabel(@"Mesh GPU Path");
     _meshGpuPath = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
@@ -3984,10 +3983,43 @@ static void *renderWorker(void *context) {
     addHint(y);
     y -= rowHeight + rowGap;
 
-    addHeader(@"Debug");
+    // Separated visually from the everyday Game/Patches settings above: both
+    // fields here are development/debugging aids, not something a player
+    // adjusts for normal play, and level in particular bypasses the main
+    // menu entirely on the next launch -- surprising if it sits next to
+    // Movies/Resolution looking like just another game option.
+    addHeader(@"Developer");
+    addCaption(@"Level autostart — skips the main menu; leave empty for normal play.");
+
+    addRowLabel(@"Level");
+    _level = [[NSTextField alloc] initWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)];
+    _level.stringValue = @(s.level.c_str());
+    _level.placeholderString = @"empty = normal menu";
+    _level.delegate = self;
+    _level.target = self;
+    _level.action = @selector(controlChanged:);
+    [container addSubview:_level];
+    addHint(y);
+    y -= rowHeight + rowGap;
+
+    _levelWarning = [[NSTextField alloc] initWithFrame:NSMakeRect(labelX, y, hintX + hintWidth - labelX, rowHeight)];
+    _levelWarning.editable = NO;
+    _levelWarning.selectable = NO;
+    _levelWarning.bordered = NO;
+    _levelWarning.drawsBackground = YES;
+    _levelWarning.backgroundColor = [NSColor colorWithCalibratedRed:1.0 green:0.85 blue:0.35 alpha:1.0];
+    _levelWarning.textColor = NSColor.blackColor;
+    _levelWarning.font = [NSFont boldSystemFontOfSize:11];
+    _levelWarning.alignment = NSTextAlignmentCenter;
+    _levelWarning.stringValue = @"Menu will be skipped on next launch";
+    _levelWarning.hidden = s.level.empty();
+    [container addSubview:_levelWarning];
+    y -= rowHeight + rowGap;
+
     addRowLabel(@"WineDebug");
     _winedebug = [[NSTextField alloc] initWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)];
     _winedebug.stringValue = @(s.winedebug.c_str());
+    _winedebug.delegate = self;
     _winedebug.target = self;
     _winedebug.action = @selector(controlChanged:);
     [container addSubview:_winedebug];
@@ -4026,6 +4058,7 @@ static void *renderWorker(void *context) {
     s.winedebug = _winedebug.stringValue.UTF8String;
 
     _renderScaleLabel.stringValue = [self percentString:s.renderScale];
+    _levelWarning.hidden = s.level.empty();
 
     if (!dk2cfg::writeAtomic(s)) {
         NSLog(@"WARNING: failed to save settings.toml");
@@ -4034,6 +4067,17 @@ static void *renderWorker(void *context) {
     // through the filesystem; the watcher firing right after is a harmless
     // no-op re-application of the same values.
     dk2cfg::applyRendererLive(s);
+}
+
+// NSTextField sends -action on Return and (being non-continuous, the default
+// we rely on here) does NOT send it per keystroke -- but that alone still
+// leaves "click away without pressing Return" as a way to lose an edit
+// silently. Catching -controlTextDidEndEditing: (fired on any end-of-editing:
+// Return, Tab, or the field simply resigning first responder) makes commit
+// unambiguous: Enter or focus-loss, never per-keystroke, matching what the
+// coordinator asked to verify.
+- (void)controlTextDidEndEditing:(NSNotification *)notification {
+    [self controlChanged:notification.object];
 }
 
 @end
