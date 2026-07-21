@@ -47,7 +47,7 @@ void setGameTickTiming(uint32_t tickMicroseconds);
 void setGameRenderTimings(uint32_t prepareMicroseconds, uint32_t drawMicroseconds);
 void endFrame();
 
-// --- world-space mesh pipeline (protocol v9) ---
+// --- world-space mesh pipeline (introduced in v9; retained/deformed v13) ---
 // Register an object-space mesh once; safe to call repeatedly with the same
 // id (later calls are no-ops unless the consumer session changed). Returns
 // false when the bridge is disabled.

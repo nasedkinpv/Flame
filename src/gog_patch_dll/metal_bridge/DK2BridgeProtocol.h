@@ -27,7 +27,7 @@ enum DK2MCommandType {
     DK2M_COMMAND_RENDER_STATE = 5,
     DK2M_COMMAND_TEXTURE_STAGE_STATE = 6,
     DK2M_COMMAND_TEXTURE_UPDATE_RECT = 7,
-    // World-space mesh pipeline (protocol v9): the game registers object-
+    // World-space mesh pipeline (introduced in v9): the game registers object-
     // space meshes once, then per frame sends camera + lights + per-instance
     // world transforms, and the Metal vertex shader does transform+lighting -
     // replacing the original engine's per-vertex CPU pipeline.
@@ -35,9 +35,9 @@ enum DK2MCommandType {
     DK2M_COMMAND_CAMERA_SET = 9,
     DK2M_COMMAND_LIGHTS_SET = 10,
     DK2M_COMMAND_DRAW_MESH = 11,
-    // Inline variant for deformed/animated geometry: world-space vertices
-    // travel with the command every frame (no registry), the GPU still does
-    // projection + lighting. World transform is implicitly identity.
+    // Compatibility variant for emitters whose whole geometry still changes:
+    // world-space vertices travel every frame (no registry), while projection
+    // and lighting remain on the GPU. World transform is implicitly identity.
     DK2M_COMMAND_DRAW_MESH_INLINE = 12,
     // Named-atlas map (HD resource pack): reports that the rect [x,y,w,h]
     // of bridge texture `textureId` was composited from the resource named

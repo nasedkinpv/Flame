@@ -2,7 +2,7 @@
 
 The current native pipeline keeps the original 32-bit game simulation isolated in Wine and renders it in a separate arm64 AppKit/Metal 4 host:
 
-`DK2 + Flametal (i386/Wine) → shared protocol v12 → AppKit + Metal 4 (arm64)`
+`DK2 + Flametal (i386/Wine) → shared protocol v13 → AppKit + Metal 4 (arm64)`
 
 Flametal (the underlying [DiaLight/Flame](https://github.com/DiaLight/Flame) patch layer this fork is built on) captures the game's Direct3D 3 command stream without asking WineD3D to render it. The native host owns presentation, scaling, focus, keyboard and mouse input. Absolute pointer coordinates use AppKit, raw relative motion and keyboard state use GameController, and scrolling uses AppKit's precise wheel events.
 
@@ -17,17 +17,17 @@ Two rendering paths coexist over the same bridge:
   depth/blend/cull state). The 2D overlay is reconstructed from the game's
   black/white matte pair with per-tile dirty tracking, and a tile only
   re-uploads when its composited pixels actually changed.
-- **World-space mesh path** (protocol v9, opt-in, under active development):
-  object-space or world-space meshes cross the bridge once (or per frame for
-  deformed geometry via `DRAW_MESH_INLINE`), together with a per-frame camera,
-  the scene light list and the engine's own 256-entry falloff LUT. The Metal
-  vertex shader then performs projection and DK2's exact per-vertex point-light
-  accumulation, replacing the original engine's per-vertex CPU loop. The first
-  rerouted emitter is the deformed/dynamic mesh family (`sub_57B6D0`); enable it
-  with `mesh_gpu_path = true` in `settings.toml` (`[patches]` section, see
-  Settings below) for A/B testing. The camera matrix is assembled in closed form from the same
-  globals the original projection uses, so GPU output lands in the same clip
-space as legacy draws and z-testing orders the two paths correctly.
+- **World-space mesh path** (introduced in protocol v9, retained protocol in
+  v13): static and dynamic topology, normals, local UVs and indices cross the
+  bridge once through `MESH_REGISTER`. Static/dynamic draws then carry only a
+  transform, atlas UV transform, material and the engine's exact per-object
+  light indices. Animated topology is also retained; `DRAW_MESH_DEFORMED`
+  sends only interpolated `float3` positions each frame. The Metal vertex
+  shader performs projection and DK2's per-vertex point-light accumulation
+  with the original 256-entry falloff LUT. Opaque repeats of one topology can
+  be emitted as one indexed instanced draw; transparent/additive order is
+  preserved. The camera matrix is assembled from the same globals as the
+  original projection, so GPU and legacy draws share clip/depth space.
 
 Dynamic shadows retain DK2's original per-light selection, projection,
 receiver decal, UVs, blend and depth behavior. With `metal_shadows = true`,
@@ -38,14 +38,14 @@ rasterizer. `shadow_cache` is automatically bypassed while the Metal
 rasterizer is active, because caching the deliberately blank CPU scratch mask
 would suppress the projected triangles sent to the GPU.
 
-Current verdict (2026-07-21 A/B on Level1): the legacy path is both faster
-(~51 ms vs ~59 ms frame interval, half the host GPU time) and visually
-correct, because the SSE2-translated CPU transform is already cheap and the
-mesh path pays per-object feeding costs (texture resolve, light-set unioning,
-vertex copies, ~1300 small draws) every frame. `mesh_gpu_path` therefore stays
-off by default (see Settings below); the mesh path becomes worthwhile once
-static geometry is registered once (`MESH_REGISTER` + per-frame `DRAW_MESH`
-transforms) instead of re-crossing the bridge inline every frame.
+The old inline experiment was slower than the translated SSE2 CPU transform,
+because it recopied every vertex and issued roughly 1300 small draws each
+frame. Protocol v13 removes that feeding cost and is now the default. DK2's
+terrain subdivision still produces mostly distinct topologies, so instancing
+is opportunistic rather than the main win; retained upload, compact animated
+positions and exact per-draw light selection are the important reductions.
+Set `mesh_gpu_path = false` only for a restart-based A/B against the legacy CPU
+transform path.
 
 The renderer deliberately uses one `CAMetalLayer`. World geometry and the
 legacy/UI overlay stay ordered in the same scene render pass; only real data
@@ -57,7 +57,7 @@ would not improve texture ownership.
 Texture residency is frame-local. Three residency sets mirror the three
 in-flight frame slots and contain only textures referenced by that slot's
 argument tables; replacing an atlas therefore cannot keep every historical
-version resident. Protocol v12 also retires the host texture, its dynamic ring,
+version resident. Protocol v13 also retires the host texture, its dynamic ring,
 and named-atlas metadata when the owning DirectDraw surface is destroyed.
 Metal I/O remains a future loading optimization, not a lifetime manager;
 sparse textures are intentionally not used for DK2's small 256→1024 atlas
@@ -90,7 +90,7 @@ render_scale = 1.0       # fraction of the display's native backing resolution, 
 hd_textures = true
 
 [patches]                # applied on next launch, passed to the game as
-mesh_gpu_path = false     # -gog:MeshGpuPath=/-flametal:ShadowCache=/
+mesh_gpu_path = true      # -gog:MeshGpuPath=/-flametal:ShadowCache=/
 shadow_cache = true       # -flametal:DebugProbes= CLI flags; CPU shadows only
 debug_probes = false
 

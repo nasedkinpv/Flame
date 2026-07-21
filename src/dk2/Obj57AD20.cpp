@@ -27,6 +27,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <emmintrin.h>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 // Reroutes the translated deformed-mesh emitter (sub_57B6D0) to the Metal
@@ -121,7 +123,7 @@ void emitVertex(RenderFun fun, uint32_t index, dk2::Vec3f *vectors, dk2::Uv2f *u
     }
 }
 
-// --- GPU mesh path helpers (metal bridge protocol v9) ---
+// --- GPU mesh path helpers (introduced in v9; retained/deformed v13) ---
 
 struct SceneLightForGpu {   // mirrors Obj57BCB0.cpp's SceneLight view
     uint32_t unused;
@@ -576,9 +578,15 @@ int describeEntryGuarded(const MeshEntry &entry, uint32_t indexCount,
     }
 }
 
-uint32_t retainedEntryMeshId(const MeshEntry &entry,
-                             uint32_t indexCount, uint32_t vertexCount,
-                             uint64_t signature, float uvScale) {
+struct RetainedEntryMesh {
+    uint32_t meshId;
+    dk2::Vec3f origin;
+};
+
+bool retainedEntryMesh(const MeshEntry &entry,
+                       uint32_t indexCount, uint32_t vertexCount,
+                       uint64_t signature, float uvScale,
+                       RetainedEntryMesh *out) {
     struct CacheEntry {
         const void *vertices;
         const void *indices;
@@ -586,8 +594,18 @@ uint32_t retainedEntryMeshId(const MeshEntry &entry,
         uint32_t vertexCount;
         uint64_t signature;
         uint32_t meshId;
+        dk2::Vec3f origin;
+    };
+    struct ContentEntry {
+        uint32_t vertexCount;
+        uint32_t indexCount;
+        uint32_t meshId;
+        std::vector<DK2MMeshVertex> vertices;
+        std::vector<uint16_t> indices;
     };
     static CacheEntry cache[16384] = {};
+    static std::vector<ContentEntry> contents;
+    static std::unordered_multimap<uint64_t, uint32_t> contentLookup;
     uintptr_t hash = reinterpret_cast<uintptr_t>(entry.vertices) >> 4;
     hash ^= reinterpret_cast<uintptr_t>(entry.triangleIndices) >> 3;
     uint32_t slot = static_cast<uint32_t>(hash) & 16383u;
@@ -604,23 +622,73 @@ uint32_t retainedEntryMeshId(const MeshEntry &entry,
             candidate.vertexCount != vertexCount) {
             continue;
         }
-        if (candidate.signature == signature) return candidate.meshId;
+        if (candidate.signature == signature) {
+            out->meshId = candidate.meshId;
+            out->origin = candidate.origin;
+            return true;
+        }
         available = &candidate;  // address reuse after a level/resource rebuild
         break;
     }
-    if (!available) return 0;
+    if (!available) return false;
     static DK2MMeshVertex vertices[256];
     static uint16_t indices[765];
     uint32_t copiedVertices = 0;
     if (!copyEntryGuarded(entry, indexCount, &copiedVertices, vertices, 256,
                           indices, uvScale, 1.0f, 1.0f, 0.0f, 0.0f) ||
         copiedVertices != vertexCount) {
-        return 0;
+        return false;
     }
-    const uint32_t meshId = dk2::meshgpu::allocateMeshId();
-    if (!dk2::meshgpu::registerMesh(
-            meshId, vertices, copiedVertices, indices, indexCount)) {
-        return 0;
+    const dk2::Vec3f origin{vertices[0].px, vertices[0].py, vertices[0].pz};
+    for (uint32_t vertex = 0; vertex < copiedVertices; ++vertex) {
+        vertices[vertex].px -= origin.x;
+        vertices[vertex].py -= origin.y;
+        vertices[vertex].pz -= origin.z;
+    }
+    uint64_t contentHash = 1469598103934665603ull;
+    const auto hashBytes = [&](const void *data, size_t size) {
+        const auto *bytes = static_cast<const uint8_t *>(data);
+        for (size_t i = 0; i < size; ++i) {
+            contentHash ^= bytes[i];
+            contentHash *= 1099511628211ull;
+        }
+    };
+    hashBytes(&copiedVertices, sizeof(copiedVertices));
+    hashBytes(&indexCount, sizeof(indexCount));
+    hashBytes(vertices, copiedVertices * sizeof(DK2MMeshVertex));
+    hashBytes(indices, indexCount * sizeof(uint16_t));
+
+    uint32_t meshId = 0;
+    const auto range = contentLookup.equal_range(contentHash);
+    for (auto found = range.first; found != range.second; ++found) {
+        const ContentEntry &content = contents[found->second];
+        if (content.vertexCount == copiedVertices &&
+            content.indexCount == indexCount &&
+            std::memcmp(content.vertices.data(), vertices,
+                        copiedVertices * sizeof(DK2MMeshVertex)) == 0 &&
+            std::memcmp(content.indices.data(), indices,
+                        indexCount * sizeof(uint16_t)) == 0) {
+            meshId = content.meshId;
+            break;
+        }
+    }
+    if (!meshId) {
+        meshId = dk2::meshgpu::allocateMeshId();
+        if (!dk2::meshgpu::registerMesh(
+                meshId, vertices, copiedVertices, indices, indexCount)) {
+            return false;
+        }
+        if (contents.size() < 16384) {
+            ContentEntry content;
+            content.vertexCount = copiedVertices;
+            content.indexCount = indexCount;
+            content.meshId = meshId;
+            content.vertices.assign(vertices, vertices + copiedVertices);
+            content.indices.assign(indices, indices + indexCount);
+            const uint32_t contentIndex = static_cast<uint32_t>(contents.size());
+            contents.push_back(std::move(content));
+            contentLookup.emplace(contentHash, contentIndex);
+        }
     }
     available->vertices = entry.vertices;
     available->indices = entry.triangleIndices;
@@ -628,7 +696,10 @@ uint32_t retainedEntryMeshId(const MeshEntry &entry,
     available->vertexCount = vertexCount;
     available->signature = signature;
     available->meshId = meshId;
-    return meshId;
+    available->origin = origin;
+    out->meshId = meshId;
+    out->origin = origin;
+    return true;
 }
 
 // Emit one MeshEntry through the bridge's inline world-space path. The UV
@@ -758,13 +829,18 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
             target, vertices, vertexCount, indices, indexCount, lights,
             ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
     } else {
-        const uint32_t meshId = retainedEntryMeshId(
-            entry, indexCount, vertexCount, signature, uvScale);
-        if (!meshId) return false;
-        static const float identity[12] = {
-            1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+        RetainedEntryMesh retained;
+        if (!retainedEntryMesh(
+                entry, indexCount, vertexCount, signature, uvScale,
+                &retained)) {
+            return false;
+        }
+        const float world[12] = {
+            1, 0, 0, retained.origin.x,
+            0, 1, 0, retained.origin.y,
+            0, 0, 1, retained.origin.z};
         dk2::meshgpu::emitRetained(
-            target, meshId, identity, lights,
+            target, retained.meshId, world, lights,
             ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
     }
     return true;

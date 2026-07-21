@@ -199,7 +199,7 @@ float4 dk2_unpack_color(uint value) {
                   float(value & 0xFF), float((value >> 24) & 0xFF)) / 255.0;
 }
 
-// --- world-space mesh pipeline (protocol v9) ---
+// --- world-space mesh pipeline (introduced in v9; retained/deformed v13) ---
 // The game registers object-space meshes once; per frame it sends camera,
 // lights and per-instance world transforms, and this path does the
 // transform+lighting the original engine did per-vertex on the CPU

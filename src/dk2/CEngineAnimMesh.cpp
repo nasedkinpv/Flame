@@ -140,26 +140,18 @@ struct AnimTopology {
 AnimTopology *retainedAnimTopology(
         dk2::CAnimMeshResource *resource, int animation,
         dk2::SprsAnimHeader &entry, const uint8_t *indices,
-        uint32_t triangleCount, const dk2::meshgpu::InlineTarget &target) {
+        uint32_t triangleCount) {
     struct CacheEntry {
         const void *resource;
         const void *vertices;
         const void *indices;
         int animation;
         uint32_t triangleCount;
-        uint32_t textureId;
-        uint32_t uvBits[4];
         AnimTopology topology;
     };
     static CacheEntry cache[4096] = {};
-    uint32_t uvBits[4];
-    std::memcpy(&uvBits[0], &target.uS, 4);
-    std::memcpy(&uvBits[1], &target.vS, 4);
-    std::memcpy(&uvBits[2], &target.uO, 4);
-    std::memcpy(&uvBits[3], &target.vO, 4);
     uintptr_t hash = reinterpret_cast<uintptr_t>(resource) >> 4;
     hash ^= reinterpret_cast<uintptr_t>(indices) >> 3;
-    hash ^= static_cast<uintptr_t>(target.textureId) * 2654435761u;
     uint32_t slot = static_cast<uint32_t>(hash) & 4095u;
     CacheEntry *available = nullptr;
     for (uint32_t probe = 0; probe < 32; ++probe, slot = (slot + 1) & 4095u) {
@@ -171,9 +163,7 @@ AnimTopology *retainedAnimTopology(
         if (candidate.resource == resource &&
             candidate.vertices == entry.AnimVertEx_base &&
             candidate.indices == indices && candidate.animation == animation &&
-            candidate.triangleCount == triangleCount &&
-            candidate.textureId == target.textureId &&
-            std::memcmp(candidate.uvBits, uvBits, sizeof(uvBits)) == 0) {
+            candidate.triangleCount == triangleCount) {
             return &candidate.topology;
         }
     }
@@ -197,12 +187,8 @@ AnimTopology *retainedAnimTopology(
                 vertex.ny = av.y;
                 vertex.nz = av.z;
                 const uint32_t packed = static_cast<uint32_t>(av.uv);
-                vertex.u = target.uS *
-                               (static_cast<float>(packed & 0xFFFFu) * uvScale) +
-                           target.uO;
-                vertex.v = target.vS *
-                               (static_cast<float>(packed >> 16) * uvScale) +
-                           target.vO;
+                vertex.u = static_cast<float>(packed & 0xFFFFu) * uvScale;
+                vertex.v = static_cast<float>(packed >> 16) * uvScale;
                 vertex.base_color = 0xFF000000u;
                 mapped[source] = static_cast<uint16_t>(vertexCount);
                 available->topology.sourceIndices[vertexCount++] = source;
@@ -220,8 +206,6 @@ AnimTopology *retainedAnimTopology(
     available->indices = indices;
     available->animation = animation;
     available->triangleCount = triangleCount;
-    available->textureId = target.textureId;
-    std::memcpy(available->uvBits, uvBits, sizeof(uvBits));
     available->topology.meshId = meshId;
     available->topology.vertexCount = vertexCount;
     return &available->topology;
@@ -248,7 +232,7 @@ bool drawAnimOnGpu(
     if (!dk2::meshgpu::prepareTarget(scene, surface, lit, &target)) return false;
     if (!target.textureId) return false;  // CPU fallback keeps it visible
     AnimTopology *topology = retainedAnimTopology(
-        resource, animation, entry, indices, triangleCount, target);
+        resource, animation, entry, indices, triangleCount);
     if (!topology) return false;
     static float positions[256 * 3];
     for (uint32_t vertex = 0; vertex < topology->vertexCount; ++vertex) {

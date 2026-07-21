@@ -71,7 +71,7 @@ struct Settings {
     float renderScale = 1.0f;
     bool hdTextures = true;
     // [patches]
-    bool meshGpuPath = false;
+    bool meshGpuPath = true;
     bool shadowCache = true;
     bool debugProbes = false;
     // [debug]
@@ -1534,11 +1534,15 @@ struct FrameMetrics {
     uint32_t bindingOverflows = 0;
     uint32_t invalidDraws = 0;
     uint32_t meshInstances = 0;
+    uint32_t meshUnique = 0;
     uint32_t meshBatches = 0;
     uint32_t meshRetainedHits = 0;
     uint32_t meshRetainedUploads = 0;
     uint32_t meshDeformedDraws = 0;
     uint32_t meshInlineDraws = 0;
+    uint32_t meshMissingRegistration = 0;
+    uint32_t meshCapacityRejects = 0;
+    uint32_t meshMalformed = 0;
     uint32_t packMapCommands = 0;
     uint32_t packMappedRects = 0;
     uint32_t packHits = 0;
@@ -1602,12 +1606,16 @@ public:
               p(&FrameMetrics::producerTextureUs, 95), p(&FrameMetrics::producerTextureUs, 99),
               p(&FrameMetrics::producerOverlayUs, 50), p(&FrameMetrics::producerOverlayUs, 95),
               p(&FrameMetrics::producerOverlayUs, 99));
-        NSLog(@"PERF mesh p50/p95/p99: instances=%u/%u/%u batches=%u/%u/%u "
+        NSLog(@"PERF mesh p50/p95/p99: instances=%u/%u/%u unique=%u/%u/%u "
+               "batches=%u/%u/%u "
                "retained-hits=%u/%u/%u uploads=%u/%u/%u deformed=%u/%u/%u "
-               "inline=%u/%u/%u",
+               "inline=%u/%u/%u; rejects missing-reg=%llu capacity=%llu malformed=%llu",
               p(&FrameMetrics::meshInstances, 50),
               p(&FrameMetrics::meshInstances, 95),
               p(&FrameMetrics::meshInstances, 99),
+              p(&FrameMetrics::meshUnique, 50),
+              p(&FrameMetrics::meshUnique, 95),
+              p(&FrameMetrics::meshUnique, 99),
               p(&FrameMetrics::meshBatches, 50),
               p(&FrameMetrics::meshBatches, 95),
               p(&FrameMetrics::meshBatches, 99),
@@ -1622,7 +1630,10 @@ public:
               p(&FrameMetrics::meshDeformedDraws, 99),
               p(&FrameMetrics::meshInlineDraws, 50),
               p(&FrameMetrics::meshInlineDraws, 95),
-              p(&FrameMetrics::meshInlineDraws, 99));
+              p(&FrameMetrics::meshInlineDraws, 99),
+              total(&FrameMetrics::meshMissingRegistration),
+              total(&FrameMetrics::meshCapacityRejects),
+              total(&FrameMetrics::meshMalformed));
         NSLog(@"PERF frame texture residency p50/p95/p99: allocations=%u/%u/%u MB=%u/%u/%u",
               p(&FrameMetrics::residentTextures, 50),
               p(&FrameMetrics::residentTextures, 95),
@@ -1777,7 +1788,7 @@ bool dk2BloomEnabled() {
     return dk2cfg::gBloomLive.load(std::memory_order_relaxed);
 }
 
-// --- world-space mesh pipeline (protocol v9) ---
+// --- world-space mesh pipeline (introduced in v9; retained/deformed v13) ---
 // Mirrors DK2MeshDrawUniform in DK2Shaders.metal: rows of the 3x4 world
 // transform plus material inputs, one per DRAW_MESH instance.
 struct MeshDrawUniform {
@@ -2390,7 +2401,7 @@ bool inputLogEnabled() {
     id<MTLBuffer> _vertexBuffers[kFramesInFlight];
     id<MTLBuffer> _indexBuffers[kFramesInFlight];
     id<MTLBuffer> _drawBuffers[kFramesInFlight];
-    // world-space mesh pipeline (protocol v9)
+    // world-space mesh pipeline (introduced in v9; retained/deformed v13)
     id<MTLRenderPipelineState> _meshOpaquePipeline;
     id<MTLRenderPipelineState> _meshAlphaPipeline;
     id<MTLRenderPipelineState> _meshAdditivePipeline;
@@ -3892,6 +3903,7 @@ static void *renderWorker(void *context) {
             struct MeshIndexPlacement { NSUInteger byteOffset; uint32_t indexCount; };
             std::unordered_map<uint32_t, MeshPlacement> meshPlacements;
             std::unordered_map<uint32_t, MeshIndexPlacement> meshIndexPlacements;
+            std::unordered_set<uint32_t> retainedMeshIds;
             bool retainedMeshUsedThisFrame = false;
             auto ensureRetainedMesh = [&](uint32_t meshId, const MeshBlob &blob)
                     -> const RetainedMeshPlacement * {
@@ -4130,9 +4142,13 @@ static void *renderWorker(void *context) {
                            view.size == sizeof(DK2MDrawMeshCommand)) {
                     DK2MDrawMeshCommand meshDraw;
                     std::memcpy(&meshDraw, snapshot->bytes.data() + commandOffset, sizeof(meshDraw));
+                    if (retainedMeshIds.insert(meshDraw.mesh_id).second) {
+                        ++metrics.meshUnique;
+                    }
                     const auto meshFound = _meshes.find(meshDraw.mesh_id);
                     if (meshFound == _meshes.end() || meshFound->second.vertices.empty()) {
                         ++metrics.invalidDraws;
+                        ++metrics.meshMissingRegistration;
                     } else {
                         MeshBlob &blob = meshFound->second;
                         auto placed = meshPlacements.find(meshDraw.mesh_id);
@@ -4186,6 +4202,12 @@ static void *renderWorker(void *context) {
                         if (placed == meshPlacements.end() || meshDrawCount >= kMaxMeshDrawsPerFrame ||
                             !snapshot->width || !snapshot->height) {
                             ++metrics.invalidDraws;
+                            if (placed == meshPlacements.end() ||
+                                meshDrawCount >= kMaxMeshDrawsPerFrame) {
+                                ++metrics.meshCapacityRejects;
+                            } else {
+                                ++metrics.meshMalformed;
+                            }
                         } else {
                             const TextureBinding binding = meshDraw.texture_id
                                 ? resolveTextureBinding(meshDraw.texture_id)
@@ -4269,13 +4291,18 @@ static void *renderWorker(void *context) {
                     const auto meshFound = _meshes.find(meshDraw.mesh_id);
                     const size_t positionBytes =
                         static_cast<size_t>(meshDraw.vertex_count) * 3 * sizeof(float);
-                    if (meshFound == _meshes.end() || meshFound->second.vertices.empty() ||
-                        meshDraw.vertex_count != meshFound->second.vertexCount ||
-                        sizeof(meshDraw) + positionBytes > view.size ||
-                        !meshDraw.vertex_count ||
-                        meshDrawCount >= kMaxMeshDrawsPerFrame ||
-                        !snapshot->width || !snapshot->height) {
+                    if (meshFound == _meshes.end() || meshFound->second.vertices.empty()) {
                         ++metrics.invalidDraws;
+                        ++metrics.meshMissingRegistration;
+                    } else if (meshDraw.vertex_count != meshFound->second.vertexCount ||
+                               sizeof(meshDraw) + positionBytes > view.size ||
+                               !meshDraw.vertex_count ||
+                               !snapshot->width || !snapshot->height) {
+                        ++metrics.invalidDraws;
+                        ++metrics.meshMalformed;
+                    } else if (meshDrawCount >= kMaxMeshDrawsPerFrame) {
+                        ++metrics.invalidDraws;
+                        ++metrics.meshCapacityRejects;
                     } else {
                         MeshBlob &blob = meshFound->second;
                         auto indexPlaced = meshIndexPlacements.find(meshDraw.mesh_id);
@@ -4311,6 +4338,7 @@ static void *renderWorker(void *context) {
                         if (indexPlaced == meshIndexPlacements.end() ||
                             meshVertexOffset + blob.vertices.size() > kMeshVertexBufferSize) {
                             ++metrics.invalidDraws;
+                            ++metrics.meshCapacityRejects;
                         } else {
                             uint8_t *vertices =
                                 static_cast<uint8_t *>(_meshVertexBuffers[slot].contents) +
@@ -4410,11 +4438,14 @@ static void *renderWorker(void *context) {
                         (meshIndexOffset + 3u) & ~static_cast<NSUInteger>(3u);
                     if (!inlineDraw.vertex_count || !inlineDraw.index_count ||
                         sizeof(inlineDraw) + vertexBytes + indexBytes > view.size ||
-                        meshVertexOffset + vertexBytes > kMeshVertexBufferSize ||
-                        alignedIndexOffset + indexBytes > kMeshIndexBufferSize ||
-                        meshDrawCount >= kMaxMeshDrawsPerFrame ||
                         !snapshot->width || !snapshot->height) {
                         ++metrics.invalidDraws;
+                        ++metrics.meshMalformed;
+                    } else if (meshVertexOffset + vertexBytes > kMeshVertexBufferSize ||
+                               alignedIndexOffset + indexBytes > kMeshIndexBufferSize ||
+                               meshDrawCount >= kMaxMeshDrawsPerFrame) {
+                        ++metrics.invalidDraws;
+                        ++metrics.meshCapacityRejects;
                     } else {
                         const uint8_t *payload =
                             snapshot->bytes.data() + commandOffset + sizeof(inlineDraw);
