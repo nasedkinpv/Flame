@@ -128,6 +128,19 @@ int __fastcall profilePrimitive(void *self, void *, void *context) {
     return result;
 }
 
+// v___addRenderObj (vtable slot +4) takes TWO stack args: (mode, scene).
+// Forwarding only one shifted the scene pointer into garbage and crashed.
+template <uintptr_t Target, PrimitiveKind Kind>
+int __fastcall profileDrawPrimitive(void *self, void *, int mode, void *scene) {
+    using Function = int (__thiscall *)(void *, int, void *);
+    if (g_profile.frames >= 30)
+        return reinterpret_cast<Function>(Target)(self, mode, scene);
+    const uint64_t started = profileTicks();
+    const int result = reinterpret_cast<Function>(Target)(self, mode, scene);
+    g_primitiveProfile.add(Kind, profileTicks() - started);
+    return result;
+}
+
 template <typename Result, typename Function, typename... Args>
 Result measure(CameraPhase phase, Function function, Args... args) {
     const uint64_t started = profileTicks();
@@ -308,13 +321,13 @@ bool dk2::installCameraPhaseProfiler() {
             // emitters consumed by the ToDraw walk (draw3d "mesh" step)
             {0x0066FD20, 0x00582CE0,
              reinterpret_cast<uintptr_t>(
-                     &profilePrimitive<0x00582CE0, DynamicDraw>), "dynamic draw"},
+                     &profileDrawPrimitive<0x00582CE0, DynamicDraw>), "dynamic draw"},
             {0x0066FD90, 0x00586150,
              reinterpret_cast<uintptr_t>(
-                     &profilePrimitive<0x00586150, StaticDraw>), "static draw"},
+                     &profileDrawPrimitive<0x00586150, StaticDraw>), "static draw"},
             {0x0066FDB8, 0x00587010,
              reinterpret_cast<uintptr_t>(
-                     &profilePrimitive<0x00587010, HeightDraw>), "height draw"},
+                     &profileDrawPrimitive<0x00587010, HeightDraw>), "height draw"},
     };
     for (const PointerPatch &patch : primitivePatches) {
         patchPointer(patch);  // best-effort: some slots are loader-redirected
