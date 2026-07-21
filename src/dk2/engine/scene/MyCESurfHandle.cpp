@@ -226,6 +226,11 @@ dk2::MyCESurfHandle *dk2::MyCESurfHandle::paint(MySurface *surf, char computeCrc
     if (!this->cesurf) this->create();
     MySurfDesc desc;
     memcpy(&desc, reinterpret_cast<const uint8_t *>(this->cesurf->fC_desc) + 0x2D, sizeof(desc));
+    // Flush the current projected shadow before CRC can skip an unchanged
+    // CPU surface. Metal deliberately leaves that scratch blank, so putting
+    // this below the early return loses batches and can later associate stale
+    // triangles with a different round-robin shadow slot.
+    dk2::shadowgpu::finishIfCurrent(this, surf);
     if (computeCrc) {
         ensureCrcSliced();
         const uint8_t *row = static_cast<const uint8_t *>(surf->lpSurface);
@@ -252,12 +257,6 @@ dk2::MyCESurfHandle *dk2::MyCESurfHandle::paint(MySurface *surf, char computeCrc
     // No-op unless flametal:TextureDump is set.
     const char *name = MyStringHashMap_MyCESurfHandle_instance.entries.buf[this->mapIdx].name;
     patch::texture_dump::onDecodedSurface(name, surf);
-
-    // shadows_end reaches this exact paint call after the original engine has
-    // selected a light and projected every caster triangle. In Metal mode the
-    // scratch coverage is intentionally blank; queue the projected triangles
-    // for the host before the normal blank surface is packed into its atlas.
-    dk2::shadowgpu::finishIfCurrent(this, surf);
 
     void *pixels = this->cesurf->v_lockBuf();
     MySurface local;  // the original never destroys it either

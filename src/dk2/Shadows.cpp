@@ -188,15 +188,19 @@ bool dk2::shadowgpu::finishIfCurrent(MyCESurfHandle *handle, const MySurface *so
     if (!handle || currentShadowHandle() != handle) return false;
 
     const int surfaceIndex = dk2::shadows_dword_780E6C;
-    bool gpu = g_gpuBatch.started && g_gpuBatch.surfaceIndex == surfaceIndex
-        ? g_gpuBatch.gpu
-        : active() && usableGpuTarget(handle);
+    const bool batchMatches =
+        g_gpuBatch.started && g_gpuBatch.surfaceIndex == surfaceIndex;
+    const std::vector<DK2MShadowTriangle> *captured =
+        batchMatches ? &g_gpuBatch.triangles : nullptr;
+    bool gpu = batchMatches ? g_gpuBatch.gpu : active() && usableGpuTarget(handle);
     // A live off (or host heartbeat loss) can land between triangle capture
     // and this paint. Rebuild the blank CPU scratch from the queued geometry
     // so that exact frame falls back instead of briefly dropping the shadow.
     if (gpu && !active()) {
-        for (const DK2MShadowTriangle &triangle : g_gpuBatch.triangles) {
-            rasterizeCpuTriangle(triangle);
+        if (captured) {
+            for (const DK2MShadowTriangle &triangle : *captured) {
+                rasterizeCpuTriangle(triangle);
+            }
         }
         gpu = false;
     }
@@ -205,10 +209,12 @@ bool dk2::shadowgpu::finishIfCurrent(MyCESurfHandle *handle, const MySurface *so
                                       source->desc.dwRGBAlphaBitMask == 0xFF
             ? DK2M_SHADOW_MASK_ALPHA
             : DK2M_SHADOW_MASK_GRAYSCALE;
-        const DK2MShadowTriangle *triangles = g_gpuBatch.triangles.empty()
-            ? nullptr : g_gpuBatch.triangles.data();
+        const DK2MShadowTriangle *triangles = captured && !captured->empty()
+            ? captured->data() : nullptr;
+        const uint32_t triangleCount = captured
+            ? static_cast<uint32_t>(captured->size()) : 0;
         gog::metal_bridge::shadowMask(
-            handle, triangles, static_cast<uint32_t>(g_gpuBatch.triangles.size()), mode);
+            handle, triangles, triangleCount, mode);
     }
     g_gpuBatch.started = false;
     g_gpuBatch.surfaceIndex = -1;
