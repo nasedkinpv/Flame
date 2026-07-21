@@ -425,6 +425,13 @@ int readHolderGuarded(dk2::MyCESurfHandle *handle, const void **holderOut) {
 }
 
 uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
+    // plausibility gate BEFORE any dereference (guarded or not): garbage
+    // handles (e.g. 0x4DC9 from anim scenes) change value every call, so the
+    // negative cache never hits and the recovered-SEH storm crashes WOW64.
+    if (reinterpret_cast<uintptr_t>(slotHandle) < 0x10000u ||
+        (reinterpret_cast<uintptr_t>(slotHandle) & 3u)) {
+        return 0;
+    }
     // positive cache: the guarded resolve chain + per-entry ensureTexture cost
     // ~microseconds across thousands of entries per frame, while the result
     // only changes when the handle is repacked into a different holder page.
