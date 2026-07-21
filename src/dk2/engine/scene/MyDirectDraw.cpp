@@ -17,6 +17,7 @@
 #include "dk2/Vertex18.h"
 #include "dk2/Vertex1C.h"
 #include "dk2/Uv2f_arr1024.h"
+#include "dk2/TextureDump.h"
 #include "patches/big_resolution_fix/big_resolution_fix.h"
 #include "patches/logging.h"
 
@@ -365,6 +366,17 @@ int __cdecl dk2::static_MyDirectDraw_devTexture_init(MyDirectDraw *mydd) {
         v12 = NULL;
     }
     CEngineSurfaceScaler_instance.scaled_128x128_8a8r8g8b = v12;
+
+    // MyTextures_instance.texNameToFileOffsetMap was just (re)populated from
+    // DK2TextureCache/EngineTextures.dir a few lines above (see the "TCHC"
+    // read block earlier in this function) and its .dat fileHandle is open,
+    // so this is the earliest safe, already-translated point at which every
+    // texture name the game knows about can be resolved through
+    // MyTextures::loadCompressed(). No-op unless flametal:TextureDump is set,
+    // and runs at most once per process even though this function can run
+    // again on a device reset.
+    patch::texture_dump::dumpFullLibrary();
+
     return 1;
 }
 

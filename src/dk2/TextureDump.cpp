@@ -32,6 +32,14 @@
 
 #include "dk2/MySurface.h"
 #include "dk2/MySurfDesc.h"
+#include "dk2/MyTextures.h"
+#include "dk2/CEngineCompressedSurface.h"
+#include "dk2/CEngineSurface.h"
+#include "dk2/CEngineSurfaceBase.h"
+#include "dk2/MyStringHashMap.h"
+#include "dk2/MyStringHashMap_entry.h"
+#include "dk2/MyEntryBuf_MyStringHashMap_entry.h"
+#include "dk2_functions.h"
 #include "dk2_globals.h"
 #include "patches/logging.h"
 #include "tools/flametal_config.h"
@@ -251,6 +259,89 @@ void onCompositedSurfaceDecoded(const dk2::MySurface *surf) {
     const std::string &dir = resolvedDir();
     if (dir.empty()) return;  // feature off: single string check, no further cost
     onDecodedSurface(compositeSourceNameSlot(), surf);
+}
+
+void dumpFullLibrary() {
+    const std::string &dir = resolvedDir();
+    if (dir.empty()) return;  // feature off: single string check, no further cost
+
+    static bool s_done = false;
+    if (s_done) return;  // one-shot: don't repeat across device resets
+    s_done = true;
+
+    dk2::MyTextures &textures = dk2::MyTextures_instance;
+    const uint32_t total = textures.texNameToFileOffsetMap.idx;
+    patch::log::dbg("[TextureDump] full-library dump starting: %u known names\n", total);
+
+    unsigned dumped = 0;
+    unsigned skipped = 0;
+    for (uint32_t i = 0; i < total; ++i) {
+        const char *name = textures.texNameToFileOffsetMap.entries.buf[i].name;
+        if (!name || !*name) continue;
+        if (dumpedNames().find(std::string(name)) != dumpedNames().end()) {
+            ++skipped;
+            continue;  // already captured via normal gameplay decode
+        }
+
+        // MyTextures::loadCompressed (00591070, still original/untranslated)
+        // reads the compressed block for `name` out of EngineTextures.dat
+        // (using texNameToFileOffsetMap it was just looked up from) and
+        // wraps it in a lazily-decoded CEngineCompressedSurface; width/height
+        // are already populated at this point (inherited CEngineSurfaceBase
+        // fields), pixels are not.
+        dk2::CEngineCompressedSurface *src = textures.loadCompressed(const_cast<char *>(name));
+        if (!src) continue;
+        if (src->width <= 0 || src->height <= 0 || src->width > 8192 || src->height > 8192) {
+            src->v_scalar_destructor(1u);
+            continue;
+        }
+
+        // Scratch destination: a plain 32bpp CEngineSurface sized to fit
+        // this one texture, built by hand the same way
+        // SurfaceHolder_create()'s software-surface branch does (see
+        // SurfaceHolder.cpp) -- CEngineSurface::constructor() (00590580,
+        // still original/untranslated) sets up the vtable/dimensions but
+        // does not itself allocate a pixel buffer, so that's done
+        // separately. g_surfDesc_8a8r8g8b_0 is the same always-constructed
+        // (regardless of mgsr/hardware devTexture flags) ARGB8888 format
+        // CEngineSurfaceScaler's own 128x128 scratch surfaces use a few
+        // lines above this dump's call site in static_MyDirectDraw_devTexture_init.
+        auto *dst = static_cast<dk2::CEngineSurface *>(dk2::MyHeap_alloc(sizeof(dk2::CEngineSurface)));
+        if (!dst) {
+            src->v_scalar_destructor(1u);
+            continue;
+        }
+        dst->constructor(src->width, src->height, &dk2::g_surfDesc_8a8r8g8b_0);
+        const size_t pixelBufSize = static_cast<size_t>(src->width) * src->height * 4;
+        dst->pixels = dk2::MyHeap_alloc(static_cast<int>(pixelBufSize));
+        if (!dst->pixels) {
+            dk2::MyHeap_free(dst);
+            src->v_scalar_destructor(1u);
+            continue;
+        }
+
+        // Triggers CEngineCompressedSurface::copySurf() (00590740, patched
+        // in via replace_globals.txt), which decodes straight into dst's
+        // buffer and calls onCompositedSurfaceDecoded() with the result --
+        // see CEngineCompressedSurface.cpp. `name` is looked up through
+        // setCompositeSourceName() the same way MyCESurfHandle::paint() and
+        // SurfHashList::expandPut() already do for gameplay decodes.
+        setCompositeSourceName(name);
+        src->copySurf(dst, 0, 0);
+        setCompositeSourceName(nullptr);
+
+        dk2::MyHeap_free(dst->pixels);
+        dk2::MyHeap_free(dst);
+        src->v_scalar_destructor(1u);
+
+        ++dumped;
+        if (dumped % 500 == 0) {
+            patch::log::dbg("[TextureDump] full-library dump progress: %u/%u\n", dumped, total);
+        }
+    }
+    patch::log::dbg(
+            "[TextureDump] texture dump complete: %u files (%u already captured, %u names total)\n",
+            dumped, skipped, total);
 }
 
 }  // namespace patch::texture_dump

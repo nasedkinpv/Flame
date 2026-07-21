@@ -40,6 +40,22 @@ void setCompositeSourceName(const char *name);
 // flametal:TextureDump is set.
 void onCompositedSurfaceDecoded(const dk2::MySurface *surf);
 
+// One-shot full-library dump: walks every name known to
+// dk2::MyTextures_instance::texNameToFileOffsetMap (the parsed
+// DK2TextureCache/EngineTextures.dir index, populated by
+// static_MyDirectDraw_devTexture_init right before this is safe to call),
+// loads each one via the original MyTextures::loadCompressed(name) and
+// forces it through CEngineCompressedSurface::copySurf() into a scratch
+// 32bpp surface so the existing named-dump hook fires for it, then frees
+// both surfaces. This is how world/terrain/creature/room textures --
+// normally only ever decoded on demand into a shared atlas page and never
+// individually -- get dumped at all. Names already present in the dumped-
+// names set (e.g. from earlier in-game paint()/copySurf() activity) are
+// skipped. No-op (single string check) unless flametal:TextureDump is set;
+// runs at most once per process regardless of how many times it's called
+// (e.g. across device resets).
+void dumpFullLibrary();
+
 }  // namespace patch::texture_dump
 
 #endif  // FLAMETAL_DK2_TEXTURE_DUMP_H
