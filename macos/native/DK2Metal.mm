@@ -3235,20 +3235,6 @@ static void *renderWorker(void *context) {
                         textureUpdate.data_size >= textureUpdate.row_pitch * textureUpdate.height) {
                         ++metrics.textureUpdates;
                         metrics.textureBytes += textureUpdate.data_size;
-                        // ponytail: periodic log of large per-frame texture
-                        // uploads - ~8MB/frame is streaming through the bridge
-                        // and this names the culprit id/size. Remove once the
-                        // re-upload source is fixed.
-                        if (textureUpdate.data_size >= 1024u * 1024u) {
-                            static NSTimeInterval lastLoggedBigUpload = 0;
-                            const NSTimeInterval now = CACurrentMediaTime();
-                            if (now - lastLoggedBigUpload > 2.0) {
-                                lastLoggedBigUpload = now;
-                                NSLog(@"DIAG big texture upload: id=%u %ux%u bytes=%u",
-                                      textureUpdate.texture_id, textureUpdate.width,
-                                      textureUpdate.height, textureUpdate.data_size);
-                            }
-                        }
                         const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
                         DynamicTexture &dyn = _dynamicTextures[textureUpdate.texture_id];
                         dyn.sourceWidth = textureUpdate.width;
@@ -3867,16 +3853,6 @@ static void *renderWorker(void *context) {
                         float value;
                         std::memcpy(&value, &state.value, sizeof(value));
                         bumpEnv[state.stage][state.state == 22 ? 4 : 5] = value;
-                    } else {
-                        // ponytail: one-shot NSLog per distinct (stage, state) the
-                        // combiner still doesn't model (e.g. D3DTSS_TEXCOORDINDEX=11,
-                        // MAGFILTER/MINFILTER=16/17, TEXTURETRANSFORMFLAGS=24).
-                        static std::unordered_set<uint32_t> seenStageStates;
-                        const uint32_t key = (state.stage << 16) | state.state;
-                        if (seenStageStates.insert(key).second) {
-                            NSLog(@"DIAG unhandled texture-stage-state: stage=%u state=%u value=%u",
-                                  state.stage, state.state, state.value);
-                        }
                     }
                 } else if (view.type == DK2M_COMMAND_MESH_REGISTER &&
                            view.size >= sizeof(DK2MMeshRegisterCommand)) {
@@ -4216,43 +4192,6 @@ static void *renderWorker(void *context) {
                         uniform.bumpEnvMat1_11 = bumpEnv[1][3];
                         uniform.bumpEnvLScale1 = bumpEnv[1][4];
                         uniform.bumpEnvLOffset1 = bumpEnv[1][5];
-                        // ponytail: log the actual bump-op/matrix a draw is using
-                        // every couple seconds (not just once ever - the first
-                        // match tends to be a startup draw before textures are
-                        // uploaded, all falling back to the white slot 0), and
-                        // only once textures actually resolved, so this reflects
-                        // a real steady-state water draw.
-                        if (alphaBlendEnabled) {
-                            static NSTimeInterval lastLogged = 0;
-                            const NSTimeInterval now = CACurrentMediaTime();
-                            if (now - lastLogged > 1.0) {
-                                lastLogged = now;
-                                NSLog(@"DIAG blend draw: colorOp0=%u alphaOp0=%u colorArg1_0=%u "
-                                      "colorArg2_0=%u alphaArg1_0=%u alphaArg2_0=%u tex0=%u "
-                                      "colorOp1=%u tex1=%u "
-                                      "colorOp2=%u alphaOp2=%u colorArg1_2=%u colorArg2_2=%u "
-                                      "alphaArg1_2=%u alphaArg2_2=%u tex2=%u "
-                                      "mat0=(%.3f %.3f %.3f %.3f) mat1=(%.3f %.3f %.3f %.3f) "
-                                      "lscale1=%.3f loffset1=%.3f alphaBlendEnabled=%d "
-                                      "srcBlend=%u destBlend=%u zWrite=%d",
-                                      uniform.colorOp, uniform.alphaOp,
-                                      uniform.colorArg1, uniform.colorArg2,
-                                      uniform.alphaArg1, uniform.alphaArg2,
-                                      uniform.textureIndex,
-                                      uniform.colorOp1, uniform.textureIndex1,
-                                      uniform.colorOp2, uniform.alphaOp2,
-                                      uniform.colorArg1_2, uniform.colorArg2_2,
-                                      uniform.alphaArg1_2, uniform.alphaArg2_2,
-                                      uniform.textureIndex2,
-                                      uniform.bumpEnvMat0_00, uniform.bumpEnvMat0_01,
-                                      uniform.bumpEnvMat0_10, uniform.bumpEnvMat0_11,
-                                      uniform.bumpEnvMat1_00, uniform.bumpEnvMat1_01,
-                                      uniform.bumpEnvMat1_10, uniform.bumpEnvMat1_11,
-                                      uniform.bumpEnvLScale1, uniform.bumpEnvLOffset1,
-                                      alphaBlendEnabled, sourceBlend, destinationBlend,
-                                      zWriteEnabled);
-                            }
-                        }
                         const NSUInteger vertexType = draw.fvf == DK2M_FVF_VERTEX1C ? 0 : 1;
                         id<MTLRenderPipelineState> pipeline = _opaquePipelines[vertexType];
                         if (alphaBlendEnabled) {
