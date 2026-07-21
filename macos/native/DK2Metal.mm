@@ -965,6 +965,26 @@ bool dk2ShadowsEnabled() {
     return enabled;
 }
 
+// Fraction of the display's full Retina backing scale used for the drawable
+// (and therefore every render target sized from it: MSAA color/depth, scene
+// color, bloom half-res, shadow coverage). Default 2.0 reproduces today's
+// exact full-backing-scale behavior byte-for-byte; DK2_RENDER_SCALE=1.0 asks
+// for logical-resolution rendering (CAMetalLayer upscales the presented
+// texture to the layer automatically). Clamped to 0.75..2.0.
+float dk2RenderScale() {
+    static const float scale = [] {
+        const char *env = std::getenv("DK2_RENDER_SCALE");
+        float value = 2.0f;
+        if (env) {
+            char *end = nullptr;
+            const float parsed = std::strtof(env, &end);
+            if (end != env && parsed > 0.0f) value = parsed;
+        }
+        return std::clamp(value, 0.75f, 2.0f);
+    }();
+    return scale;
+}
+
 // Which world axis direction is "up" is not yet settled against the game
 // side's world-space convention (see the session report) - default assumes
 // +Z is up (caster base = AABB minZ). Set DK2_METAL_SHADOW_UP_SIGN=-1 to flip
@@ -1500,8 +1520,12 @@ bool inputLogEnabled() {
     [CATransaction commit];
     [self.window invalidateCursorRectsForView:self];
     const NSSize backingSize = [self convertSizeToBacking:NSMakeSize(width, height)];
+    const CGFloat backingScaleFactor = self.window.backingScaleFactor;
+    const CGFloat renderScale = backingScaleFactor > 0
+        ? (dk2RenderScale() / backingScaleFactor)
+        : 1.0;
     gRequestedDrawableSize.store(
-        packSize(CGSizeMake(backingSize.width, backingSize.height)),
+        packSize(CGSizeMake(backingSize.width * renderScale, backingSize.height * renderScale)),
         std::memory_order_release);
 }
 

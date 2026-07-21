@@ -37,6 +37,16 @@ flametal_config::define_flame_option<bool> o_gog_meshGpuPath(
     false
 );
 
+// Gates the recurring "mesh tex resolve:", "mesh gpu probe:" (this file) and
+// "anim modes:" (CEngineAnimMesh.cpp) debug probes. These fire every ~3s
+// while the GPU mesh path is active and were only ever meant for the
+// missing-mesh investigation; default off so normal play stays quiet.
+flametal_config::define_flame_option<bool> o_flametal_debugProbes(
+    "flametal:DebugProbes", flametal_config::OG_Config,
+    "Log recurring mesh-resolve/gpu-probe/anim-mode debug stats every ~3s",
+    false
+);
+
 
 namespace {
 
@@ -480,12 +490,14 @@ uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
     const DWORD statsTick = GetTickCount();
     if (statsTick - lastStatsTick > 3000) {
         lastStatsTick = statsTick;
-        patch::log::dbg("mesh tex resolve: calls=%u nullSurf=%u noCand=%u cesurfNull=%u "
-                        "devNull=%u fakeHit=%u rawHit=%u faults=%u retZero=%u retNonzero=%u sample=%u",
-                        g_resolveStats.calls, g_resolveStats.nullSurface,
-                        g_resolveStats.noCandidates, g_resolveStats.cesurfNull,
-                        g_resolveStats.devNull, g_resolveStats.fakeHit,
-                        g_resolveStats.rawHit, g_resolveStats.faults, retZero, retNonzero, sampleId);
+        if (o_flametal_debugProbes.get()) {
+            patch::log::dbg("mesh tex resolve: calls=%u nullSurf=%u noCand=%u cesurfNull=%u "
+                            "devNull=%u fakeHit=%u rawHit=%u faults=%u retZero=%u retNonzero=%u sample=%u",
+                            g_resolveStats.calls, g_resolveStats.nullSurface,
+                            g_resolveStats.noCandidates, g_resolveStats.cesurfNull,
+                            g_resolveStats.devNull, g_resolveStats.fakeHit,
+                            g_resolveStats.rawHit, g_resolveStats.faults, retZero, retNonzero, sampleId);
+        }
     }
     if (resolveMode == 2) return bridgeId;  // buffer texture already registered
     if (bridgeId) {
@@ -633,24 +645,26 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     const DWORD nowTick = GetTickCount();
     if (nowTick - lastProbeTick > 3000) {
         lastProbeTick = nowTick;
-        patch::log::dbg("mesh gpu probe: v0.color=(%f %f %f) ambient=(%f %f %f) "
-                        "alphaTerm=%08X texId=%u verts=%u packed0=%08X uv0=(%f %f) "
-                        "uvTables=(%f %f %f %f) n0=(%f %f %f)",
-                        static_cast<double>(entry.vertices[0].color.x),
-                        static_cast<double>(entry.vertices[0].color.y),
-                        static_cast<double>(entry.vertices[0].color.z),
-                        static_cast<double>(ambient.x),
-                        static_cast<double>(ambient.y),
-                        static_cast<double>(ambient.z),
-                        alphaTerm, textureId, vertexCount, vertices[0].base_color,
-                        static_cast<double>(vertices[0].u), static_cast<double>(vertices[0].v),
-                        static_cast<double>(*reinterpret_cast<const float *>(0x00779368)),
-                        static_cast<double>(*reinterpret_cast<const float *>(0x0076F340)),
-                        static_cast<double>(*reinterpret_cast<const float *>(0x0077F480)),
-                        static_cast<double>(*reinterpret_cast<const float *>(0x0077F3D8)),
-                        static_cast<double>(entry.vertices[0].normal.x),
-                        static_cast<double>(entry.vertices[0].normal.y),
-                        static_cast<double>(entry.vertices[0].normal.z));
+        if (o_flametal_debugProbes.get()) {
+            patch::log::dbg("mesh gpu probe: v0.color=(%f %f %f) ambient=(%f %f %f) "
+                            "alphaTerm=%08X texId=%u verts=%u packed0=%08X uv0=(%f %f) "
+                            "uvTables=(%f %f %f %f) n0=(%f %f %f)",
+                            static_cast<double>(entry.vertices[0].color.x),
+                            static_cast<double>(entry.vertices[0].color.y),
+                            static_cast<double>(entry.vertices[0].color.z),
+                            static_cast<double>(ambient.x),
+                            static_cast<double>(ambient.y),
+                            static_cast<double>(ambient.z),
+                            alphaTerm, textureId, vertexCount, vertices[0].base_color,
+                            static_cast<double>(vertices[0].u), static_cast<double>(vertices[0].v),
+                            static_cast<double>(*reinterpret_cast<const float *>(0x00779368)),
+                            static_cast<double>(*reinterpret_cast<const float *>(0x0076F340)),
+                            static_cast<double>(*reinterpret_cast<const float *>(0x0077F480)),
+                            static_cast<double>(*reinterpret_cast<const float *>(0x0077F3D8)),
+                            static_cast<double>(entry.vertices[0].normal.x),
+                            static_cast<double>(entry.vertices[0].normal.y),
+                            static_cast<double>(entry.vertices[0].normal.z));
+        }
     }
     emitMeshCamera();
     emitFrameLights(lightData);

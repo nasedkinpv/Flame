@@ -24,6 +24,10 @@
 #include <cstring>
 #include <emmintrin.h>
 
+// Defined in Obj57AD20.cpp, near o_gog_meshGpuPath; gates this file's
+// recurring "anim modes:" probe alongside that file's "mesh tex resolve:"
+// and "mesh gpu probe:" probes.
+extern flametal_config::define_flame_option<bool> o_flametal_debugProbes;
 
 namespace {
 
@@ -470,9 +474,11 @@ void dk2::CEngineAnimMesh::fun_5848B0(int mode, SceneObject2E *scene) {
     const DWORD now = GetTickCount();
     if (now - lastTick > 3000) {
         lastTick = now;
-        patch::log::dbg("anim modes: plain=%u blend=%u other=%u gpuHit=%u gpuMiss=%u",
-                        g_animModePlain, g_animModeBlend, g_animModeOther,
-                        g_animGpuHit, g_animGpuMiss);
+        if (o_flametal_debugProbes.get()) {
+            patch::log::dbg("anim modes: plain=%u blend=%u other=%u gpuHit=%u gpuMiss=%u",
+                            g_animModePlain, g_animModeBlend, g_animModeOther,
+                            g_animGpuHit, g_animGpuMiss);
+        }
     }
 }
 

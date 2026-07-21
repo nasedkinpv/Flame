@@ -104,28 +104,33 @@
 //     against the callee's own disassembly for this specific call site).
 //
 //  6. 0x586416..0x586A16: reloads `a5_flags`/the combined draw flags and
-//     picks one of three ways to append SceneObject2E entries:
-//       a) `a5_flags & 0x200` and combined-flags-2 & 0x200 clear: appends
-//          ONE entry using the *second* surface's handle only (simplest;
-//          "branch C" below).
-//       b) `a5_flags & 0x200` set, combined-flags-2 & 0x200 clear:
-//          "branch B" -- appends ONE entry that packs up to 2 surfh
-//          pointers into surfh_x4[0..1] via a byte-shifted read of a small
-//          4-int local array. TODO(verify): the exact source of the
-//          packed surfh pointers in this specific sub-case could not be
-//          reconstructed from static analysis (the address arithmetic
-//          only resolves to a valid destination if one of its two summed
-//          registers is a small integer rather than a real stack address,
-//          which contradicts the `lea`s feeding it -- most likely this
-//          path is rarely/never hit by shipped assets, similar to how
-//          CEngineAnimMeshBlend.cpp flags two unresolved inputs to its
-//          own blend-lighting chain). This is translated using the two
-//          confirmed-available MyCESurfHandle pointers in scope
-//          (`handle1`, `handle2`) as the most plausible fill, clearly
-//          marked below for re-verification; every other field of this
-//          entry (mesh/lod/numVerts/renMode/propsCount/zeroOrM1, and the
-//          *omission* of drawFlags_x2[0] -- genuinely never written by
-//          this branch in the disassembly) is verified exactly.
+//     picks one of three ways to append SceneObject2E entries. Verified by
+//     register trace (0x586426 `test ah,0x2` reads a5_flags; 0x58642f
+//     `test bh,0x2` reads ebx, which has held combined-flags-1 unbroken
+//     since 0x5862eb -- every intervening callee (sub_589140, sub_57c780,
+//     sub_57f030, sub_581b80, sub_57f090) preserves ebx per standard
+//     calling convention, confirmed by disassembling each):
+//       a) `a5_flags & 0x200` clear: appends ONE entry using the *second*
+//          surface's handle only (simplest; "branch C" below).
+//       b) `a5_flags & 0x200` set, combined-flags-1 & 0x200 clear:
+//          "branch B" -- appends ONE entry that packs both surfh pointers
+//          into surfh_x4[0..1]. Resolved by direct disassembly of
+//          0x586808..0x5868be: the compiler stages two per-slot "count"
+//          locals hardcoded to 1 (unconditionally, no null test anywhere
+//          on handle1/handle2), sums them into surfhCount (=2, always),
+//          copies them into numTextureSamplers_x2[0]/[1], then a second,
+//          simple loop (0x586896..0x5868b6) copies handle1 (stack home
+//          esp+0x54) into surfh_x4[0] and handle2 (esp+0x58) into
+//          surfh_x4[1]. So `handle1`/`handle2` in that order was in fact
+//          the correct fill; the only actual bugs were (1) surfhCount and
+//          numTextureSamplers_x2 not being written at all in the earlier
+//          translation, and (2) this branch condition testing
+//          combined-flags-2 instead of combined-flags-1. Both are fixed
+//          below. Every other field of this entry (mesh/lod/numVerts/
+//          renMode/propsCount/zeroOrM1, and the *omission* of
+//          drawFlags_x2[0] -- genuinely never written by this branch, its
+//          staged locals at esp+0x40/0x44 are never read back) remains
+//          verified exactly.
 //       c) both set: "branch A" -- appends up to TWO entries (one using
 //          `handle1` with combined-flags-1, gated on the sub-part's own
 //          `baseTriCountLo != 0`; one using `handle2` with combined-
@@ -378,10 +383,18 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
         }
 
         // 0x586420..0x586432: pick which of the three emission shapes to use.
+        // Verified by register trace: `test ah,0x2` at 0x586426 reads
+        // a5_flags (eax reloaded from this->field_10 just above), but
+        // `test bh,0x2` at 0x58642f reads ebx, which has held combinedFlags1
+        // unbroken since 0x5862eb (`or ebx,eax`) -- every intervening call
+        // (sub_589140, sub_57c780, sub_57f030, sub_581b80, sub_57f090) is
+        // confirmed by disassembly to never touch ebx (sub_57f090 even
+        // explicitly push/pop-saves it). So the second test is against
+        // combinedFlags1, not combinedFlags2.
         const int32_t a5FlagsAfterSecondAdd = a5_flags;
         const bool useSimpleSecondOnly = (a5FlagsAfterSecondAdd & 0x200) == 0;
         const bool useTwoLayerSingleEntry =
-                !useSimpleSecondOnly && (combinedFlags2 & 0x200) == 0;
+                !useSimpleSecondOnly && (combinedFlags1 & 0x200) == 0;
 
         if (useSimpleSecondOnly) {
             // Branch C (0x5868C3..0x586A0E): single entry, second surface
@@ -401,13 +414,24 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
                 entry.zeroOrM1 = 0;
             }
         } else if (useTwoLayerSingleEntry) {
-            // Branch B (0x5866EE..0x586A0E): single entry packing up to 2
-            // surfh pointers. TODO(verify): see file-header note 6b -- the
-            // exact source-selection arithmetic for surfh_x4[] could not be
-            // reconstructed; `handle1`/`handle2` are used here as the most
-            // plausible fill. Every other field below (including the
-            // deliberate *omission* of drawFlags_x2[0], which the original
-            // genuinely never writes on this path) is verified.
+            // Branch B (0x5866EE..0x586A0E): single entry packing both
+            // surfh pointers. Verified by direct disassembly of
+            // 0x586808..0x5868be: the compiler stages two per-slot "count"
+            // locals hardcoded to 1 (never null-checked), sums them
+            // unconditionally into surfhCount (=2, at 0x58688c), copies
+            // them byte-wise into numTextureSamplers_x2[0]/[1] (loop at
+            // 0x586822..0x586874, writes to entry offset 0x1F+i), and then
+            // a second, simpler loop (0x586896..0x5868b6) copies the two
+            // handle pointers straight from their stack homes into
+            // surfh_x4[0]/[1]:
+            //   ecx=1: eax = [esp+0x54] (handle1) -> surfh_x4[0]
+            //   ecx=2: eax = [esp+0x58] (handle2) -> surfh_x4[1]
+            // There is no pointer-null test anywhere in this path -- both
+            // slots and numTextureSamplers_x2[0]/[1] are always written,
+            // and surfhCount is always 2. (The deliberate *omission* of
+            // drawFlags_x2[0], which the original genuinely never writes
+            // on this path -- esp+0x40/0x44 are staged but never read
+            // back -- remains verified as before.)
             if (record.baseTriCountLo != 0) {
                 SceneObject2E &entry = appendEntry();
                 entry.mesh = this;
@@ -417,13 +441,11 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
                 entry.renMode = g_renMode_7820A0;
                 entry.propsCount = 2;
                 entry.zeroOrM1 = 0;
-                MyCESurfHandle *packed[2] = {handle1, handle2};
-                int32_t filled = 0;
-                for (int i = 0; i < 2 && packed[i] != nullptr; ++i) {
-                    entry.surfh_x4[i] = packed[i];
-                    ++filled;
-                }
-                entry.surfhCount = static_cast<uint8_t>(filled);
+                entry.surfhCount = 2;
+                entry.numTextureSamplers_x2[0] = 1;
+                entry.numTextureSamplers_x2[1] = 1;
+                entry.surfh_x4[0] = handle1;
+                entry.surfh_x4[1] = handle2;
             }
         } else {
             // Branch A (0x586438..0x5866E9): up to two separate entries.

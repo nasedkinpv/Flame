@@ -57,6 +57,7 @@ add_library(${TARGET} SHARED
         dk2/Obj57AD20.cpp
         dk2/Obj58EF60.cpp
         dk2/CEngineAnimMesh.cpp
+        dk2/CEngineAnimMeshAdd.cpp
         dk2/CEngineAnimMeshBlend.cpp
         dk2/CEngineDynamicMesh.cpp
         dk2/CEngineUnlitProceduralMesh.cpp
