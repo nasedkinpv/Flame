@@ -160,11 +160,17 @@ bool convertToRgba8(const dk2::MySurface *surf, std::vector<uint8_t> &out) {
             // resolving through it is what turns these from silhouettes into
             // real colors.
             if (bytesPerPixel == 1) {
-                const tagPALETTEENTRY &pe = dk2::g_paletteEntries[packed & 0xFF];
-                dst[0] = pe.peRed;
-                dst[1] = pe.peGreen;
-                dst[2] = pe.peBlue;
-                dst[3] = 0xFF;
+                if (surf->desc.dwRGBAlphaBitMask == 0xFF) {
+                    // alpha-only surface: the byte is coverage, not an index
+                    dst[0] = dst[1] = dst[2] = 0xFF;
+                    dst[3] = static_cast<uint8_t>(packed & 0xFF);
+                } else {
+                    const tagPALETTEENTRY &pe = dk2::g_paletteEntries[packed & 0xFF];
+                    dst[0] = pe.peRed;
+                    dst[1] = pe.peGreen;
+                    dst[2] = pe.peBlue;
+                    dst[3] = 0xFF;
+                }
                 continue;
             }
             dst[0] = extractChannel8(packed, surf->desc.dwRBitMask);

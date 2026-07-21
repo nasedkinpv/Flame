@@ -434,6 +434,9 @@
 00590880 CEngineDDSurface *CEngineDDSurface::constructor(uint32_t, uint32_t, MyCEngineSurfDesc *, int)
 005909E0 void CEngineDDSurface::destructor()
 
+# CEngineCompressedSurface
+00590740 int CEngineCompressedSurface::copySurf(CEngineSurfaceBase *, int, int)
+
 # MyCESurfHandle
 00590C30 MyCESurfHandle *MyCESurfHandle::paint(MySurface *, char)
 00590EC0 void MyCESurfHandle::resolveSurface()
