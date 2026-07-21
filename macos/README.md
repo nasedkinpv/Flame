@@ -29,6 +29,15 @@ Two rendering paths coexist over the same bridge:
   globals the original projection uses, so GPU output lands in the same clip
   space as legacy draws and z-testing orders the two paths correctly.
 
+Current verdict (2026-07-21 A/B on Level1): the legacy path is both faster
+(~51 ms vs ~59 ms frame interval, half the host GPU time) and visually
+correct, because the SSE2-translated CPU transform is already cheap and the
+mesh path pays per-object feeding costs (texture resolve, light-set unioning,
+vertex copies, ~1300 small draws) every frame. `MeshGpuPath` therefore stays
+off by default; the mesh path becomes worthwhile once static geometry is
+registered once (`MESH_REGISTER` + per-frame `DRAW_MESH` transforms) instead
+of re-crossing the bridge inline every frame.
+
 ## Build and run
 
 ```sh
