@@ -4,6 +4,7 @@
 #include "dk2/MyEntryBuf_MyStringHashMap_MyMeshResourceHolder_entry.h"
 #include "dk2/MyMeshResourceHolder.h"
 #include "dk2/MyScaledSurface.h"
+#include "dk2/ShadowGpu.h"
 #include "dk2/MyStringHashMap_MyMeshResourceHolder.h"
 #include "dk2/MyStringHashMap_MyMeshResourceHolder_entry.h"
 #include "dk2/SprsMeshHeader.h"
@@ -283,7 +284,8 @@ int dk2::CEngineDynamicMesh::shadow_sub_5808E0(CPolyMeshResource *resource, int 
     // shadows_surfaceData scratch buffer (see shadow_cache's writeup
     // above). The <3 branch is already cheap via its own material-name
     // blob cache and is left untouched.
-    const bool cachingActive = g_shadowLevel >= 3 && o_flametal_shadowCache.get();
+    const bool cachingActive = g_shadowLevel >= 3 && o_flametal_shadowCache.get() &&
+                               !dk2::shadowgpu::active();
     bool cacheHit = false;
     shadow_cache::DynShadowCacheEntry *cacheEntry = nullptr;
     if (cachingActive) {

@@ -20,9 +20,6 @@ struct InlineTarget {
 };
 
 bool active();
-// flametal:MetalShadows active (option on AND the metal bridge is enabled) --
-// implemented in CEngineAnimMesh.cpp, next to the option definition.
-bool shadowsActive();
 void emitCamera();
 bool prepareTarget(SceneObject2E *scene, MyScaledSurface *surface, bool lit,
                    InlineTarget *out);

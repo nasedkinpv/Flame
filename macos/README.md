@@ -2,7 +2,7 @@
 
 The current native pipeline keeps the original 32-bit game simulation isolated in Wine and renders it in a separate arm64 AppKit/Metal 4 host:
 
-`DK2 + Flametal (i386/Wine) → shared protocol v9 → AppKit + Metal 4 (arm64)`
+`DK2 + Flametal (i386/Wine) → shared protocol v11 → AppKit + Metal 4 (arm64)`
 
 Flametal (the underlying [DiaLight/Flame](https://github.com/DiaLight/Flame) patch layer this fork is built on) captures the game's Direct3D 3 command stream without asking WineD3D to render it. The native host owns presentation, scaling, focus, keyboard and mouse input. Absolute pointer coordinates use AppKit, raw relative motion and keyboard state use GameController, and scrolling uses AppKit's precise wheel events.
 
@@ -27,7 +27,16 @@ Two rendering paths coexist over the same bridge:
   with `mesh_gpu_path = true` in `settings.toml` (`[patches]` section, see
   Settings below) for A/B testing. The camera matrix is assembled in closed form from the same
   globals the original projection uses, so GPU output lands in the same clip
-  space as legacy draws and z-testing orders the two paths correctly.
+space as legacy draws and z-testing orders the two paths correctly.
+
+Dynamic shadows retain DK2's original per-light selection, projection,
+receiver decal, UVs, blend and depth behavior. With `metal_shadows = true`,
+only the hot 256x256-subpixel silhouette rasterizer and its 8x8 reduction move
+to Metal; the result is resolved into the same 32x32 atlas slot the original
+draw samples. Turning it off live returns that one step to the bounds-safe CPU
+rasterizer. `shadow_cache` is automatically bypassed while the Metal
+rasterizer is active, because caching the deliberately blank CPU scratch mask
+would suppress the projected triangles sent to the GPU.
 
 Current verdict (2026-07-21 A/B on Level1): the legacy path is both faster
 (~51 ms vs ~59 ms frame interval, half the host GPU time) and visually
@@ -66,7 +75,7 @@ hd_textures = true
 
 [patches]                # applied on next launch, passed to the game as
 mesh_gpu_path = false     # -gog:MeshGpuPath=/-flametal:ShadowCache=/
-shadow_cache = true       # -flametal:DebugProbes= CLI flags
+shadow_cache = true       # -flametal:DebugProbes= CLI flags; CPU shadows only
 debug_probes = false
 
 [debug]
@@ -105,8 +114,8 @@ without touching the config file, not for regular use:
 - `DK2_TEXTURE_HD` selects the HD texture directory (default
   `.../Dungeon Keeper II/textures-hd`) — unrelated to the `hd_textures`
   on/off toggle, which has no env override (settings.toml always governs it).
-- `DK2_METAL_SHADOW_UP_SIGN`, `DK2_METAL_INPUT_LOG`, `DK2_MESH_DEBUG`,
-  `DK2_MESH_NO_TEXTURE`, `DK2_TEXTURE_DUMP`, `DK2_METAL_HUD`, `DK2_FULLSCREEN`
+- `DK2_METAL_INPUT_LOG`, `DK2_MESH_DEBUG`, `DK2_MESH_NO_TEXTURE`,
+  `DK2_TEXTURE_DUMP`, `DK2_METAL_HUD`, `DK2_FULLSCREEN`
   remain plain debug/dev knobs with no settings.toml equivalent — see their
   definitions in `macos/native/DK2Metal.mm` and `macos/run-metal-game.zsh`.
 
@@ -142,8 +151,9 @@ GOG copy. Automating the GOG offline installer is kept separate so the normal
 launch path does not depend on a particular third-party installer version.
 
 The Metal launcher defaults to DK2 shadow level 3 (`settings.toml` [game]
-`shadow_level`). The bounds-safe Flametal rasterizer keeps the original
-dynamic-shadow mode from writing outside its 32x32 coverage surface. Set it to
+`shadow_level`). The Metal rasterizer reproduces the original projected mask;
+the bounds-safe Flametal CPU implementation remains the live fallback. Both
+keep dynamic shadows inside their 32x32 coverage surface. Set the level to
 `0`, `1`, or `2` for a cheaper mode when profiling older hardware.
 
 The packaging script pins Wine 11 and verifies its SHA-256 checksum. Maintainer

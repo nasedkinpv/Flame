@@ -4,7 +4,6 @@
 #include "dk2/MeshGpuEmit.h"
 #include "patches/logging.h"
 #include <metal_bridge/DK2BridgeProtocol.h>
-#include <metal_bridge/MetalBridgeProducer.h>
 #include <windows.h>
 #include "dk2/MyMeshResourceHolder.h"
 #include "dk2/MyScaledSurface.h"
@@ -33,26 +32,6 @@ namespace {
 
 uint32_t g_animModePlain, g_animModeBlend, g_animModeOther, g_animGpuHit, g_animGpuMiss;
 
-// flametal:MetalShadows -- moves creature shadow CASTING to the GPU: instead
-// of CEngineAnimMesh::sub_5855E0 rasterizing a CPU silhouette every frame
-// (see EngineAnimShadows.cpp), the creature's world-space mesh is emitted to
-// the Metal bridge as a DK2M_DRAW_MESH_SHADOW_CASTER draw (see
-// emitAnimShadowCaster below) and the host rasterizes the shadow itself from
-// that geometry. Off by default until the host-side visual result has been
-// accepted; sub_5855E0's CPU path is untouched while this is false. Mirrors
-// gog:MeshGpuPath's meshGpuActive() gate (Obj57AD20.cpp): only meaningful
-// with the metal bridge actually running.
-flametal_config::define_flame_option<bool> o_flametal_metalShadows(
-    "flametal:MetalShadows", flametal_config::OG_Config,
-    "Cast creature shadows on the GPU via the Metal bridge instead of "
-    "rasterizing a CPU silhouette (Shadows>=2)",
-    false
-);
-
-bool metalShadowsActive() {
-    return o_flametal_metalShadows.get() && gog::metal_bridge::isEnabled();
-}
-
 using VertexFun = int (__cdecl *)(uint32_t, dk2::Vec3f *);
 using TriangleFun = int (__cdecl *)(uint32_t, uint32_t, uint32_t);
 using RenderFun = int (__cdecl *)(uint32_t, dk2::Vec3f *, dk2::Uv2f *);
@@ -60,7 +39,6 @@ using RenderFun = int (__cdecl *)(uint32_t, dk2::Vec3f *, dk2::Uv2f *);
 dk2::Vec3f *animatedPositions() {
     return &dk2::g_vec_766A78;
 }
-
 void animateVertex(
         dk2::CAnimMeshResource *resource,
         int animation,
@@ -220,71 +198,6 @@ bool drawAnimOnGpu(
     return true;
 }
 
-// flametal:MetalShadows -- emit this creature's world-space mesh as a GPU
-// shadow CASTER only. Reuses drawAnimOnGpu's exact pose/rotate/scale/
-// translate build (same resource->sub_57E5B0 pose fetch, same f10_matrix
-// rotation, same `* scale + translation` placement) so the caster geometry
-// is pixel-identical to what the lit GPU path would draw, but skips
-// everything texture/lighting related: normals, UVs and per-vertex colour
-// are irrelevant to a caster (DK2M_DRAW_MESH_SHADOW_CASTER, see
-// DK2BridgeProtocol.h, documents that texture/tint/lights are ignored for
-// this flag), so they're left zeroed/opaque rather than computed.
-//
-// Independent of dk2::meshgpu::active() (gog:MeshGpuPath): this must run
-// even when the visible mesh still renders through the legacy CPU path,
-// because CPU shadow rasterization (sub_5855E0) is being bypassed
-// regardless of which path draws the visible creature.
-void emitAnimShadowCaster(
-        dk2::CEngineAnimMesh *mesh,
-        dk2::CAnimMeshResource *resource,
-        int animation,
-        float frame,
-        uint32_t frameIndex,
-        const uint8_t *indices,
-        uint32_t triangleCount,
-        float scale) {
-    if (!triangleCount || triangleCount > 255) return;
-    static DK2MMeshVertex casterVertices[256];
-    static uint16_t casterIndices[765];
-    uint8_t mapped[256];
-    std::memset(mapped, 0xFF, sizeof(mapped));
-    dk2::Mat3x3f &m = mesh->f10_matrix;
-    const dk2::Vec3f &translation = mesh->field_4;
-    uint32_t vertexCount = 0, indexCount = 0;
-    for (uint32_t triangle = 0; triangle < triangleCount; ++triangle, indices += 3) {
-        for (int corner = 0; corner < 3; ++corner) {
-            const uint32_t src = indices[corner];
-            if (mapped[src] == 0xFF) {
-                dk2::Vec3f model;
-                resource->sub_57E5B0(
-                        animation, frame, frameIndex,
-                        static_cast<int>(src), &model);
-                dk2::Vec3f rotated;
-                m.multiplyVec(&rotated, &model);
-                DK2MMeshVertex &dst = casterVertices[vertexCount];
-                dst.px = rotated.x * scale + translation.x;
-                dst.py = rotated.y * scale + translation.y;
-                dst.pz = rotated.z * scale + translation.z;
-                dst.nx = dst.ny = dst.nz = 0.0f;
-                dst.u = dst.v = 0.0f;
-                dst.base_color = 0xFFFFFFFFu;
-                mapped[src] = static_cast<uint8_t>(vertexCount++);
-            }
-            casterIndices[indexCount++] = mapped[src];
-        }
-    }
-    dk2::meshgpu::InlineTarget target{};
-    target.textureId = 0;
-    target.uS = target.vS = 1.0f;
-    target.uO = target.vO = 0.0f;
-    target.tint = 0xFFFFFFFFu;
-    target.meshFlags = DK2M_DRAW_MESH_SHADOW_CASTER;
-    dk2::meshgpu::emitCamera();
-    dk2::meshgpu::emitInline(
-            target, casterVertices, vertexCount, casterIndices, indexCount,
-            0.0f, 0.0f, 0.0f);
-}
-
 __m128 decodeAnimationPosition(
         uint32_t packed, const dk2::CAnimMeshResource *resource) {
     const int32_t x = static_cast<int32_t>(
@@ -395,20 +308,6 @@ void dk2::CEngineAnimMesh::sub_5836A0(int animation, SceneObject2E *scene) {
     const uint8_t *indices = reinterpret_cast<const uint8_t *>(entry.plod_list[lod]);
     const uint32_t triangleCount = static_cast<uint8_t>(entry.lod_list[lod]);
 
-    // flametal:MetalShadows -- caster emission is independent of
-    // gog:MeshGpuPath (dk2::meshgpu::active()): it must happen whether the
-    // visible mesh below renders through the GPU inline path or falls
-    // through to the legacy CPU loop, because it is what replaces
-    // CEngineAnimMesh::sub_5855E0's CPU shadow rasterization for this
-    // creature (see EngineAnimShadows.cpp). `indices` is passed by value
-    // (pointer copy), so this walk does not disturb the pointer the code
-    // below still needs.
-    if (metalShadowsActive()) {
-        emitAnimShadowCaster(this, resource, animation, frame, frameIndex,
-                             indices, triangleCount,
-                             *reinterpret_cast<float *>(&field_38));
-    }
-
     if (dk2::meshgpu::active()) {
         if (drawAnimOnGpu(this, scene, surface, resource, animation, frame,
                           frameIndex, entry, indices, triangleCount, ambient,
@@ -481,10 +380,3 @@ void dk2::CEngineAnimMesh::fun_5848B0(int mode, SceneObject2E *scene) {
         }
     }
 }
-
-
-// flametal:MetalShadows cross-TU export (declared in MeshGpuEmit.h): lets
-// EngineAnimShadows.cpp's CEngineAnimMesh::sub_5855E0 and
-// MyGameSession.cpp's per-frame tick both gate on the same option +
-// metal-bridge-enabled check this file already computes for caster emission.
-bool dk2::meshgpu::shadowsActive() { return metalShadowsActive(); }

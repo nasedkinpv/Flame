@@ -97,6 +97,38 @@ int main(int argc, const char *argv[]) {
     append(commands, rect);
     appendBytes(commands, rectPixels, sizeof(rectPixels));
 
+    constexpr uint32_t shadowTextureId = 2;
+    std::vector<uint32_t> shadowPixels(64 * 64, 0);
+    DK2MTextureUpdateCommand shadowTexture = {};
+    shadowTexture.header = {
+        DK2M_COMMAND_TEXTURE_UPDATE, 0,
+        static_cast<uint32_t>(sizeof(shadowTexture) + shadowPixels.size() * sizeof(uint32_t))};
+    shadowTexture.texture_id = shadowTextureId;
+    shadowTexture.width = 64;
+    shadowTexture.height = 64;
+    shadowTexture.row_pitch = 64 * sizeof(uint32_t);
+    shadowTexture.data_size = static_cast<uint32_t>(shadowPixels.size() * sizeof(uint32_t));
+    append(commands, shadowTexture);
+    appendBytes(commands, shadowPixels.data(), shadowTexture.data_size);
+
+    const DK2MShadowTriangle shadowTriangles[] = {
+        {24, 24, 232, 40, 216, 232},
+        {24, 24, 216, 232, 40, 216},
+    };
+    DK2MShadowMaskCommand shadowMask = {};
+    shadowMask.header = {
+        DK2M_COMMAND_SHADOW_MASK, 0,
+        static_cast<uint32_t>(sizeof(shadowMask) + sizeof(shadowTriangles))};
+    shadowMask.texture_id = shadowTextureId;
+    shadowMask.target_x = 0;
+    shadowMask.target_y = 0;
+    shadowMask.target_width = 32;
+    shadowMask.target_height = 32;
+    shadowMask.triangle_count = 2;
+    shadowMask.mode = DK2M_SHADOW_MASK_ALPHA;
+    append(commands, shadowMask);
+    appendBytes(commands, shadowTriangles, sizeof(shadowTriangles));
+
     DK2MSetTextureCommand binding = {};
     binding.header = {DK2M_COMMAND_SET_TEXTURE, 0, sizeof(binding)};
     binding.stage = 0;
@@ -143,7 +175,7 @@ int main(int argc, const char *argv[]) {
     std::memcpy(static_cast<uint8_t *>(mapping) + DK2M_SLOT_OFFSET(slotIndex), commands.data(), commands.size());
     slot->frame_number = 1;
     slot->byte_count = static_cast<uint32_t>(commands.size());
-    slot->command_count = 6;
+    slot->command_count = 8;
     slot->width = width;
     slot->height = height;
     header->width = width;

@@ -36,7 +36,6 @@ KNOBS = {
     "DK2_METAL_SHADOWS":        {"surface": "settings", "note": "renderer.metal_shadows"},
     "DK2_RENDER_SCALE":         {"surface": "settings", "note": "renderer.render_scale"},
     "DK2_TEXTURE_HD":           {"surface": "settings", "note": "renderer.hd_textures (path override stays env)"},
-    "DK2_METAL_SHADOW_UP_SIGN": {"surface": "debug-env", "note": "world up-axis flip, diagnostics"},
     # [game]
     "DK2_SHADOW_LEVEL":         {"surface": "settings", "note": "game.shadow_level"},
     "DK2_GAME_RES":             {"surface": "settings", "note": "game.resolution"},
@@ -63,7 +62,6 @@ KNOBS = {
     "DK2_ALLOW_UNKNOWN_EXE":    {"surface": "debug-env", "note": "import validation escape hatch"},
     "DK2_CODESIGN_IDENTITY":    {"surface": "debug-env", "note": "packaging signing identity"},
     # flame options (game side)
-    "flametal:MetalShadows":    {"surface": "settings", "note": "patches/renderer bridge; CLI via DK2_EXTRA_GAME_ARGS"},
     "gog:MeshGpuPath":          {"surface": "settings", "note": "patches.mesh_gpu_path"},
     "flametal:ShadowCache":     {"surface": "settings", "note": "patches.shadow_cache"},
     "flametal:DebugProbes":     {"surface": "settings", "note": "patches.debug_probes"},

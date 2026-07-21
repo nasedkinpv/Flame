@@ -25,7 +25,7 @@ env MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 DK2_BLOOM=1 DK2_METAL_SHADOWS=1 \
   "--bridge-file=${BRIDGE_FILE}" >"${LOG_FILE}" 2>&1 &
 host_pid=$!
 
-for attempt in {1..100}; do
+for attempt in {1..2000}; do
   [[ -f "${BRIDGE_FILE}" ]] && break
   /bin/sleep 0.02
 done

@@ -8,6 +8,7 @@
 namespace gog::metal_bridge {
 
 bool isEnabled();
+bool metalShadowsEnabled();
 // Enabled by default for the native bridge. Set DK2_HEADLESS_DDRAW=0 for the
 // legacy WineD3D A/B fallback.
 bool headlessDirectDrawEnabled();
@@ -90,6 +91,11 @@ uint32_t ensureBufferTexture(const void *key, const void *pixels, uint32_t width
 // and flushed when the id first appears.
 void reportAtlasRect(const void *pageKey, const char *name, uint32_t x, uint32_t y,
                      uint32_t w, uint32_t h);
+// Replaces the CPU coverage build for one original DK2 shadow surface. The
+// handle key is resolved to its current atlas placement only when that atlas
+// is actually bound, after the engine's surface packer has run.
+void shadowMask(const void *handleKey, const void *triangles,
+                uint32_t triangleCount, uint32_t mode);
 
 }
 

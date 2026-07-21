@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 9u
+#define DK2M_VERSION 11u
 #define DK2M_TIMING_QUANTUM_US 8u
 #define DK2M_SLOT_COUNT 3u
 // A 1600x1200 High-Res frame can introduce 9-12 MiB of 128x128 surfaces while
@@ -46,6 +46,11 @@ enum DK2MCommandType {
     // to scaling the original pixels. Sent once per composited rect, may
     // repeat when a page is re-composited.
     DK2M_COMMAND_PAGE_ATLAS_MAP = 13,
+    // Original DK2 shadow silhouette after its per-light projection. Payload
+    // is triangle_count DK2MShadowTriangle records in the engine's 256x256
+    // subpixel coordinate space. The host rasterizes/downsamples them into
+    // the specified region of the original texture atlas before scene draws.
+    DK2M_COMMAND_SHADOW_MASK = 14,
 };
 
 struct DK2MPageAtlasMapCommand {
@@ -59,15 +64,19 @@ enum DK2MDrawMeshFlags {
     DK2M_DRAW_MESH_ALPHA_BLEND = 1u << 1,  // SRCALPHA/INVSRCALPHA blend
     DK2M_DRAW_MESH_ADDITIVE = 1u << 2,     // ONE/ONE additive blend
     DK2M_DRAW_MESH_ALPHA_TEST = 1u << 3,   // discard texels below the ref, rest opaque
-    // Shadow caster: the mesh is rendered ONLY into the host's top-down
-    // shadow coverage map, never into the visible scene. World-space
-    // vertices as usual; texture/tint/lights ignored.
-    DK2M_DRAW_MESH_SHADOW_CASTER = 1u << 4,
 };
 
 enum DK2MInputFlags {
     DK2M_INPUT_ACTIVE = 1u << 0,
     DK2M_INPUT_CURSOR_VALID = 1u << 1,
+    // Host shadow pipeline is available and the live setting is enabled.
+    // The game keeps the original CPU rasterizer whenever this bit is clear.
+    DK2M_INPUT_METAL_SHADOWS = 1u << 2,
+};
+
+enum DK2MShadowMaskMode {
+    DK2M_SHADOW_MASK_ALPHA = 0,
+    DK2M_SHADOW_MASK_GRAYSCALE = 1,
 };
 
 enum DK2MInputEventType {
@@ -286,6 +295,23 @@ typedef struct DK2MDrawMeshInlineCommand {
     uint32_t index_count;
     float ambient_r, ambient_g, ambient_b;
 } DK2MDrawMeshInlineCommand;
+
+typedef struct DK2MShadowTriangle {
+    int32_t x0, y0;
+    int32_t x1, y1;
+    int32_t x2, y2;
+} DK2MShadowTriangle;
+
+typedef struct DK2MShadowMaskCommand {
+    DK2MCommandHeader header;
+    uint32_t texture_id;
+    uint32_t target_x;
+    uint32_t target_y;
+    uint32_t target_width;
+    uint32_t target_height;
+    uint32_t triangle_count;
+    uint32_t mode;  // DK2MShadowMaskMode
+} DK2MShadowMaskCommand;
 #pragma pack(pop)
 
 #define DK2M_FILE_SIZE ((uint32_t)(sizeof(DK2MFileHeader) + DK2M_SLOT_COUNT * DK2M_SLOT_CAPACITY))
@@ -308,6 +334,8 @@ static_assert(sizeof(DK2MSetTextureCommand) == 16, "bridge texture binding layou
 static_assert(sizeof(DK2MRenderStateCommand) == 16, "bridge render state layout changed");
 static_assert(sizeof(DK2MTextureStageStateCommand) == 20,
               "bridge texture stage state layout changed");
+static_assert(sizeof(DK2MShadowTriangle) == 24, "bridge shadow triangle layout changed");
+static_assert(sizeof(DK2MShadowMaskCommand) == 36, "bridge shadow mask layout changed");
 #endif
 
 #endif

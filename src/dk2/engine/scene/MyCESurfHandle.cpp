@@ -26,6 +26,7 @@ static const void *atlasPageKey(dk2::CEngineSurfaceBase *page) {
 #include "dk2/SurfaceHolder.h"
 #include "dk2/MyDirectDraw.h"
 #include "dk2/TextureDump.h"
+#include "dk2/ShadowGpu.h"
 #include <cstdint>
 #include <cstring>
 #include "dk2_functions.h"
@@ -251,6 +252,12 @@ dk2::MyCESurfHandle *dk2::MyCESurfHandle::paint(MySurface *surf, char computeCrc
     // No-op unless flametal:TextureDump is set.
     const char *name = MyStringHashMap_MyCESurfHandle_instance.entries.buf[this->mapIdx].name;
     patch::texture_dump::onDecodedSurface(name, surf);
+
+    // shadows_end reaches this exact paint call after the original engine has
+    // selected a light and projected every caster triangle. In Metal mode the
+    // scratch coverage is intentionally blank; queue the projected triangles
+    // for the host before the normal blank surface is packed into its atlas.
+    dk2::shadowgpu::finishIfCurrent(this, surf);
 
     void *pixels = this->cesurf->v_lockBuf();
     MySurface local;  // the original never destroys it either

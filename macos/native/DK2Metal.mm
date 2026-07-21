@@ -358,8 +358,7 @@ void composeRunnerEnv(const Settings &s) {
     setenvIfUnset("DK2_WINEDEBUG", s.winedebug);
     setenvIfUnset("DK2_MOVIES", s.movies ? "1" : "0");
     std::ostringstream extra;
-    extra << "-flametal:MetalShadows=" << tomlBool(s.metalShadows)
-          << " -gog:MeshGpuPath=" << tomlBool(s.meshGpuPath)
+    extra << "-gog:MeshGpuPath=" << tomlBool(s.meshGpuPath)
           << " -flametal:ShadowCache=" << tomlBool(s.shadowCache)
           << " -flametal:DebugProbes=" << tomlBool(s.debugProbes);
     // Unlike the vars above, DK2_EXTRA_GAME_ARGS is not itself a documented
@@ -367,9 +366,7 @@ void composeRunnerEnv(const Settings &s) {
     // from host process to runner script. setenvIfUnset here would let a
     // value exported in a earlier/unrelated shell session (or left over from
     // a previous run in the same terminal) silently outlive the settings it
-    // was built from, e.g. reporting -flametal:MetalShadows=false forever
-    // after one test run exported that, even once settings.toml and the
-    // prefix config both agree it should be true. Always overwrite.
+    // was built from after the source settings changed. Always overwrite.
     setenv("DK2_EXTRA_GAME_ARGS", extra.str().c_str(), 1);
     NSLog(@"DK2 settings: DK2_EXTRA_GAME_ARGS = %s", extra.str().c_str());
 }
@@ -1192,6 +1189,41 @@ id<MTLTexture> buildFromUpload(id<MTLDevice> device, uint32_t textureId,
     return st.hdTexture;
 }
 
+// Keep the exact 1x page current while Metal writes an original 32x32 shadow
+// surface into it. The HD page is rebuilt on the first frame that no shadow
+// command targets this texture.
+void storeForShadow(uint32_t textureId, const uint8_t *pixels,
+                    uint32_t width, uint32_t height, uint32_t pitch) {
+    auto it = pages().find(textureId);
+    if (it == pages().end() || it->second.rects.empty() ||
+        width > kMaxPageDim || height > kMaxPageDim || !width || !height) return;
+    PageState &st = it->second;
+    st.w = width;
+    st.h = height;
+    st.pixels1x.resize((size_t)width * height * 4);
+    for (uint32_t y = 0; y < height; ++y) {
+        std::memcpy(st.pixels1x.data() + (size_t)y * width * 4,
+                    pixels + (size_t)y * pitch, (size_t)width * 4);
+    }
+    st.rebuilds = 0;
+    st.demoted = false;
+    st.dirty = true;
+}
+
+bool originalPage(uint32_t textureId, std::vector<uint8_t> &pixels,
+                  uint32_t &width, uint32_t &height) {
+    const auto it = pages().find(textureId);
+    if (it == pages().end() || it->second.pixels1x.empty()) return false;
+    PageState &st = it->second;
+    pixels = st.pixels1x;
+    width = st.w;
+    height = st.h;
+    // Preserve the HD state but schedule a fresh binding after live Metal
+    // shadows stop targeting this page.
+    st.dirty = true;
+    return width && height;
+}
+
 // Rect update against a page whose HD version is currently bound: patch the
 // stored 1x pixels and schedule a rebuild. Returns false when the caller
 // should apply the rect to the bound texture normally.
@@ -1201,26 +1233,29 @@ bool applyRectToStored(uint32_t textureId, uint32_t x, uint32_t y,
     auto it = pages().find(textureId);
     if (it == pages().end()) return false;
     PageState &st = it->second;
-    if (!st.hdTexture || st.pixels1x.empty()) return false;
+    if (st.pixels1x.empty()) return false;
+    const bool hdBound = st.hdTexture != nil;
     if (x >= st.w || y >= st.h || width > st.w - x || height > st.h - y) return false;
     for (uint32_t row = 0; row < height; ++row) {
         std::memcpy(st.pixels1x.data() + ((size_t)(y + row) * st.w + x) * 4,
                     pixels + (size_t)row * pitch, (size_t)width * 4);
     }
     st.dirty = true;
-    return true;
+    return hdBound;
 }
 
 // End-of-commands pass: rebuild pages whose atlas map or stored content
 // changed this frame. Pages rect-updated too often demote back to a plain
 // 1x texture until their next full upload.
 void rebuildDirty(id<MTLDevice> device, uint32_t *packHits,
+                  const std::unordered_set<uint32_t> &suspended,
                   void (^bind)(uint32_t textureId, id<MTLTexture> texture)) {
     uint32_t budget = kMaxRebuildsPerFrame;
     for (auto &kv : pages()) {
         if (!budget) break;
         PageState &st = kv.second;
         if (!st.dirty || st.pixels1x.empty() || st.demoted) continue;
+        if (suspended.contains(kv.first)) continue;
         st.dirty = false;
         --budget;
         if (++st.rebuilds > kDemoteRebuilds) {
@@ -1609,11 +1644,7 @@ constexpr NSUInteger kDrawBufferSize = kMaxDrawsPerFrame * sizeof(DrawUniform);
 // (small GPU-visible descriptor buffers, not the textures themselves, which
 // are already resident in _textures regardless of bank count), so budget
 // generously rather than re-tune this by trial and error per scene.
-// 127, not 128: Metal caps texture argument indices at 0..127 hardware-wide,
-// and the shadow coverage map (see kWorldGeometryShadowBit) needs the last
-// slot (index kTextureBindingsPerArgumentTable, i.e. 127) in every bank
-// alongside this array, so the array itself gives up one slot.
-constexpr NSUInteger kTextureBindingsPerArgumentTable = 127;
+constexpr NSUInteger kTextureBindingsPerArgumentTable = 128;
 constexpr NSUInteger kTextureArgumentTablesPerFrame = 48;
 constexpr uint32_t kD3DRenderStateZEnable = 7;
 constexpr uint32_t kD3DRenderStateZWriteEnable = 14;
@@ -1656,34 +1687,22 @@ constexpr NSUInteger kMaxLightsPerFrame = 1024;
 constexpr NSUInteger kLightsBufferSize = kLightsHeaderBytes + kMaxLightsPerFrame * 48;
 constexpr NSUInteger kCameraBufferSize = 24 * sizeof(float);
 
-// Host-only bit stitched into MeshDrawUniform.flags / DK2RasterVertex.meshFlags
-// (never a wire-protocol bit - DK2MDrawMeshFlags only defines bits 0..4) to
-// mark a mesh-path draw as depth-tested, depth-writing world geometry,
-// exactly mirroring DrawUniform::worldGeometry for the legacy 1C/2C path.
-// Shared by both so dk2_fragment can gate shadow darkening with one check
-// regardless of which vertex stage produced the fragment.
-constexpr uint32_t kWorldGeometryShadowBit = 1u << 5;
-
-uint32_t shadowReceiverBit(bool zEnabled, bool zWriteEnabled) {
-    return zEnabled && zWriteEnabled ? kWorldGeometryShadowBit : 0u;
-}
-
-// --- Metal shadows: GPU shadow-coverage map for mesh-path casters ---
-// See DK2BridgeProtocol.h's DK2M_DRAW_MESH_SHADOW_CASTER. Casters are
-// DRAW_MESH_INLINE draws carrying that flag: routed out of every scene pass,
-// rasterized top-down into a small R8Unorm coverage texture covering this
-// frame's caster AABB (+2 world units), then sampled back in dk2_fragment to
-// darken depth-tested world geometry below the casters' ground contact.
+// Metal shadows keep DK2's original light selection, projection, blend,
+// receiver geometry and decal draw. Only its 256x256-subpixel silhouette
+// rasterizer is replaced with a Metal pass that resolves into the original
+// 32x32 shadow-atlas slot before the scene samples it.
 // Backed by settings.toml [renderer] metal_shadows (live-appliable);
 // DK2_METAL_SHADOWS=0/1 pins it for the process.
 bool dk2ShadowsEnabled() {
     return dk2cfg::gShadowsLive.load(std::memory_order_relaxed);
 }
 
+std::atomic_bool gShadowGpuAvailable{false};
+
 // Relative factor of the display's full Retina backing size (i.e.
 // [view convertSizeToBacking:size]) used for the drawable, and therefore
-// every render target sized from it: MSAA color/depth, scene color, bloom
-// half-res, shadow coverage. Default 1.0 reproduces today's full-backing-
+// every render target sized from it: MSAA color/depth, scene color and bloom
+// half-res. Default 1.0 reproduces today's full-backing-
 // scale behavior byte-for-byte on any display (1x or 2x); DK2_RENDER_SCALE
 // below 1.0 asks for sub-native rendering (CAMetalLayer upscales the
 // presented texture to the layer automatically). Clamped to 0.375..1.0.
@@ -1699,95 +1718,30 @@ float dk2RenderScale() {
     return dk2cfg::bitsFloat(dk2cfg::gRenderScaleBits.load(std::memory_order_relaxed));
 }
 
-// Which world axis direction is "up" is not yet settled against the game
-// side's world-space convention (see the session report) - default assumes
-// +Z is up (caster base = AABB minZ). Set DK2_METAL_SHADOW_UP_SIGN=-1 to flip
-// to a -Z-up convention (caster base = AABB maxZ) without a shader rebuild.
-float dk2ShadowUpSign() {
-    static const float sign = [] {
-        const char *env = std::getenv("DK2_METAL_SHADOW_UP_SIGN");
-        return (env && std::strcmp(env, "-1") == 0) ? -1.0f : 1.0f;
-    }();
-    return sign;
-}
-
-constexpr NSUInteger kShadowCoverageSize = 1024;
+constexpr NSUInteger kShadowSubpixelSize = 256;
+constexpr NSUInteger kShadowTilesPerAxis = 8;
+constexpr NSUInteger kShadowScratchSize = kShadowSubpixelSize * kShadowTilesPerAxis;
+constexpr NSUInteger kMaxShadowMasksPerFrame = 64;
 constexpr NSUInteger kShadowVertexBufferSize = 512 * 1024;
-constexpr NSUInteger kShadowIndexBufferSize = 128 * 1024;
-constexpr NSUInteger kMaxShadowDrawsPerFrame = 512;
-// World units of padding added around this frame's caster AABB before it
-// becomes the shadow pass's orthographic footprint.
-constexpr float kShadowAabbPadding = 2.0f;
-// How far below (or above, depending on up-sign) the caster's ground-contact
-// height a fragment may still be considered "on the floor" for darkening.
-constexpr float kShadowHeightEpsilon = 0.75f;
-constexpr float kShadowDarkenStrength = 0.45f;
+constexpr NSUInteger kShadowResolveBufferSize =
+    kMaxShadowMasksPerFrame * 32;
 
-// Mirrors DK2ShadowGlobalUniform in DK2Shaders.metal exactly (bound at
-// buffer(7) alongside the coverage texture at texture(128) in every
-// argument table bank).
-struct ShadowGlobalUniform {
-    float invReconstruct[16];  // column-major 4x4: (ndcX*viewZ,ndcY*viewZ,viewZ,1) -> world
-    float screenWidth;
-    float screenHeight;
-    float casterMinZ;
-    float casterMaxZ;
-    float upSign;
-    float epsilon;
-    float darkenStrength;
-    uint32_t active;
-    float shadowCenterX, shadowCenterY;
-    float shadowHalfExtentX, shadowHalfExtentY;
-    uint32_t pad0, pad1, pad2, pad3;
+struct ShadowMaskVertex {
+    float x;
+    float y;
 };
-static_assert(sizeof(ShadowGlobalUniform) == 128);
 
-// Classic public-domain 4x4 cofactor/adjugate inverse (as seen in MESA's
-// gluInvertMatrix). Convention-agnostic: feed it column-major, get a
-// column-major inverse back, as long as caller and this function agree - we
-// only ever feed/read column-major 4x4s here, matching DK2MCameraSetCommand's
-// view_proj layout. Returns false (leaves invOut untouched) on a singular
-// matrix so callers can degrade gracefully instead of propagating NaNs.
-bool invertMatrix4x4(const float m[16], float invOut[16]) {
-    float inv[16];
-    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] +
-             m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
-    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] -
-             m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
-    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] +
-             m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
-    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] -
-              m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
-    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] -
-             m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
-    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] +
-             m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
-    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] -
-             m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
-    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] +
-              m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
-    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] +
-             m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
-    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] -
-             m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
-    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] +
-              m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
-    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] -
-              m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
-    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] -
-             m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
-    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] +
-             m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
-    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] -
-              m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
-    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] +
-              m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
-    const float det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
-    if (std::fabs(det) < 1e-12f) return false;
-    const float invDet = 1.0f / det;
-    for (int i = 0; i < 16; ++i) invOut[i] = inv[i] * invDet;
-    return true;
-}
+struct ShadowResolveUniform {
+    uint32_t scratchX;
+    uint32_t scratchY;
+    uint32_t targetX;
+    uint32_t targetY;
+    uint32_t mode;
+    uint32_t pad0;
+    uint32_t pad1;
+    uint32_t pad2;
+};
+static_assert(sizeof(ShadowResolveUniform) == 32);
 
 MTLCompareFunction metalCompareFunction(uint32_t d3dFunction) {
     switch (d3dFunction) {
@@ -1969,7 +1923,13 @@ bool inputLogEnabled() {
 }
 
 - (void)publishCurrentInput {
-    publishInputState(_input);
+    DK2MInputState published = _input;
+    if (dk2ShadowsEnabled() && gShadowGpuAvailable.load(std::memory_order_acquire)) {
+        published.flags |= DK2M_INPUT_METAL_SHADOWS;
+    } else {
+        published.flags &= ~DK2M_INPUT_METAL_SHADOWS;
+    }
+    publishInputState(published);
 }
 
 - (void)appendInputEvent:(uint16_t)type code:(uint16_t)code value:(int32_t)value {
@@ -2300,17 +2260,15 @@ bool inputLogEnabled() {
     id<MTLBuffer> _meshDrawBuffers[kFramesInFlight];
     id<MTLBuffer> _lightsBuffers[kFramesInFlight];
     id<MTLBuffer> _cameraBuffers[kFramesInFlight];
-    // Metal shadows (see kWorldGeometryShadowBit / ShadowGlobalUniform):
-    // caster geometry accumulated per frame, rasterized top-down into a
-    // small R8Unorm coverage map, sampled back by dk2_fragment. All nil/
-    // unused when setup fails - shadows are a cosmetic extra, never
-    // load-bearing (same degrade-gracefully rule as bloom).
-    id<MTLRenderPipelineState> _shadowCoveragePipeline;
-    id<MTLTexture> _shadowCoverageTextures[kFramesInFlight];
+    // Original DK2 shadow masks, rasterized in a 256x256-subpixel scratch
+    // atlas and resolved into their normal 32x32 texture-atlas regions.
+    id<MTLRenderPipelineState> _shadowMaskPipeline;
+    id<MTLRenderPipelineState> _shadowResolvePipeline;
+    id<MTLTexture> _shadowScratchTextures[kFramesInFlight];
     id<MTLBuffer> _shadowVertexBuffers[kFramesInFlight];
-    id<MTLBuffer> _shadowIndexBuffers[kFramesInFlight];
-    id<MTLBuffer> _shadowUniformBuffers[kFramesInFlight];
-    id<MTL4ArgumentTable> _shadowArgumentTables[kFramesInFlight];
+    id<MTLBuffer> _shadowResolveBuffers[kFramesInFlight];
+    id<MTL4ArgumentTable> _shadowMaskArgumentTables[kFramesInFlight];
+    id<MTL4ArgumentTable> _shadowResolveArgumentTables[kFramesInFlight];
     BOOL _shadowsAvailable;
     struct MeshBlob {
         std::vector<uint8_t> vertices;
@@ -2330,6 +2288,8 @@ bool inputLogEnabled() {
     struct DynamicTexture {
         uint32_t misses = 0;
         uint32_t retry = 0;   // periodic HD re-probe while classified dynamic
+        uint32_t sourceWidth = 0;
+        uint32_t sourceHeight = 0;
         uint8_t ringIndex = 0;
         bool dynamic = false;
         id<MTLTexture> ring[kFramesInFlight] = {};
@@ -2441,29 +2401,44 @@ bool inputLogEnabled() {
         // Always created regardless of the current metal_shadows setting, so
         // toggling it back on live (settings.toml/Preferences) does not need
         // a renderer re-init -- dk2ShadowsEnabled() gates usage, not setup.
-        id<MTLFunction> shadowVertexFunction = [library newFunctionWithName:@"dk2_shadow_vertex"];
-        id<MTLFunction> shadowFragmentFunction = [library newFunctionWithName:@"dk2_shadow_fragment"];
+        id<MTLFunction> shadowMaskVertex = [library newFunctionWithName:@"dk2_shadow_mask_vertex"];
+        id<MTLFunction> shadowMaskFragment = [library newFunctionWithName:@"dk2_shadow_mask_fragment"];
         MTLRenderPipelineDescriptor *shadowPipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
-        shadowPipelineDescriptor.label = @"DK2 shadow coverage";
-        shadowPipelineDescriptor.vertexFunction = shadowVertexFunction;
-        shadowPipelineDescriptor.fragmentFunction = shadowFragmentFunction;
+        shadowPipelineDescriptor.label = @"DK2 shadow mask";
+        shadowPipelineDescriptor.vertexFunction = shadowMaskVertex;
+        shadowPipelineDescriptor.fragmentFunction = shadowMaskFragment;
         shadowPipelineDescriptor.colorAttachments[0].pixelFormat = MTLPixelFormatR8Unorm;
-        shadowPipelineDescriptor.colorAttachments[0].blendingEnabled = NO;
+        shadowPipelineDescriptor.colorAttachments[0].blendingEnabled = YES;
+        shadowPipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+        shadowPipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
+        shadowPipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+        shadowPipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
         shadowPipelineDescriptor.rasterSampleCount = 1;
-        _shadowCoveragePipeline = shadowVertexFunction && shadowFragmentFunction
+        _shadowMaskPipeline = shadowMaskVertex && shadowMaskFragment
             ? [_device newRenderPipelineStateWithDescriptor:shadowPipelineDescriptor error:&error] : nil;
-        _shadowsAvailable = _shadowCoveragePipeline != nil;
+
+        id<MTLFunction> shadowResolveVertex = [library newFunctionWithName:@"dk2_shadow_resolve_vertex"];
+        id<MTLFunction> shadowResolveFragment = [library newFunctionWithName:@"dk2_shadow_resolve_fragment"];
+        shadowPipelineDescriptor.label = @"DK2 shadow resolve";
+        shadowPipelineDescriptor.vertexFunction = shadowResolveVertex;
+        shadowPipelineDescriptor.fragmentFunction = shadowResolveFragment;
+        shadowPipelineDescriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+        shadowPipelineDescriptor.colorAttachments[0].blendingEnabled = NO;
+        _shadowResolvePipeline = shadowResolveVertex && shadowResolveFragment
+            ? [_device newRenderPipelineStateWithDescriptor:shadowPipelineDescriptor error:&error] : nil;
+        _shadowsAvailable = _shadowMaskPipeline && _shadowResolvePipeline;
         if (!_shadowsAvailable) {
             // Cosmetic extra, exactly like bloom: log loudly and keep the
             // renderer alive with shadows off rather than failing startup.
             NSLog(@"WARNING: Metal shadow pipeline setup failed (%@); continuing with shadows disabled.",
                   error.localizedDescription ?: @"shadow function(s) missing from DK2Shaders.metallib");
         } else {
-            NSLog(@"DK2 shadows: pipeline ready, currently %s (coverage=%lux%lu darken=%.2f "
-                  "upSign=%.0f); settings.toml [renderer] metal_shadows, or DK2_METAL_SHADOWS=0/1.",
+            NSLog(@"DK2 shadows: original projection GPU rasterizer ready, currently %s "
+                  "(scratch=%lux%lu, masks=%lu); settings.toml [renderer] metal_shadows, "
+                  "or DK2_METAL_SHADOWS=0/1.",
                   dk2ShadowsEnabled() ? "enabled" : "disabled",
-                  (unsigned long)kShadowCoverageSize, (unsigned long)kShadowCoverageSize,
-                  kShadowDarkenStrength, dk2ShadowUpSign());
+                  (unsigned long)kShadowScratchSize, (unsigned long)kShadowScratchSize,
+                  (unsigned long)kMaxShadowMasksPerFrame);
         }
     }
     // Creates the user-replaceable pack directory on first launch and logs
@@ -2618,58 +2593,48 @@ bool inputLogEnabled() {
             return nil;
         }
 
-        // Allocated unconditionally (tiny, 128 bytes/slot) regardless of
-        // whether the shadow feature is enabled/available: dk2_fragment's
-        // argument table always has buffer(7) bound to *something* valid, so
-        // a disabled/failed shadow setup just means every slot's `active`
-        // stays 0 forever (written below, each frame) rather than the
-        // fragment shader dereferencing an unbound buffer address.
-        _shadowUniformBuffers[index] =
-            [_device newBufferWithLength:sizeof(ShadowGlobalUniform) options:uploadOptions];
-        _shadowUniformBuffers[index].label = [NSString stringWithFormat:@"DK2 shadow uniform %lu", index];
-        if (!_shadowUniformBuffers[index]) {
-            fail(@"Metal shadow uniform buffer creation failed.");
-            return nil;
-        }
-        std::memset(_shadowUniformBuffers[index].contents, 0, sizeof(ShadowGlobalUniform));
-
         if (_shadowsAvailable) {
             _shadowVertexBuffers[index] =
                 [_device newBufferWithLength:kShadowVertexBufferSize options:uploadOptions];
-            _shadowIndexBuffers[index] =
-                [_device newBufferWithLength:kShadowIndexBufferSize options:uploadOptions];
+            _shadowResolveBuffers[index] =
+                [_device newBufferWithLength:kShadowResolveBufferSize options:uploadOptions];
             MTLTextureDescriptor *shadowDescriptor = [MTLTextureDescriptor
                 texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Unorm
-                                            width:kShadowCoverageSize
-                                           height:kShadowCoverageSize
+                                            width:kShadowScratchSize
+                                           height:kShadowScratchSize
                                         mipmapped:NO];
             shadowDescriptor.storageMode = MTLStorageModePrivate;
             shadowDescriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-            _shadowCoverageTextures[index] = [_device newTextureWithDescriptor:shadowDescriptor];
+            _shadowScratchTextures[index] = [_device newTextureWithDescriptor:shadowDescriptor];
             _shadowVertexBuffers[index].label = [NSString stringWithFormat:@"DK2 shadow vertices %lu", index];
-            _shadowIndexBuffers[index].label = [NSString stringWithFormat:@"DK2 shadow indices %lu", index];
-            _shadowCoverageTextures[index].label = [NSString stringWithFormat:@"DK2 shadow coverage %lu", index];
-            if (!_shadowVertexBuffers[index] || !_shadowIndexBuffers[index] ||
-                !_shadowCoverageTextures[index]) {
-                // Same cosmetic-extra rule as bloom: never take the whole
-                // renderer down over the shadow feature. _shadowUniformBuffers
-                // stays allocated (see above) - it just keeps reporting
-                // active=0 with no vertex/index/texture backing.
+            _shadowResolveBuffers[index].label = [NSString stringWithFormat:@"DK2 shadow resolves %lu", index];
+            _shadowScratchTextures[index].label = [NSString stringWithFormat:@"DK2 shadow scratch %lu", index];
+            if (!_shadowVertexBuffers[index] || !_shadowResolveBuffers[index] ||
+                !_shadowScratchTextures[index]) {
                 NSLog(@"WARNING: Metal shadow resource allocation failed for frame slot %lu; "
                        "disabling shadows.", index);
                 _shadowsAvailable = NO;
                 _shadowVertexBuffers[index] = nil;
-                _shadowIndexBuffers[index] = nil;
-                _shadowCoverageTextures[index] = nil;
+                _shadowResolveBuffers[index] = nil;
+                _shadowScratchTextures[index] = nil;
             } else {
-                MTL4ArgumentTableDescriptor *shadowTableDescriptor =
+                MTL4ArgumentTableDescriptor *maskTableDescriptor =
                     [[MTL4ArgumentTableDescriptor alloc] init];
-                shadowTableDescriptor.maxBufferBindCount = 2;
-                shadowTableDescriptor.initializeBindings = YES;
-                shadowTableDescriptor.label = [NSString stringWithFormat:@"DK2 shadow arguments %lu", index];
-                _shadowArgumentTables[index] =
-                    [_device newArgumentTableWithDescriptor:shadowTableDescriptor error:&error];
-                if (!_shadowArgumentTables[index]) {
+                maskTableDescriptor.maxBufferBindCount = 1;
+                maskTableDescriptor.initializeBindings = YES;
+                maskTableDescriptor.label = [NSString stringWithFormat:@"DK2 shadow mask arguments %lu", index];
+                _shadowMaskArgumentTables[index] =
+                    [_device newArgumentTableWithDescriptor:maskTableDescriptor error:&error];
+
+                MTL4ArgumentTableDescriptor *resolveTableDescriptor =
+                    [[MTL4ArgumentTableDescriptor alloc] init];
+                resolveTableDescriptor.maxBufferBindCount = 1;
+                resolveTableDescriptor.maxTextureBindCount = 1;
+                resolveTableDescriptor.initializeBindings = YES;
+                resolveTableDescriptor.label = [NSString stringWithFormat:@"DK2 shadow resolve arguments %lu", index];
+                _shadowResolveArgumentTables[index] =
+                    [_device newArgumentTableWithDescriptor:resolveTableDescriptor error:&error];
+                if (!_shadowMaskArgumentTables[index] || !_shadowResolveArgumentTables[index]) {
                     NSLog(@"WARNING: Metal shadow argument table creation failed for frame slot %lu; "
                            "disabling shadows.", index);
                     _shadowsAvailable = NO;
@@ -2679,12 +2644,8 @@ bool inputLogEnabled() {
         for (NSUInteger bank = 0; bank < kTextureArgumentTablesPerFrame; ++bank) {
             MTL4ArgumentTableDescriptor *tableDescriptor =
                 [[MTL4ArgumentTableDescriptor alloc] init];
-            // Buffer 7 = ShadowGlobalUniform, texture 128 = shadow coverage
-            // map (see kWorldGeometryShadowBit). Bound in every bank so
-            // dk2_fragment can read it regardless of which bank a draw is
-            // using for its regular textures.
-            tableDescriptor.maxBufferBindCount = 8;
-            tableDescriptor.maxTextureBindCount = kTextureBindingsPerArgumentTable + 1;
+            tableDescriptor.maxBufferBindCount = 7;
+            tableDescriptor.maxTextureBindCount = kTextureBindingsPerArgumentTable;
             tableDescriptor.maxSamplerStateBindCount = 1;
             tableDescriptor.initializeBindings = YES;
             tableDescriptor.label = [NSString
@@ -2698,11 +2659,7 @@ bool inputLogEnabled() {
             [_argumentTables[index][bank]
                 setTexture:_whiteTexture.gpuResourceID atIndex:0];
             [_argumentTables[index][bank]
-                setTexture:_whiteTexture.gpuResourceID atIndex:kTextureBindingsPerArgumentTable];
-            [_argumentTables[index][bank]
                 setSamplerState:_sampler.gpuResourceID atIndex:0];
-            [_argumentTables[index][bank]
-                setAddress:_shadowUniformBuffers[index].gpuAddress atIndex:7];
         }
         if (_bloomAvailable) {
             MTL4ArgumentTableDescriptor *bloomTableDescriptor =
@@ -2742,25 +2699,19 @@ bool inputLogEnabled() {
     }
     allocations[kFramesInFlight * 7] = _whiteTexture;
     [_resources addAllocations:allocations count:kFramesInFlight * 7 + 1];
-    {
-        id<MTLAllocation> shadowUniformAllocations[kFramesInFlight];
-        for (NSUInteger index = 0; index < kFramesInFlight; ++index) {
-            shadowUniformAllocations[index] = _shadowUniformBuffers[index];
-        }
-        [_resources addAllocations:shadowUniformAllocations count:kFramesInFlight];
-    }
     if (_shadowsAvailable) {
         id<MTLAllocation> shadowAllocations[kFramesInFlight * 3];
         for (NSUInteger index = 0; index < kFramesInFlight; ++index) {
             shadowAllocations[index * 3] = _shadowVertexBuffers[index];
-            shadowAllocations[index * 3 + 1] = _shadowIndexBuffers[index];
-            shadowAllocations[index * 3 + 2] = _shadowCoverageTextures[index];
+            shadowAllocations[index * 3 + 1] = _shadowResolveBuffers[index];
+            shadowAllocations[index * 3 + 2] = _shadowScratchTextures[index];
         }
         [_resources addAllocations:shadowAllocations count:kFramesInFlight * 3];
     }
     [_resources commit];
     [_resources requestResidency];
     [_queue addResidencySet:_resources];
+    gShadowGpuAvailable.store(_shadowsAvailable, std::memory_order_release);
 
     if (gBridgePath) {
         _bridge = std::make_unique<BridgeReader>(gBridgePath.fileSystemRepresentation);
@@ -3079,6 +3030,71 @@ static void *renderWorker(void *context) {
         const double pulse = 0.5 + 0.5 * std::sin(t * 1.8);
         MTLClearColor clearColor = MTLClearColorMake(0.025 + pulse * 0.035, 0.07, 0.10 + pulse * 0.08, 1.0);
         __block BOOL residencyChanged = NO;
+        std::unordered_set<uint32_t> shadowTargetIds;
+        if (snapshot && _shadowsAvailable) {
+            for (const CommandView &view : _commandViews) {
+                if (view.type != DK2M_COMMAND_SHADOW_MASK ||
+                    view.size < sizeof(DK2MShadowMaskCommand)) continue;
+                DK2MShadowMaskCommand shadow{};
+                std::memcpy(&shadow, snapshot->bytes.data() + view.offset, sizeof(shadow));
+                const uint64_t expected = sizeof(shadow) +
+                    static_cast<uint64_t>(shadow.triangle_count) * sizeof(DK2MShadowTriangle);
+                if (shadow.texture_id && expected <= view.size) {
+                    shadowTargetIds.insert(shadow.texture_id);
+                }
+            }
+        }
+        // A live off->on switch can produce a mask without changing the CPU
+        // atlas bytes (the GPU scratch is deliberately blank). Promote an
+        // already-resident shader-read atlas once so the resolve command is
+        // never dependent on a coincidental full texture re-upload.
+        for (uint32_t textureId : shadowTargetIds) {
+            const auto found = _textures.find(textureId);
+            id<MTLTexture> oldTexture = found == _textures.end() ? nil : found->second;
+            if (!oldTexture || (oldTexture.usage & MTLTextureUsageRenderTarget) ||
+                oldTexture.pixelFormat != MTLPixelFormatBGRA8Unorm ||
+                oldTexture.storageMode == MTLStorageModePrivate) continue;
+            DynamicTexture &dyn = _dynamicTextures[textureId];
+            uint32_t targetWidth = dyn.sourceWidth;
+            uint32_t targetHeight = dyn.sourceHeight;
+            std::vector<uint8_t> pixels;
+            if (!respack::originalPage(textureId, pixels, targetWidth, targetHeight)) {
+                if (!targetWidth || !targetHeight) {
+                    targetWidth = static_cast<uint32_t>(oldTexture.width);
+                    targetHeight = static_cast<uint32_t>(oldTexture.height);
+                }
+                const NSUInteger oldRowBytes = oldTexture.width * 4;
+                std::vector<uint8_t> oldPixels(oldRowBytes * oldTexture.height);
+                [oldTexture getBytes:oldPixels.data() bytesPerRow:oldRowBytes
+                          fromRegion:MTLRegionMake2D(0, 0, oldTexture.width, oldTexture.height)
+                         mipmapLevel:0];
+                pixels.resize(static_cast<size_t>(targetWidth) * targetHeight * 4);
+                respack::scaleBilinearBgra(
+                    oldPixels.data(), static_cast<uint32_t>(oldTexture.width),
+                    static_cast<uint32_t>(oldTexture.height),
+                    static_cast<uint32_t>(oldRowBytes), pixels.data(), targetWidth,
+                    targetHeight, targetWidth * 4);
+            }
+            MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+                texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                            width:targetWidth
+                                           height:targetHeight
+                                        mipmapped:NO];
+            descriptor.storageMode = MTLStorageModeShared;
+            descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+            id<MTLTexture> promoted = [_device newTextureWithDescriptor:descriptor];
+            if (!promoted) continue;
+            promoted.label = [NSString stringWithFormat:@"DK2 shadow atlas %u", textureId];
+            [promoted replaceRegion:MTLRegionMake2D(0, 0, promoted.width, promoted.height)
+                        mipmapLevel:0 withBytes:pixels.data() bytesPerRow:targetWidth * 4];
+            for (auto &ringTexture : dyn.ring) ringTexture = nil;
+            dyn.dynamic = true;
+            dyn.ringIndex = 0;
+            dyn.ring[0] = promoted;
+            _textures[textureId] = promoted;
+            [_resources addAllocation:promoted];
+            residencyChanged = YES;
+        }
         if (snapshot) {
             for (const CommandView &view : _commandViews) {
                 const size_t offset = view.offset;
@@ -3114,14 +3130,25 @@ static void *renderWorker(void *context) {
                         }
                         const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
                         DynamicTexture &dyn = _dynamicTextures[textureUpdate.texture_id];
+                        dyn.sourceWidth = textureUpdate.width;
+                        dyn.sourceHeight = textureUpdate.height;
                         id<MTLTexture> hd = nil;
                         const bool cursorTexture =
                             textureUpdate.texture_id == DK2M_CURSOR_TEXTURE_ID;
+                        const bool shadowTarget =
+                            shadowTargetIds.contains(textureUpdate.texture_id);
+                        if (shadowTarget) {
+                            dyn.dynamic = true;
+                            respack::storeForShadow(textureUpdate.texture_id, pixels,
+                                                   textureUpdate.width, textureUpdate.height,
+                                                   textureUpdate.row_pitch);
+                        }
                         // Dynamic ids periodically retry the HD paths so the
                         // classification can recover (it used to be permanent,
                         // which locked pages out of HD forever when the HD dir
                         // was empty/off while the misses accumulated).
-                        if ((!dyn.dynamic || cursorTexture || (++dyn.retry & 127) == 0) &&
+                        if (!shadowTarget &&
+                            (!dyn.dynamic || cursorTexture || (++dyn.retry & 127) == 0) &&
                             textureUpdate.texture_id != DK2M_OVERLAY_TEXTURE_ID) {
                             hd = respack::buildFromUpload(_device, key, pixels,
                                                           textureUpdate.width,
@@ -3148,6 +3175,15 @@ static void *renderWorker(void *context) {
                             }
                         }
                         if ((dyn.dynamic || cursorTexture) && !hd) {
+                            if (shadowTarget) {
+                                for (id<MTLTexture> ringTexture : dyn.ring) {
+                                    if (ringTexture &&
+                                        !(ringTexture.usage & MTLTextureUsageRenderTarget)) {
+                                        for (auto &oldTexture : dyn.ring) oldTexture = nil;
+                                        break;
+                                    }
+                                }
+                            }
                             id<MTLTexture> current = dyn.ring[dyn.ringIndex];
                             if (current && (current.width != textureUpdate.width ||
                                             current.height != textureUpdate.height)) {
@@ -3163,7 +3199,8 @@ static void *renderWorker(void *context) {
                                                                height:textureUpdate.height
                                                             mipmapped:NO];
                                 descriptor.storageMode = MTLStorageModeShared;
-                                descriptor.usage = MTLTextureUsageShaderRead;
+                                descriptor.usage = MTLTextureUsageShaderRead |
+                                    (shadowTarget ? MTLTextureUsageRenderTarget : 0);
                                 target = [_device newTextureWithDescriptor:descriptor];
                                 if (target) {
                                     target.label = [NSString
@@ -3244,7 +3281,8 @@ static void *renderWorker(void *context) {
                         if (respack::applyRectToStored(textureUpdate.texture_id,
                                                        textureUpdate.x, textureUpdate.y,
                                                        textureUpdate.width, textureUpdate.height,
-                                                       pixels, textureUpdate.row_pitch)) {
+                                                       pixels, textureUpdate.row_pitch) &&
+                            !shadowTargetIds.contains(textureUpdate.texture_id)) {
                             // The bound texture is a 4x resource-pack page; a
                             // 1x replaceRegion would land at the wrong scale.
                             // Stored pixels were patched; the page rebuilds in
@@ -3284,7 +3322,7 @@ static void *renderWorker(void *context) {
         // Resource-pack pages whose atlas map or content changed this frame
         // (PAGE_ATLAS_MAP after the upload, or a rect update into a mapped
         // page) are rebuilt here from the stored 1x pixels.
-        respack::rebuildDirty(_device, &metrics.packHits,
+        respack::rebuildDirty(_device, &metrics.packHits, shadowTargetIds,
                               ^(uint32_t textureId, id<MTLTexture> texture) {
             if (!texture) return;
             if (_textures[textureId] != texture) {
@@ -3295,142 +3333,160 @@ static void *renderWorker(void *context) {
         });
         if (residencyChanged) [_resources commit];
 
-        // --- Metal shadows: gather this frame's casters, render the
-        // coverage map, BEFORE opening the main scene encoder (so its
-        // fragment shader can sample a fully-populated coverage texture).
-        // Casters are DRAW_MESH_INLINE draws carrying
-        // DK2M_DRAW_MESH_SHADOW_CASTER - they never enter the main scene
-        // loop below (see the `continue` in its DRAW_MESH_INLINE branch).
-        bool shadowActiveThisFrame = false;
-        auto *shadowUniform =
-            static_cast<ShadowGlobalUniform *>(_shadowUniformBuffers[slot].contents);
-        // Every frame slot keeps its previous contents. Clear `active` even
-        // when shadows are switched off live (or no casters are present),
-        // otherwise the fragment stage samples the white fallback texture
-        // through a stale projection and darkens its whole rectangular AABB.
-        std::memset(shadowUniform, 0, sizeof(ShadowGlobalUniform));
-        if (snapshot && dk2ShadowsEnabled() && _shadowsAvailable &&
-            _shadowCoverageTextures[slot] && _shadowArgumentTables[slot]) {
-            bool haveCamera = false;
-            DK2MCameraSetCommand shadowCamera{};
-            NSUInteger shadowVertexBytes = 0;
-            NSUInteger shadowIndexBytes = 0;
-            struct ShadowDrawRange { NSUInteger baseVertex; NSUInteger indexByteOffset; uint32_t indexCount; };
-            std::vector<ShadowDrawRange> shadowDraws;
-            float minX = FLT_MAX, minY = FLT_MAX, minZ = FLT_MAX;
-            float maxX = -FLT_MAX, maxY = -FLT_MAX, maxZ = -FLT_MAX;
+        // Rasterize the original game's already-projected silhouettes. Each
+        // 32x32 destination pixel corresponds to the same 8x8 subpixel block
+        // the CPU path accumulates; the resolve writes back into the normal
+        // atlas texture, so DK2's original decal draw remains untouched.
+        struct ShadowMaskWork {
+            uint32_t textureId;
+            id<MTLTexture> target;
+            NSUInteger vertexStart;
+            NSUInteger vertexCount;
+            NSUInteger uniformIndex;
+            NSUInteger tile;
+        };
+        std::vector<ShadowMaskWork> shadowMasks;
+        std::vector<uint32_t> shadowTargetOrder;
+        NSUInteger shadowVertexBytes = 0;
+        if (snapshot && _shadowsAvailable && _shadowScratchTextures[slot] &&
+            _shadowMaskArgumentTables[slot] && _shadowResolveArgumentTables[slot]) {
+            auto *shadowVertices =
+                static_cast<ShadowMaskVertex *>(_shadowVertexBuffers[slot].contents);
+            auto *shadowUniforms =
+                static_cast<ShadowResolveUniform *>(_shadowResolveBuffers[slot].contents);
             for (const CommandView &view : _commandViews) {
-                if (view.type == DK2M_COMMAND_CAMERA_SET && view.size == sizeof(DK2MCameraSetCommand)) {
-                    std::memcpy(&shadowCamera, snapshot->bytes.data() + view.offset, sizeof(shadowCamera));
-                    haveCamera = true;
-                } else if (view.type == DK2M_COMMAND_DRAW_MESH_INLINE &&
-                           view.size >= sizeof(DK2MDrawMeshInlineCommand)) {
-                    DK2MDrawMeshInlineCommand inlineDraw;
-                    std::memcpy(&inlineDraw, snapshot->bytes.data() + view.offset, sizeof(inlineDraw));
-                    if (!(inlineDraw.flags & DK2M_DRAW_MESH_SHADOW_CASTER)) continue;
-                    const size_t vertexBytes = static_cast<size_t>(inlineDraw.vertex_count) * kMeshVertexStride;
-                    const size_t indexBytes =
-                        (static_cast<size_t>(inlineDraw.index_count) * 2 + 3) & ~static_cast<size_t>(3);
-                    if (!inlineDraw.vertex_count || !inlineDraw.index_count ||
-                        sizeof(inlineDraw) + vertexBytes + indexBytes > view.size ||
-                        shadowVertexBytes + vertexBytes > kShadowVertexBufferSize ||
-                        shadowIndexBytes + indexBytes > kShadowIndexBufferSize ||
-                        shadowDraws.size() >= kMaxShadowDrawsPerFrame) {
-                        continue;
-                    }
-                    const uint8_t *payload = snapshot->bytes.data() + view.offset + sizeof(inlineDraw);
-                    std::memcpy(static_cast<uint8_t *>(_shadowVertexBuffers[slot].contents) + shadowVertexBytes,
-                                payload, vertexBytes);
-                    std::memcpy(static_cast<uint8_t *>(_shadowIndexBuffers[slot].contents) + shadowIndexBytes,
-                                payload + vertexBytes, indexBytes);
-                    for (uint32_t i = 0; i < inlineDraw.vertex_count; ++i) {
-                        float pos[3];
-                        std::memcpy(pos, payload + static_cast<size_t>(i) * kMeshVertexStride, sizeof(pos));
-                        minX = std::min(minX, pos[0]); maxX = std::max(maxX, pos[0]);
-                        minY = std::min(minY, pos[1]); maxY = std::max(maxY, pos[1]);
-                        minZ = std::min(minZ, pos[2]); maxZ = std::max(maxZ, pos[2]);
-                    }
-                    shadowDraws.push_back({shadowVertexBytes / kMeshVertexStride, shadowIndexBytes,
-                                           inlineDraw.index_count});
-                    shadowVertexBytes += vertexBytes;
-                    shadowIndexBytes += indexBytes;
+                if (view.type != DK2M_COMMAND_SHADOW_MASK ||
+                    view.size < sizeof(DK2MShadowMaskCommand) ||
+                    shadowMasks.size() >= kMaxShadowMasksPerFrame) continue;
+                DK2MShadowMaskCommand shadow{};
+                std::memcpy(&shadow, snapshot->bytes.data() + view.offset, sizeof(shadow));
+                const uint64_t triangleBytes =
+                    static_cast<uint64_t>(shadow.triangle_count) * sizeof(DK2MShadowTriangle);
+                if (sizeof(shadow) + triangleBytes > view.size ||
+                    shadow.target_width != 32 || shadow.target_height != 32 ||
+                    shadow.mode > DK2M_SHADOW_MASK_GRAYSCALE) continue;
+                const auto found = _textures.find(shadow.texture_id);
+                id<MTLTexture> target = found == _textures.end() ? nil : found->second;
+                if (!target || target.pixelFormat != MTLPixelFormatBGRA8Unorm ||
+                    !(target.usage & MTLTextureUsageRenderTarget) ||
+                    shadow.target_x > target.width || shadow.target_y > target.height ||
+                    shadow.target_width > target.width - shadow.target_x ||
+                    shadow.target_height > target.height - shadow.target_y) continue;
+
+                const NSUInteger availableVertices =
+                    (kShadowVertexBufferSize - shadowVertexBytes) / sizeof(ShadowMaskVertex);
+                const NSUInteger requestedVertices =
+                    static_cast<NSUInteger>(shadow.triangle_count) * 3;
+                const NSUInteger copiedVertices = requestedVertices <= availableVertices
+                    ? requestedVertices : 0;
+                const auto *triangles = reinterpret_cast<const DK2MShadowTriangle *>(
+                    snapshot->bytes.data() + view.offset + sizeof(shadow));
+                const NSUInteger vertexStart = shadowVertexBytes / sizeof(ShadowMaskVertex);
+                for (NSUInteger triangle = 0; triangle < copiedVertices / 3; ++triangle) {
+                    const DK2MShadowTriangle &source = triangles[triangle];
+                    shadowVertices[vertexStart + triangle * 3 + 0] =
+                        {static_cast<float>(source.x0), static_cast<float>(source.y0)};
+                    shadowVertices[vertexStart + triangle * 3 + 1] =
+                        {static_cast<float>(source.x1), static_cast<float>(source.y1)};
+                    shadowVertices[vertexStart + triangle * 3 + 2] =
+                        {static_cast<float>(source.x2), static_cast<float>(source.y2)};
+                }
+                shadowVertexBytes += copiedVertices * sizeof(ShadowMaskVertex);
+
+                const NSUInteger index = shadowMasks.size();
+                const NSUInteger tileX = (index % kShadowTilesPerAxis) * kShadowSubpixelSize;
+                const NSUInteger tileY = (index / kShadowTilesPerAxis) * kShadowSubpixelSize;
+                shadowUniforms[index] = {
+                    static_cast<uint32_t>(tileX), static_cast<uint32_t>(tileY),
+                    shadow.target_x, shadow.target_y, shadow.mode, 0, 0, 0};
+                shadowMasks.push_back({shadow.texture_id, target, vertexStart,
+                                       copiedVertices, index, index});
+                if (std::find(shadowTargetOrder.begin(), shadowTargetOrder.end(),
+                              shadow.texture_id) == shadowTargetOrder.end()) {
+                    shadowTargetOrder.push_back(shadow.texture_id);
                 }
             }
-            shadowActiveThisFrame = haveCamera && !shadowDraws.empty();
-            if (shadowActiveThisFrame) {
-                // Reconstruction matrix: invert the 4x4 built from
-                // view_proj's clip-x/clip-y/clip-w rows (row 3 is a dummy
-                // homogeneous row) so the fragment shader can recover world
-                // position from screen xy + viewZ alone, without needing
-                // the (piecewise-remapped, non-invertible-as-is) clip-z the
-                // legacy/mesh vertex stages actually emit. See the session
-                // report for the full derivation.
-                const float *vp = shadowCamera.view_proj;
-                float reconstructSource[16];
-                for (int c = 0; c < 4; ++c) {
-                    reconstructSource[c * 4 + 0] = vp[c * 4 + 0];
-                    reconstructSource[c * 4 + 1] = vp[c * 4 + 1];
-                    reconstructSource[c * 4 + 2] = vp[c * 4 + 3];
-                    reconstructSource[c * 4 + 3] = (c == 3) ? 1.0f : 0.0f;
-                }
-                float invReconstruct[16];
-                if (invertMatrix4x4(reconstructSource, invReconstruct) && snapshot->width && snapshot->height) {
-                    std::memcpy(shadowUniform->invReconstruct, invReconstruct, sizeof(invReconstruct));
-                    minX -= kShadowAabbPadding; maxX += kShadowAabbPadding;
-                    minY -= kShadowAabbPadding; maxY += kShadowAabbPadding;
-                    const float centerX = 0.5f * (minX + maxX);
-                    const float centerY = 0.5f * (minY + maxY);
-                    const float halfExtentX = std::max(0.5f * (maxX - minX), 1.0f);
-                    const float halfExtentY = std::max(0.5f * (maxY - minY), 1.0f);
-                    // The fragment stage's [[position]] is in RENDER TARGET
-                    // pixels (the drawable, e.g. 4219x3164), not the game's
-                    // logical resolution - using snapshot dims here scaled
-                    // the reconstructed NDC by the backing factor and made
-                    // shadows slide with the camera.
-                    const CGSize targetSize = _layer.drawableSize;
-                    shadowUniform->screenWidth = static_cast<float>(targetSize.width);
-                    shadowUniform->screenHeight = static_cast<float>(targetSize.height);
-                    shadowUniform->casterMinZ = minZ;
-                    shadowUniform->casterMaxZ = maxZ;
-                    shadowUniform->upSign = dk2ShadowUpSign();
-                    shadowUniform->epsilon = kShadowHeightEpsilon;
-                    shadowUniform->darkenStrength = kShadowDarkenStrength;
-                    shadowUniform->active = 1;
-                    shadowUniform->shadowCenterX = centerX;
-                    shadowUniform->shadowCenterY = centerY;
-                    shadowUniform->shadowHalfExtentX = halfExtentX;
-                    shadowUniform->shadowHalfExtentY = halfExtentY;
+        }
 
-                    MTL4RenderPassDescriptor *shadowPass = [[MTL4RenderPassDescriptor alloc] init];
-                    shadowPass.colorAttachments[0].texture = _shadowCoverageTextures[slot];
-                    shadowPass.colorAttachments[0].loadAction = MTLLoadActionClear;
-                    shadowPass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
-                    shadowPass.colorAttachments[0].storeAction = MTLStoreActionStore;
-                    [_shadowArgumentTables[slot]
-                        setAddress:_shadowVertexBuffers[slot].gpuAddress atIndex:0];
-                    [_shadowArgumentTables[slot]
-                        setAddress:_shadowUniformBuffers[slot].gpuAddress atIndex:1];
-                    id<MTL4RenderCommandEncoder> shadowEncoder =
-                        [commandBuffer renderCommandEncoderWithDescriptor:shadowPass];
-                    shadowEncoder.label = @"DK2 shadow coverage";
-                    [shadowEncoder setArgumentTable:_shadowArgumentTables[slot] atStages:MTLRenderStageVertex];
-                    [shadowEncoder setRenderPipelineState:_shadowCoveragePipeline];
-                    [shadowEncoder setCullMode:MTLCullModeNone];
-                    for (const ShadowDrawRange &range : shadowDraws) {
-                        [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                                  indexCount:range.indexCount
-                                                   indexType:MTLIndexTypeUInt16
-                                                 indexBuffer:_shadowIndexBuffers[slot].gpuAddress +
-                                                             range.indexByteOffset
-                                           indexBufferLength:range.indexCount * 2
-                                               instanceCount:1
-                                                  baseVertex:range.baseVertex
-                                                baseInstance:0];
-                    }
-                    [shadowEncoder endEncoding];
-                } else {
-                    shadowActiveThisFrame = false;
+        const bool shadowMasksRendered = !shadowMasks.empty();
+        if (shadowMasksRendered) {
+            MTL4RenderPassDescriptor *maskPass = [[MTL4RenderPassDescriptor alloc] init];
+            maskPass.colorAttachments[0].texture = _shadowScratchTextures[slot];
+            maskPass.colorAttachments[0].loadAction = MTLLoadActionClear;
+            maskPass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+            maskPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+            [_shadowMaskArgumentTables[slot]
+                setAddress:_shadowVertexBuffers[slot].gpuAddress atIndex:0];
+            id<MTL4RenderCommandEncoder> maskEncoder =
+                [commandBuffer renderCommandEncoderWithDescriptor:maskPass];
+            maskEncoder.label = @"DK2 original shadow masks";
+            [maskEncoder setArgumentTable:_shadowMaskArgumentTables[slot]
+                                 atStages:MTLRenderStageVertex];
+            [maskEncoder setRenderPipelineState:_shadowMaskPipeline];
+            [maskEncoder setCullMode:MTLCullModeNone];
+            for (const ShadowMaskWork &work : shadowMasks) {
+                const NSUInteger tileX =
+                    (work.tile % kShadowTilesPerAxis) * kShadowSubpixelSize;
+                const NSUInteger tileY =
+                    (work.tile / kShadowTilesPerAxis) * kShadowSubpixelSize;
+                [maskEncoder setViewport:MTLViewport{
+                    static_cast<double>(tileX), static_cast<double>(tileY),
+                    static_cast<double>(kShadowSubpixelSize),
+                    static_cast<double>(kShadowSubpixelSize), 0.0, 1.0}];
+                [maskEncoder setScissorRect:MTLScissorRect{
+                    tileX, tileY, kShadowSubpixelSize, kShadowSubpixelSize}];
+                if (work.vertexCount) {
+                    [maskEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                    vertexStart:work.vertexStart
+                                    vertexCount:work.vertexCount];
                 }
+            }
+            [maskEncoder endEncoding];
+
+            [_shadowResolveArgumentTables[slot]
+                setAddress:_shadowResolveBuffers[slot].gpuAddress atIndex:0];
+            [_shadowResolveArgumentTables[slot]
+                setTexture:_shadowScratchTextures[slot].gpuResourceID atIndex:0];
+            bool firstResolve = true;
+            for (uint32_t targetId : shadowTargetOrder) {
+                const auto targetWork = std::find_if(
+                    shadowMasks.begin(), shadowMasks.end(),
+                    [targetId](const ShadowMaskWork &work) {
+                        return work.textureId == targetId;
+                    });
+                if (targetWork == shadowMasks.end()) continue;
+                MTL4RenderPassDescriptor *resolvePass = [[MTL4RenderPassDescriptor alloc] init];
+                resolvePass.colorAttachments[0].texture = targetWork->target;
+                resolvePass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+                resolvePass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                id<MTL4RenderCommandEncoder> resolveEncoder =
+                    [commandBuffer renderCommandEncoderWithDescriptor:resolvePass];
+                resolveEncoder.label = @"DK2 shadow atlas resolve";
+                if (firstResolve) {
+                    [resolveEncoder barrierAfterQueueStages:MTLStageFragment
+                                               beforeStages:MTLStageFragment
+                                          visibilityOptions:MTL4VisibilityOptionDevice];
+                    firstResolve = false;
+                }
+                [resolveEncoder setArgumentTable:_shadowResolveArgumentTables[slot]
+                                         atStages:MTLRenderStageFragment];
+                [resolveEncoder setRenderPipelineState:_shadowResolvePipeline];
+                [resolveEncoder setCullMode:MTLCullModeNone];
+                for (const ShadowMaskWork &work : shadowMasks) {
+                    if (work.textureId != targetId) continue;
+                    const ShadowResolveUniform &uniform =
+                        static_cast<const ShadowResolveUniform *>(
+                            _shadowResolveBuffers[slot].contents)[work.uniformIndex];
+                    [resolveEncoder setViewport:MTLViewport{
+                        static_cast<double>(uniform.targetX),
+                        static_cast<double>(uniform.targetY), 32.0, 32.0, 0.0, 1.0}];
+                    [resolveEncoder setScissorRect:MTLScissorRect{
+                        uniform.targetX, uniform.targetY, 32, 32}];
+                    [resolveEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                       vertexStart:0 vertexCount:3
+                                     instanceCount:1 baseInstance:work.uniformIndex];
+                }
+                [resolveEncoder endEncoding];
             }
         }
 
@@ -3452,14 +3508,9 @@ static void *renderWorker(void *context) {
 
         id<MTL4RenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
         encoder.label = @"DK2 native Metal frame";
-        if (shadowActiveThisFrame) {
-            // Metal 4 resources are untracked: the shadow coverage encoder's
-            // writes to _shadowCoverageTextures[slot] above are not
-            // automatically visible to this pass's fragment sampling of that
-            // same texture. Fragment->Fragment is coarser than necessary
-            // (the shadow pass has no vertex-stage texture writes to wait
-            // on), but it is the safe starting scope; narrow once a GPU
-            // trace confirms which stage actually needs to wait.
+        if (shadowMasksRendered) {
+            // The resolve pass writes the same atlas textures sampled below.
+            // Metal 4 resources are untracked, so make those writes visible.
             [encoder barrierAfterQueueStages:MTLStageFragment
                                  beforeStages:MTLStageFragment
                             visibilityOptions:MTL4VisibilityOptionDevice];
@@ -3576,18 +3627,6 @@ static void *renderWorker(void *context) {
                     setTexture:_whiteTexture.gpuResourceID atIndex:0];
                 [_argumentTables[slot][bank]
                     setSamplerState:_sampler.gpuResourceID atIndex:0];
-                // Shadow coverage: buffer 7 / texture 128 (see
-                // kWorldGeometryShadowBit). _shadowUniformBuffers[slot] is
-                // always a valid allocation (see init) - its `active` field
-                // is the real gate, left clear whenever shadows are
-                // disabled/unavailable/inactive this frame, so binding it
-                // unconditionally here never risks an unbound-buffer fault.
-                [_argumentTables[slot][bank]
-                    setAddress:_shadowUniformBuffers[slot].gpuAddress atIndex:7];
-                [_argumentTables[slot][bank]
-                    setTexture:(shadowActiveThisFrame ? _shadowCoverageTextures[slot].gpuResourceID
-                                                       : _whiteTexture.gpuResourceID)
-                       atIndex:kTextureBindingsPerArgumentTable];
             }
             // Per-frame mesh state: identity camera and zero lights until the
             // producer supplies them, plus per-frame placement of referenced
@@ -3785,7 +3824,7 @@ static void *renderWorker(void *context) {
                             uniform.ambient[3] = 0.0f;
                             uniform.textureIndex = binding.slot;
                             uniform.tint = meshDraw.tint;
-                            uniform.flags = meshDraw.flags | shadowReceiverBit(zEnabled, zWriteEnabled);
+                            uniform.flags = meshDraw.flags;
                             uniform.pad = 0;
                             id<MTLRenderPipelineState> pipeline = _meshOpaquePipeline;
                             if (alphaBlendEnabled || (meshDraw.flags & 2u)) {
@@ -3824,10 +3863,6 @@ static void *renderWorker(void *context) {
                     DK2MDrawMeshInlineCommand inlineDraw;
                     std::memcpy(&inlineDraw, snapshot->bytes.data() + commandOffset,
                                 sizeof(inlineDraw));
-                    // Shadow casters are rendered exclusively by the shadow
-                    // coverage prepass above (see shadowActiveThisFrame) -
-                    // they must never enter a visible scene pass.
-                    if (inlineDraw.flags & DK2M_DRAW_MESH_SHADOW_CASTER) continue;
                     const size_t vertexBytes =
                         static_cast<size_t>(inlineDraw.vertex_count) * kMeshVertexStride;
                     const size_t indexBytes =
@@ -3886,7 +3921,7 @@ static void *renderWorker(void *context) {
                         uniform.ambient[3] = 0.0f;
                         uniform.textureIndex = binding.slot;
                         uniform.tint = meshDebug ? 0xFFFFFFFFu : inlineDraw.tint;
-                        uniform.flags = inlineDraw.flags | shadowReceiverBit(zEnabled, zWriteEnabled);
+                        uniform.flags = inlineDraw.flags;
                         uniform.pad = 0;
                         // pipeline strictly from the draw's own flags: mesh
                         // commands sit at the frame head and must not inherit
@@ -3960,7 +3995,7 @@ static void *renderWorker(void *context) {
                         DrawUniform &uniform = drawUniforms[drawUniformCount];
                         uniform.screenWidth = static_cast<float>(snapshot->width);
                         uniform.screenHeight = static_cast<float>(snapshot->height);
-                        uniform.worldGeometry = shadowReceiverBit(zEnabled, zWriteEnabled) != 0;
+                        uniform.worldGeometry = 0;
                         uniform.textureIndex = currentTextureBinding.slot;
                         uniform.colorOp = textureStage0[1];
                         uniform.colorArg1 = textureStage0[2];

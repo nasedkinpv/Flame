@@ -1,6 +1,7 @@
 #include <metal_bridge/MetalBridgeProducer.h>
 #include <metal_bridge/DK2BridgeProtocol.h>
 #include <metal_bridge/OverlayUnmatte.h>
+#include <dk2/ShadowGpu.h>
 #include <gog_globals.h>
 #include <gog_debug.h>
 #include <dk2_functions.h>
@@ -8,6 +9,7 @@
 #include <d3d.h>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -94,6 +96,9 @@ public:
             for (auto &entry : textures_) entry.second.pending = true;
             // a fresh consumer needs the full atlas map again
             atlasRectsEmitted_ = 0;
+            for (auto &entry : shadowMasks_) {
+                entry.second.lastSentGeneration = entry.second.generation;
+            }
         }
         lastConsumerSession_ = consumerSession;
         lastConsumerFrame_ = consumer;
@@ -132,7 +137,9 @@ public:
         ++commandCount_;
 
         for (DWORD stage = 0; stage < 3; ++stage) {
-            if (boundTextures_[stage]) emitTexture(stage, boundTextures_[stage]);
+            if (boundTextures_[stage]) {
+                emitTexture(stage, boundTextures_[stage], boundSurfaces_[stage]);
+            }
         }
         // Inline buckets accumulated during prepare flush into the fresh
         // frame directly (active_ is already set at this point).
@@ -189,6 +196,7 @@ public:
     void texture(DWORD stage, DWORD textureId, IDirectDrawSurface4 *surface) {
         if (stage >= 3 || !ensureMapped()) return;
         boundTextures_[stage] = textureId;
+        boundSurfaces_[stage] = surface;
         if (textureId) {
             auto found = textures_.find(textureId);
             if (found == textures_.end()) {
@@ -206,7 +214,7 @@ public:
                 flushPendingAtlasRects(reinterpret_cast<uintptr_t>(surface), textureId);
             }
         }
-        if (active_) emitTexture(stage, textureId);
+        if (active_) emitTexture(stage, textureId, surface);
     }
 
     // Assigns (and captures) a bridge texture id for a raw surface that never
@@ -348,6 +356,27 @@ public:
             ++commandCount_;
             ++atlasRectsEmitted_;
         }
+    }
+
+    bool metalShadowsEnabled() const {
+        return metalShadowsEnabled_.load(std::memory_order_relaxed);
+    }
+
+    void shadowMask(const void *handleKey, const void *triangles,
+                    uint32_t triangleCount, uint32_t mode) {
+        if (!handleKey || !metalShadowsEnabled() ||
+            (triangleCount && !triangles)) return;
+        const uint64_t triangleBytes =
+            static_cast<uint64_t>(triangleCount) * sizeof(DK2MShadowTriangle);
+        if (triangleBytes > DK2M_SLOT_CAPACITY - sizeof(DK2MShadowMaskCommand)) return;
+        ShadowMaskState &state = shadowMasks_[reinterpret_cast<uintptr_t>(handleKey)];
+        state.triangles.resize(triangleCount);
+        if (triangleCount) {
+            std::memcpy(state.triangles.data(), triangles,
+                        static_cast<size_t>(triangleBytes));
+        }
+        state.mode = mode;
+        if (++state.generation == 0) ++state.generation;
     }
 
     // Capture-only registration for the GPU mesh path: same cache upkeep as
@@ -736,10 +765,20 @@ private:
         }
     }
 
+    void setMetalShadowsEnabled(bool enabled) {
+        metalShadowsEnabled_.store(enabled, std::memory_order_relaxed);
+        if (!enabled) {
+            for (auto &entry : shadowMasks_) {
+                entry.second.lastSentGeneration = entry.second.generation;
+            }
+        }
+    }
+
     void processInput() {
         DK2MInputState input = {};
         if (!readInput(input)) return;
         if (input.host_pid == 0) {
+            setMetalShadowsEnabled(false);
             if (inputHostPid_ != 0) {
                 releaseAppliedInput();
                 inputHostPid_ = 0;
@@ -762,12 +801,14 @@ private:
             lastInputHeartbeat_ = input.heartbeat;
             lastInputHeartbeatTick_ = now;
         } else if (now - lastInputHeartbeatTick_ > 2000) {
+            setMetalShadowsEnabled(false);
             releaseAppliedInput();
             inputHostPid_ = 0;
             return;
         }
 
         const bool active = (input.flags & DK2M_INPUT_ACTIVE) != 0;
+        setMetalShadowsEnabled((input.flags & DK2M_INPUT_METAL_SHADOWS) != 0);
         if (!newHost && active) {
             const uint32_t eventCount = input.event_write - inputEventWrite_;
             if (eventCount <= DK2M_INPUT_EVENT_CAPACITY) {
@@ -1310,7 +1351,44 @@ private:
         total = value > UINT32_MAX - total ? UINT32_MAX : total + value;
     }
 
-    void emitTexture(DWORD stage, DWORD textureId) {
+    void emitShadowMasks(DWORD textureId, IDirectDrawSurface4 *surface) {
+        if (!textureId || !surface || !metalShadowsEnabled()) return;
+        for (auto &entry : shadowMasks_) {
+            ShadowMaskState &state = entry.second;
+            if (!state.generation || state.lastSentGeneration == state.generation) continue;
+            dk2::shadowgpu::TargetRegion target = {};
+            if (!dk2::shadowgpu::resolveTarget(
+                    reinterpret_cast<const void *>(entry.first), surface, &target)) {
+                continue;
+            }
+            const uint64_t triangleBytes =
+                static_cast<uint64_t>(state.triangles.size()) * sizeof(DK2MShadowTriangle);
+            const uint64_t commandBytes = sizeof(DK2MShadowMaskCommand) + triangleBytes;
+            if (commandBytes > UINT32_MAX || used_ + commandBytes > DK2M_SLOT_CAPACITY) {
+                continue;
+            }
+            DK2MShadowMaskCommand command = {};
+            command.header.type = DK2M_COMMAND_SHADOW_MASK;
+            command.header.size = static_cast<uint32_t>(commandBytes);
+            command.texture_id = textureId;
+            command.target_x = target.x;
+            command.target_y = target.y;
+            command.target_width = target.width;
+            command.target_height = target.height;
+            command.triangle_count = static_cast<uint32_t>(state.triangles.size());
+            command.mode = state.mode;
+            append(&command, sizeof(command));
+            if (triangleBytes) {
+                append(state.triangles.data(), static_cast<uint32_t>(triangleBytes));
+            }
+            ++commandCount_;
+            state.lastSentGeneration = state.generation;
+        }
+    }
+
+    void emitTexture(DWORD stage, DWORD textureId,
+                     IDirectDrawSurface4 *surface = nullptr) {
+        bool textureReadyForShadow = false;
         if (textureId) {
             auto found = textures_.find(textureId);
             if (found != textures_.end()) {
@@ -1337,8 +1415,11 @@ private:
                         texture.sentInCurrentFrame = true;
                     }
                 }
+                textureReadyForShadow = !texture.pending || texture.sentInCurrentFrame;
             }
         }
+
+        if (textureReadyForShadow) emitShadowMasks(textureId, surface);
 
         if (used_ + sizeof(DK2MSetTextureCommand) > DK2M_SLOT_CAPACITY) return;
         DK2MSetTextureCommand binding = {};
@@ -1879,6 +1960,7 @@ private:
     uint32_t textureMicroseconds_ = 0;
     uint32_t overlayMicroseconds_ = 0;
     uint32_t boundTextures_[3] = {};
+    IDirectDrawSurface4 *boundSurfaces_[3] = {};
     uint32_t lastConsumerSession_ = 0;
     uint32_t lastConsumerFrame_ = 0;
     uint32_t inputHostPid_ = 0;
@@ -1891,6 +1973,14 @@ private:
     uint32_t lastInputHeartbeat_ = 0;
     DWORD lastInputHeartbeatTick_ = 0;
     uint8_t appliedKeys_[32] = {};
+    struct ShadowMaskState {
+        std::vector<DK2MShadowTriangle> triangles;
+        uint32_t mode = DK2M_SHADOW_MASK_ALPHA;
+        uint32_t generation = 0;
+        uint32_t lastSentGeneration = 0;
+    };
+    std::unordered_map<uintptr_t, ShadowMaskState> shadowMasks_;
+    std::atomic<bool> metalShadowsEnabled_{false};
     struct MeshState {
         std::vector<uint8_t> blob;  // serialized DK2MMeshRegisterCommand + payload
         bool pending = true;
@@ -1943,6 +2033,10 @@ Producer producer;
 bool isEnabled() {
     char path[2];
     return GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", path, sizeof(path)) != 0;
+}
+
+bool metalShadowsEnabled() {
+    return producer.metalShadowsEnabled();
 }
 
 bool headlessDirectDrawEnabled() {
@@ -2079,6 +2173,11 @@ void reportAtlasRect(const void *pageKey, const char *name, uint32_t x, uint32_t
                      uint32_t w, uint32_t h) {
     if (!isEnabled()) return;
     producer.reportAtlasRect(pageKey, name, x, y, w, h);
+}
+
+void shadowMask(const void *handleKey, const void *triangles,
+                uint32_t triangleCount, uint32_t mode) {
+    producer.shadowMask(handleKey, triangles, triangleCount, mode);
 }
 
 void setGameTickTiming(uint32_t tickMicroseconds) {

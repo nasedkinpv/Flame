@@ -1,6 +1,5 @@
 #include "dk2/engine/primitive/2d/world/CEngineAnimMesh.h"
 
-#include "dk2/MeshGpuEmit.h"
 #include "dk2/MyCESurfHandle.h"
 #include "dk2/MyCESurfScale.h"
 #include "dk2/MyScaledSurface.h"
@@ -187,7 +186,7 @@
 // 13. 0x585386..0x5855C0 -- per-light shadow-decal registration, run once
 //     per light AFTER the whole sub-part loop, IF `g_shadowLevel > 0` and
 //     `f85_count != 0` (the mesh's own resolved-light count, filled in by
-//     `sub_58EC70` at 0x5853b7 -- see the MetalShadows section below).
+//     `sub_58EC70` at 0x5853b7).
 //     Structure verified against the raw opcodes at 0x585417/0x58543b,
 //     confirming the task's own note precisely: the low-detail
 //     (`g_shadowLevel < 2`) call result is cached in
@@ -207,27 +206,6 @@
 //     2-triangle/4-vertex quad (drawFlags_x2[0] = surf->drawFlags raw,
 //     f2C_ = lightIndex + 0x7D0, zeroOrM1 = 0) is appended -- the on-screen
 //     shadow decal itself.
-//
-// ----------------------------------------------------------------------
-// flametal:MetalShadows scoping (task-mandated): dk2::CEngineAnimMesh::
-// sub_5855E0 (EngineAnimShadows.cpp) already early-returns 0 by itself when
-// `g_shadowLevel >= 2 && dk2::meshgpu::shadowsActive()`, but per the task
-// this caller must ALSO skip the surrounding registration -- calling
-// sub_5855E0 at all, the following getByIdx/addToHashList, and the
-// SceneObject2E append that would place the (now-nonexistent, wrong-surface)
-// shadow decal -- rather than just letting it early-return a meaningless
-// handle that still gets registered as if it were real. This is scoped
-// PRECISELY to the `g_shadowLevel >= 2` sub-case inside the per-light loop
-// (see part 13): the `g_shadowLevel < 2` branch is untouched (shadowsActive()
-// has no effect there in the original engine either, since sub_5855E0 only
-// bypasses its OWN body for the >=2 branch). When shadowsActive() is true and
-// `g_shadowLevel >= 2`, this file skips straight to the next light with no
-// call, no getByIdx, no hash-add, no append -- exactly mirroring the
-// "skip BOTH sub_5855E0 calls AND the dependent registration/emission of the
-// shadow decal entirely" instruction, and fixing the double-shadow/wrong-
-// surface issue MetalShadows shadow casting (CEngineAnimMesh.cpp's
-// emitAnimShadowCaster) would otherwise cause when combined with this CPU
-// path still registering a stale/garbage decal surface.
 //
 // ----------------------------------------------------------------------
 // Callee census over 0x584900..0x5855C0 (each verified against its own
@@ -253,10 +231,10 @@
 //     per-light gap_8A[] byte flags used by part 13 -- called once per mesh,
 //     TODO(verify) exact 4-arg signature, see the local declaration below)
 //   0x5855E0 dk2::CEngineAnimMesh::sub_5855E0 (EngineAnimShadows.cpp) x0-N
-//     per mesh (see part 13 / MetalShadows scoping above)
+//     per mesh (see part 13 above)
 //
 // TODO(verify) summary (kept deliberately narrow -- everything else above,
-// including all branch conditions, the MetalShadows scoping, and every
+// including all branch conditions and every
 // SceneObject2E field write, was confirmed against the raw opcodes):
 //   - the exact transient stack path for the worldPos->camSpacePos transform
 //     (part 3);
@@ -580,18 +558,6 @@ void dk2::CEngineAnimMesh::appendToSceneObject2EList(int requestArg) {
                     shadowHandle = resource->init_neg1;
                 }
             } else {
-                // MetalShadows: skip the CPU shadow surface entirely -- see
-                // the file-header note. sub_5855E0 itself already returns 0
-                // for this case, but the original caller (this loop) would
-                // still register that 0 as if it were a real handle; skip
-                // the registration outright instead.
-                if (dk2::g_shadowLevel >= 2 && dk2::meshgpu::shadowsActive()) {
-                    cachedSurf = nullptr;
-                    if (dk2::g_shadowLevel >= 3) {
-                        needCompute = true;
-                    }
-                    continue;
-                }
                 shadowHandle = sub_5855E0(resource, gap_8A[light]);
             }
             if (dk2::g_shadowLevel >= 3) {

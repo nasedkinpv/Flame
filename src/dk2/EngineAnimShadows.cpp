@@ -1,6 +1,6 @@
 #include "dk2/engine/primitive/2d/world/CEngineAnimMesh.h"
 
-#include "dk2/MeshGpuEmit.h"
+#include "dk2/ShadowGpu.h"
 #include "dk2/MyEntryBuf_MyStringHashMap_MyMeshResourceHolder_entry.h"
 #include "dk2/MyMeshResourceHolder.h"
 #include "dk2/MyScaledSurface.h"
@@ -371,38 +371,6 @@ AnimShadowBypassEntry &bypassEntryFor(const void *resource) {
 
 // 005855E0..00585AD0
 int dk2::CEngineAnimMesh::sub_5855E0(CAnimMeshResource *resource, int lightIndex) {
-    // flametal:MetalShadows -- creature shadow CASTING has moved to the GPU
-    // (see CEngineAnimMesh.cpp's sub_5836A0/emitAnimShadowCaster, which now
-    // emits this creature's world-space mesh as a DK2M_DRAW_MESH_SHADOW_
-    // CASTER draw every frame it's drawn at all -- independent of
-    // gog:MeshGpuPath). When that's active and we're on the high-detail
-    // branch below (g_shadowLevel >= 2, the only branch that touches the
-    // real rasterizer), skip the CPU silhouette build entirely: no
-    // shadows_begin_ge23()/shadows_begin_lt23() acquisition (either one
-    // advances the 64-slot shadow-surface round-robin described below --
-    // i.e. "consumes a pool surface" -- even before any rasterization
-    // happens), no vertex projection, no shadows_process_58E080
-    // rasterization, no shadows_end_58E470() bake, no ShadowCache lookup.
-    //
-    // Return-value judgment call: appendToSceneObject2EList (0x584900, the
-    // sole caller, twice per creature per frame) is still untranslated in
-    // this repo, so exactly how it consumes this int is not directly
-    // visible here. Every other "nothing here" handle/pointer sentinel used
-    // throughout this codebase is 0/nullptr (e.g. Obj57AD20.cpp's
-    // `surface ? surface->surfh : nullptr`, MyCESurfHandle checks
-    // elsewhere), and this function's own return value is just whichever
-    // opaque small-int handle shadows_begin_ge23()/shadows_begin_lt23()
-    // produced -- never documented here as meaningful beyond "identifies a
-    // shadow surface to place". 0 is therefore the conservative choice for
-    // "no shadow surface was placed this call", consistent with the
-    // codebase-wide null convention; if the untranslated caller turns out to
-    // dereference it as a raw pointer without a null check, that would
-    // already be a latent bug today (shadows_begin_lt23's underlying id can
-    // itself be 0), not something this bypass introduces.
-    if (g_shadowLevel >= 2 && dk2::meshgpu::shadowsActive()) {
-        return 0;
-    }
-
     // 005855E6..0058563A: acquire the shadow surface handle. This threshold
     // (`cmp eax, 0x2`, opcode bytes 83 f8 02 at 0x5855F0) is one level more
     // permissive than the `>= 3` used just below (and in shadow_sub_5808E0)
@@ -443,7 +411,8 @@ int dk2::CEngineAnimMesh::sub_5855E0(CAnimMeshResource *resource, int lightIndex
     // writeup above buildAnimShadowMatrix's definition). The <2 branch's
     // surface is unrelated and already cheap via its own material-name
     // cache, so it is left untouched.
-    const bool cachingActive = g_shadowLevel >= 2 && o_flametal_shadowCache.get();
+    const bool cachingActive = g_shadowLevel >= 2 && o_flametal_shadowCache.get() &&
+                               !dk2::shadowgpu::active();
     bool cacheHit = false;
     bool cacheBypassed = false;
     shadow_cache::AnimShadowCacheEntry *cacheEntry = nullptr;
