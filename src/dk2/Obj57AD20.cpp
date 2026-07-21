@@ -551,7 +551,12 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     // bit 0x1 -> ONE/ONE additive, bit 0x1000 -> modulate blend (approximated
     // as alpha), default -> opaque with blending disabled.
     uint32_t meshFlags = DK2M_DRAW_MESH_LIT;
-    const uint32_t drawFlags = surface ? surface->drawFlags : 0;
+    // the 0x589300 applier's word is the surface's `flags` field (+0x10):
+    // observed pairs all carry 0x4000 (texture-alpha modulate), with 0x20 =
+    // SRCALPHA blend, 0x1 = additive, 0x1000 = modulate blend, and 0x200 =
+    // alpha-tested cutouts (prison bars, wall-top holes) which binary alpha
+    // makes equivalent to blending.
+    const uint32_t drawFlags = surface ? surface->flags : 0;
     // one-shot log of each distinct (drawFlags, flags) pair seen, to map the
     // real bit layout against the 0x589300 applier
     {
@@ -569,9 +574,8 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                             drawFlags, surface ? surface->flags : 0u);
         }
     }
-    if (drawFlags & 0x20u) meshFlags |= DK2M_DRAW_MESH_ALPHA_BLEND;
+    if (drawFlags & (0x20u | 0x1000u | 0x200u)) meshFlags |= DK2M_DRAW_MESH_ALPHA_BLEND;
     else if (drawFlags & 0x1u) meshFlags |= DK2M_DRAW_MESH_ADDITIVE;
-    else if (drawFlags & 0x1000u) meshFlags |= DK2M_DRAW_MESH_ALPHA_BLEND;
     gog::metal_bridge::drawMeshInline(
         textureId, vertices, vertexCount, indices, indexCount, tint,
         meshFlags,
