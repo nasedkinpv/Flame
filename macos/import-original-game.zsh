@@ -67,7 +67,7 @@ find_payload() {
 }
 
 wine_reg_add() {
-  env WINEPREFIX="${PREFIX}" WINEDEBUG=-all MVK_CONFIG_LOG_LEVEL=0 \
+  env WINEPREFIX="${PREFIX}" WINEDEBUG=-all \
     "${WINE}" reg add "$1" /v "$2" /t "$3" /d "$4" /f >/dev/null
 }
 
@@ -94,7 +94,6 @@ payload="$(find_payload)"
 /bin/mkdir -p "${PREFIX}" "${GAME_PARENT}"
 if [[ ! -f "${PREFIX}/system.reg" ]]; then
   env WINEPREFIX="${PREFIX}" WINEARCH=win64 WINEDEBUG=-all \
-    MVK_CONFIG_LOG_LEVEL=0 \
     WINEDLLOVERRIDES='mscoree,mshtml=' "${WINE}" wineboot -u >/dev/null
 fi
 env WINEPREFIX="${PREFIX}" "${WINESERVER}" -k >/dev/null 2>&1 || true

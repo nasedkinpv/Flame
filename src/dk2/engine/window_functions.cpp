@@ -126,7 +126,7 @@ int *__cdecl dk2::ge_createDirectDrawObject(int *pstatus, GUID *lpGUID, LPDIRECT
     if(*o_gog_enabled) {
         hresult = fake_DirectDrawCreate(lpGUID, lplpDD, NULL);
     } else {
-        hresult = DirectDrawCreate(lpGUID, lplpDD, NULL);
+        hresult = real_DirectDrawCreate(lpGUID, lplpDD, NULL);
     }
     if (hresult != DD_OK) return *pstatus = -1, pstatus;
     if (g_hBullfrogWindow) setHWindow(g_hBullfrogWindow);
@@ -240,4 +240,3 @@ void *__cdecl dk2::readPaletteEntry(void *dst, int idx, int count) {
     }
     return dst;
 }
-

@@ -1274,10 +1274,10 @@ struct DrawUniform {
     float bumpEnvMat1_11;
     float bumpEnvLScale1;
     float bumpEnvLOffset1;
-    // Metal shadows: 1 when this draw had D3DRS_ZENABLE on (i.e. it's
-    // depth-tested world geometry eligible for the shadow-coverage darkening
-    // pass in dk2_fragment), else 0. Host-only bookkeeping, never comes from
-    // the wire protocol.
+    // Metal shadows: 1 for depth-tested, depth-writing world geometry eligible
+    // for shadow darkening. UI and translucent draws commonly leave Z enabled
+    // but disable Z writes, so ZENABLE alone is not a scene/UI boundary.
+    // Host-only bookkeeping, never comes from the wire protocol.
     uint32_t worldGeometry;
 };
 
@@ -1347,11 +1347,15 @@ constexpr NSUInteger kCameraBufferSize = 24 * sizeof(float);
 
 // Host-only bit stitched into MeshDrawUniform.flags / DK2RasterVertex.meshFlags
 // (never a wire-protocol bit - DK2MDrawMeshFlags only defines bits 0..4) to
-// mark a mesh-path draw as depth-tested world geometry, exactly mirroring
-// DrawUniform::worldGeometry for the legacy 1C/2C path. Shared by both so
-// dk2_fragment can gate shadow darkening with one check regardless of which
-// vertex stage produced the fragment.
+// mark a mesh-path draw as depth-tested, depth-writing world geometry,
+// exactly mirroring DrawUniform::worldGeometry for the legacy 1C/2C path.
+// Shared by both so dk2_fragment can gate shadow darkening with one check
+// regardless of which vertex stage produced the fragment.
 constexpr uint32_t kWorldGeometryShadowBit = 1u << 5;
+
+uint32_t shadowReceiverBit(bool zEnabled, bool zWriteEnabled) {
+    return zEnabled && zWriteEnabled ? kWorldGeometryShadowBit : 0u;
+}
 
 // --- Metal shadows: GPU shadow-coverage map for mesh-path casters ---
 // See DK2BridgeProtocol.h's DK2M_DRAW_MESH_SHADOW_CASTER. Casters are
@@ -2236,7 +2240,7 @@ bool inputLogEnabled() {
             // Threshold/intensity are literal constants in DK2Shaders.metal
             // (kDK2BloomThreshold/kDK2BloomIntensity) - kept in sync here as
             // a comment only, this is just a startup confirmation log.
-            NSLog(@"DK2 bloom: pipeline ready, currently %s (threshold=0.70 intensity=0.35); "
+            NSLog(@"DK2 bloom: pipeline ready, currently %s (threshold=0.65 intensity=0.35); "
                   "settings.toml [renderer] bloom, or DK2_BLOOM=0/1.",
                   dk2BloomEnabled() ? "enabled" : "disabled");
         }
@@ -2923,6 +2927,13 @@ static void *renderWorker(void *context) {
         // DK2M_DRAW_MESH_SHADOW_CASTER - they never enter the main scene
         // loop below (see the `continue` in its DRAW_MESH_INLINE branch).
         bool shadowActiveThisFrame = false;
+        auto *shadowUniform =
+            static_cast<ShadowGlobalUniform *>(_shadowUniformBuffers[slot].contents);
+        // Every frame slot keeps its previous contents. Clear `active` even
+        // when shadows are switched off live (or no casters are present),
+        // otherwise the fragment stage samples the white fallback texture
+        // through a stale projection and darkens its whole rectangular AABB.
+        std::memset(shadowUniform, 0, sizeof(ShadowGlobalUniform));
         if (snapshot && dk2ShadowsEnabled() && _shadowsAvailable &&
             _shadowCoverageTextures[slot] && _shadowArgumentTables[slot]) {
             bool haveCamera = false;
@@ -2971,9 +2982,6 @@ static void *renderWorker(void *context) {
                 }
             }
             shadowActiveThisFrame = haveCamera && !shadowDraws.empty();
-            auto *shadowUniform =
-                static_cast<ShadowGlobalUniform *>(_shadowUniformBuffers[slot].contents);
-            std::memset(shadowUniform, 0, sizeof(ShadowGlobalUniform));
             if (shadowActiveThisFrame) {
                 // Reconstruction matrix: invert the 4x4 built from
                 // view_proj's clip-x/clip-y/clip-w rows (row 3 is a dummy
@@ -3402,7 +3410,7 @@ static void *renderWorker(void *context) {
                             uniform.ambient[3] = 0.0f;
                             uniform.textureIndex = binding.slot;
                             uniform.tint = meshDraw.tint;
-                            uniform.flags = meshDraw.flags | (zEnabled ? kWorldGeometryShadowBit : 0u);
+                            uniform.flags = meshDraw.flags | shadowReceiverBit(zEnabled, zWriteEnabled);
                             uniform.pad = 0;
                             id<MTLRenderPipelineState> pipeline = _meshOpaquePipeline;
                             if (alphaBlendEnabled || (meshDraw.flags & 2u)) {
@@ -3503,7 +3511,7 @@ static void *renderWorker(void *context) {
                         uniform.ambient[3] = 0.0f;
                         uniform.textureIndex = binding.slot;
                         uniform.tint = meshDebug ? 0xFFFFFFFFu : inlineDraw.tint;
-                        uniform.flags = inlineDraw.flags | (zEnabled ? kWorldGeometryShadowBit : 0u);
+                        uniform.flags = inlineDraw.flags | shadowReceiverBit(zEnabled, zWriteEnabled);
                         uniform.pad = 0;
                         // pipeline strictly from the draw's own flags: mesh
                         // commands sit at the frame head and must not inherit
@@ -3577,7 +3585,7 @@ static void *renderWorker(void *context) {
                         DrawUniform &uniform = drawUniforms[drawUniformCount];
                         uniform.screenWidth = static_cast<float>(snapshot->width);
                         uniform.screenHeight = static_cast<float>(snapshot->height);
-                        uniform.worldGeometry = zEnabled ? 1u : 0u;
+                        uniform.worldGeometry = shadowReceiverBit(zEnabled, zWriteEnabled) != 0;
                         uniform.textureIndex = currentTextureBinding.slot;
                         uniform.colorOp = textureStage0[1];
                         uniform.colorArg1 = textureStage0[2];

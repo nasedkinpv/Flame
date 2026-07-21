@@ -75,6 +75,10 @@ fail() {
   exit 1
 }
 
+if [[ "${DK2_RUNNER_MODE}" == packaged && "${HEADLESS_DDRAW}" != 1 ]]; then
+  fail "The packaged app uses native DirectDraw surfaces. DK2_HEADLESS_DDRAW=0 is dev-only."
+fi
+
 bridge_frame() {
   [[ -f "${BRIDGE_FILE}" ]] || { print 0; return; }
   /usr/bin/od -An -j20 -N4 -tu4 "${BRIDGE_FILE}" | /usr/bin/tr -d ' '
@@ -126,10 +130,9 @@ if [[ "${DK2_RUNNER_MODE}" == packaged ]]; then
       PATH='/usr/bin:/bin' \
       USER="${USER}" LOGNAME="${LOGNAME:-${USER}}" LANG='en_US.UTF-8' TMPDIR='/tmp' \
       WINEPREFIX="${PREFIX}" WINEDEBUG="${DK2_WINEDEBUG:--all}" \
-      WINEDLLOVERRIDES='ddraw,d3dimm,dinput=b;winedbg.exe=d;mscoree,mshtml=' \
+      WINEDLLOVERRIDES='dinput=b;winedbg.exe=d;mscoree,mshtml=' \
       DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
       DK2_HEADLESS_DDRAW="${HEADLESS_DDRAW}" \
-      MVK_CONFIG_LOG_LEVEL='0' \
       "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
         -skip-launcher -game-res="${GAME_RES}" "${LEVEL_ARGS[@]}" \
         "${MOVIES_ARGS[@]}" -DisableGamma -Sound -Shadows "${SHADOW_LEVEL}" \
@@ -162,10 +165,9 @@ else
     PATH='/usr/bin:/bin' \
     USER="${USER}" LOGNAME="${LOGNAME:-${USER}}" LANG='en_US.UTF-8' TMPDIR='/tmp' \
     WINEPREFIX="${PREFIX}" WINEDEBUG="${DK2_WINEDEBUG:--all}" \
-    WINEDLLOVERRIDES='ddraw,d3dimm,dinput=b;winedbg.exe=d;mscoree,mshtml=' \
+    WINEDLLOVERRIDES='dinput=b;winedbg.exe=d;mscoree,mshtml=' \
     DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
     DK2_HEADLESS_DDRAW="${HEADLESS_DDRAW}" \
-    MVK_CONFIG_LOG_LEVEL='0' \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
       -skip-launcher -game-res="${GAME_RES}" "${LEVEL_ARGS[@]}" \
       "${MOVIES_ARGS[@]}" -DisableGamma -Sound -Shadows "${SHADOW_LEVEL}" \

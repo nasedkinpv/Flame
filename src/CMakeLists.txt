@@ -223,7 +223,6 @@ target_link_libraries(${TARGET} PRIVATE
         # the others libs dk2 depends on
         winmm
         dinput_genlib  # generated in dinput_dll/genlib
-        ddraw  # patch - dont link against gog's PATCH.dll because patch addresses are change after recompilation
         dxguid
 
         # 3rdparty
