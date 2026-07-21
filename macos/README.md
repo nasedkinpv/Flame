@@ -79,6 +79,42 @@ builds take the matching Release Flametal payload from the CI cache; set
 `DK2_FLAMETAL_PAYLOAD=/path/to/artifact` to select one explicitly. A Developer ID
 can be supplied with `DK2_CODESIGN_IDENTITY`; local builds use ad-hoc signing.
 
+## The runner script
+
+`macos/dk2-runner.zsh` is the single script that launches Wine, both in a repo
+checkout and inside the packaged `.app` (where `build-metal-wrapper.zsh` copies
+it in as `Contents/Resources/dk2-game-runner`). It auto-detects which mode it's
+in from its own location (a bundled `Resources/wine` next to it means packaged
+mode: first-run import flow, Flametal payload sync, and error dialogs via
+`osascript`; otherwise dev mode: `.cache/`-relative Wine, plain log output).
+`macos/dk2-wine-runner.zsh` still exists as a deprecated one-line shim that
+execs `dk2-runner.zsh`, so old muscle-memory invocations keep working.
+
+Env overrides (both modes): `DK2_LEVEL`, `DK2_SHADOW_LEVEL`, `DK2_GAME_RES`,
+`DK2_WINE_BIN`, `DK2_METAL_PREFIX`, `DK2_WINEDEBUG`.
+
+The removed `macos/build-wrapper.zsh` and `macos/dk2-flametal.zsh` (and the
+`macos/Info.plist` that only they used) were the legacy single-executable,
+windowed-only packaging path, superseded by `build-metal-wrapper.zsh` +
+the native Metal host.
+
+Wine's Mono and Gecko installers add up to roughly 294 MB of the packaged
+app's ~674 MB (44%) and are never used by DK2. The runner's
+`WINEDLLOVERRIDES` now includes `mscoree,mshtml=` to disable them at runtime.
+Actually dropping them from the bundled Wine payload is pending a fresh-prefix
+smoke test, so `.cache/wine` and the wrapper's Wine payload are left alone for
+now.
+
+## Flametal DLL build options
+
+The `FLAMETAL_WELCOME_WINDOW` CMake option (default `OFF`) controls the
+upstream [Flame](https://github.com/DiaLight/Flame) ImGui welcome/options
+window. We always launch with `-skip-launcher`, so this window never runs in
+practice; when the option is off, its sources are excluded from the `flametal`
+target and ImGui/D3DX9 are not linked into the DLL at all. The code is kept
+around (guarded by `#ifdef FLAMETAL_WELCOME_WINDOW`) for future merges with
+upstream. Pass `-DFLAMETAL_WELCOME_WINDOW=ON` to build it in.
+
 ## Cursor assets
 
 The game cursor is replayed as a final independent Metal quad, so it no longer

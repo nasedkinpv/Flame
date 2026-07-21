@@ -965,22 +965,29 @@ bool dk2ShadowsEnabled() {
     return enabled;
 }
 
-// Fraction of the display's full Retina backing scale used for the drawable
-// (and therefore every render target sized from it: MSAA color/depth, scene
-// color, bloom half-res, shadow coverage). Default 2.0 reproduces today's
-// exact full-backing-scale behavior byte-for-byte; DK2_RENDER_SCALE=1.0 asks
-// for logical-resolution rendering (CAMetalLayer upscales the presented
-// texture to the layer automatically). Clamped to 0.75..2.0.
+// Relative factor of the display's full Retina backing size (i.e.
+// [view convertSizeToBacking:size]) used for the drawable, and therefore
+// every render target sized from it: MSAA color/depth, scene color, bloom
+// half-res, shadow coverage. Default 1.0 reproduces today's full-backing-
+// scale behavior byte-for-byte on any display (1x or 2x); DK2_RENDER_SCALE
+// below 1.0 asks for sub-native rendering (CAMetalLayer upscales the
+// presented texture to the layer automatically). Clamped to 0.375..1.0.
+//
+// This used to be an absolute backing-scale-factor target (default 2.0,
+// divided by the window's actual backingScaleFactor before use): correct on
+// 2x Retina displays, where it canceled out to 1.0x the backing size, but on
+// 1x external displays (backingScaleFactor 1) it left a factor of 2.0
+// uncanceled, silently rendering at 2x the display's native pixel count.
 float dk2RenderScale() {
     static const float scale = [] {
         const char *env = std::getenv("DK2_RENDER_SCALE");
-        float value = 2.0f;
+        float value = 1.0f;
         if (env) {
             char *end = nullptr;
             const float parsed = std::strtof(env, &end);
             if (end != env && parsed > 0.0f) value = parsed;
         }
-        return std::clamp(value, 0.75f, 2.0f);
+        return std::clamp(value, 0.375f, 1.0f);
     }();
     return scale;
 }
@@ -1520,10 +1527,7 @@ bool inputLogEnabled() {
     [CATransaction commit];
     [self.window invalidateCursorRectsForView:self];
     const NSSize backingSize = [self convertSizeToBacking:NSMakeSize(width, height)];
-    const CGFloat backingScaleFactor = self.window.backingScaleFactor;
-    const CGFloat renderScale = backingScaleFactor > 0
-        ? (dk2RenderScale() / backingScaleFactor)
-        : 1.0;
+    const CGFloat renderScale = dk2RenderScale();
     gRequestedDrawableSize.store(
         packSize(CGSizeMake(backingSize.width * renderScale, backingSize.height * renderScale)),
         std::memory_order_release);
@@ -2061,18 +2065,27 @@ bool inputLogEnabled() {
         _multisampleColorTexture.width == width && _multisampleColorTexture.height == height) return YES;
     if (_multisampleColorTexture || _depthTexture) {
         if (_frame && ![_completed waitUntilSignaledValue:_frame timeoutMS:1000]) return NO;
-        if (_multisampleColorTexture) [_resources removeAllocation:_multisampleColorTexture];
-        if (_depthTexture) [_resources removeAllocation:_depthTexture];
+        // _multisampleColorTexture/_depthTexture are never added to
+        // _resources (see below - they are MTLStorageModeMemoryless, which
+        // has no IOAccelResource/GPU memory backing to make resident), so
+        // nothing to remove here for them.
         if (_sceneColorTexture) [_resources removeAllocation:_sceneColorTexture];
         if (_bloomTextureA) [_resources removeAllocation:_bloomTextureA];
         if (_bloomTextureB) [_resources removeAllocation:_bloomTextureB];
     }
+    // Both attachments are write-then-consume-within-the-same-pass only: the
+    // MSAA color is always resolved (MTLStoreActionMultisampleResolve, never
+    // stored itself) and the depth buffer is always MTLStoreActionDontCare
+    // (never sampled - see the grep-checked absence of any shader read of
+    // either texture). Neither is ever read back after the pass ends, so
+    // both are safe as MTLStorageModeMemoryless (TBDR on-chip tile memory
+    // only, no GPU memory backing) instead of MTLStorageModePrivate.
     MTLTextureDescriptor *colorDescriptor = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:_layer.pixelFormat
                                     width:width height:height mipmapped:NO];
     colorDescriptor.textureType = MTLTextureType2DMultisample;
     colorDescriptor.sampleCount = kSampleCount;
-    colorDescriptor.storageMode = MTLStorageModePrivate;
+    colorDescriptor.storageMode = MTLStorageModeMemoryless;
     colorDescriptor.usage = MTLTextureUsageRenderTarget;
     _multisampleColorTexture = [_device newTextureWithDescriptor:colorDescriptor];
 
@@ -2081,14 +2094,15 @@ bool inputLogEnabled() {
                                     width:width height:height mipmapped:NO];
     depthDescriptor.textureType = MTLTextureType2DMultisample;
     depthDescriptor.sampleCount = kSampleCount;
-    depthDescriptor.storageMode = MTLStorageModePrivate;
+    depthDescriptor.storageMode = MTLStorageModeMemoryless;
     depthDescriptor.usage = MTLTextureUsageRenderTarget;
     _depthTexture = [_device newTextureWithDescriptor:depthDescriptor];
     if (!_multisampleColorTexture || !_depthTexture) return NO;
     _multisampleColorTexture.label = @"DK2 4x MSAA color";
     _depthTexture.label = @"DK2 4x MSAA depth";
-    id<MTLAllocation> targets[] = {_multisampleColorTexture, _depthTexture};
-    [_resources addAllocations:targets count:2];
+    // Memoryless textures have no GPU memory backing, so they are never
+    // added to _resources (an MTLResidencySet manages residency of actual
+    // memory allocations - there is nothing here for it to make resident).
 
     if (dk2BloomEnabled() && _bloomAvailable) {
         MTLTextureDescriptor *sceneDescriptor = [MTLTextureDescriptor
@@ -2165,6 +2179,14 @@ bool inputLogEnabled() {
     id<MTL4RenderCommandEncoder> thresholdEncoder =
         [commandBuffer renderCommandEncoderWithDescriptor:thresholdPass];
     thresholdEncoder.label = @"DK2 bloom threshold";
+    // Metal 4 resources are untracked: wait for the main scene pass's MSAA
+    // resolve into _sceneColorTexture (sampled here at index 0) before this
+    // pass's fragment stage reads it. Fragment->Fragment is coarser than the
+    // resolve itself needs; narrow once a GPU trace confirms the real
+    // producer stage.
+    [thresholdEncoder barrierAfterQueueStages:MTLStageFragment
+                                  beforeStages:MTLStageFragment
+                             visibilityOptions:MTL4VisibilityOptionDevice];
     [thresholdEncoder setArgumentTable:table atStages:MTLRenderStageFragment];
     [thresholdEncoder setRenderPipelineState:_bloomThresholdPipeline];
     [thresholdEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -2178,6 +2200,13 @@ bool inputLogEnabled() {
     id<MTL4RenderCommandEncoder> blurHorizontalEncoder =
         [commandBuffer renderCommandEncoderWithDescriptor:blurHorizontalPass];
     blurHorizontalEncoder.label = @"DK2 bloom blur horizontal";
+    // Metal 4 resources are untracked: wait for the threshold pass's write
+    // to _bloomTextureA (sampled here at index 0) before this pass's
+    // fragment stage reads it. See the threshold barrier above for the
+    // narrowing note.
+    [blurHorizontalEncoder barrierAfterQueueStages:MTLStageFragment
+                                       beforeStages:MTLStageFragment
+                                  visibilityOptions:MTL4VisibilityOptionDevice];
     [blurHorizontalEncoder setArgumentTable:table atStages:MTLRenderStageFragment];
     [blurHorizontalEncoder setRenderPipelineState:_bloomBlurHorizontalPipeline];
     [blurHorizontalEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -2191,6 +2220,13 @@ bool inputLogEnabled() {
     id<MTL4RenderCommandEncoder> blurVerticalEncoder =
         [commandBuffer renderCommandEncoderWithDescriptor:blurVerticalPass];
     blurVerticalEncoder.label = @"DK2 bloom blur vertical";
+    // Metal 4 resources are untracked: wait for the horizontal blur pass's
+    // write to _bloomTextureB (sampled here at index 0) before this pass's
+    // fragment stage reads it. See the threshold barrier above for the
+    // narrowing note.
+    [blurVerticalEncoder barrierAfterQueueStages:MTLStageFragment
+                                     beforeStages:MTLStageFragment
+                                visibilityOptions:MTL4VisibilityOptionDevice];
     [blurVerticalEncoder setArgumentTable:table atStages:MTLRenderStageFragment];
     [blurVerticalEncoder setRenderPipelineState:_bloomBlurVerticalPipeline];
     [blurVerticalEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -2205,6 +2241,14 @@ bool inputLogEnabled() {
     id<MTL4RenderCommandEncoder> compositeEncoder =
         [commandBuffer renderCommandEncoderWithDescriptor:compositePass];
     compositeEncoder.label = @"DK2 bloom composite";
+    // Metal 4 resources are untracked: wait for the vertical blur pass's
+    // write to _bloomTextureA (sampled here at index 1, alongside
+    // _sceneColorTexture at index 0 which the main scene pass's own barrier
+    // already covered) before this pass's fragment stage reads it. See the
+    // threshold barrier above for the narrowing note.
+    [compositeEncoder barrierAfterQueueStages:MTLStageFragment
+                                  beforeStages:MTLStageFragment
+                             visibilityOptions:MTL4VisibilityOptionDevice];
     [compositeEncoder setArgumentTable:table atStages:MTLRenderStageFragment];
     [compositeEncoder setRenderPipelineState:_bloomCompositePipeline];
     [compositeEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -2618,6 +2662,18 @@ static void *renderWorker(void *context) {
 
         id<MTL4RenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
         encoder.label = @"DK2 native Metal frame";
+        if (shadowActiveThisFrame) {
+            // Metal 4 resources are untracked: the shadow coverage encoder's
+            // writes to _shadowCoverageTextures[slot] above are not
+            // automatically visible to this pass's fragment sampling of that
+            // same texture. Fragment->Fragment is coarser than necessary
+            // (the shadow pass has no vertex-stage texture writes to wait
+            // on), but it is the safe starting scope; narrow once a GPU
+            // trace confirms which stage actually needs to wait.
+            [encoder barrierAfterQueueStages:MTLStageFragment
+                                 beforeStages:MTLStageFragment
+                            visibilityOptions:MTL4VisibilityOptionDevice];
+        }
         [encoder setDepthStencilState:_depthStates[4][1]];
         if (snapshot) {
             NSUInteger vertexOffset = 0;

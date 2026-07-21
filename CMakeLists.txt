@@ -11,6 +11,11 @@ endif()
 option(USE_CONFIGURE_DATE "Add configure date marker in output build")
 option(DK2_DIR "Dungeon Keeper 2 directory (for comfortable development)")
 
+# Upstream Flame's ImGui welcome/options window. We always launch with
+# -skip-launcher, so it never runs in practice; keep the source around for
+# merges with DiaLight but keep ImGui/D3DX9 out of the shipped DLL by default.
+option(FLAMETAL_WELCOME_WINDOW "Build the ImGui welcome/options launcher window (unused, we always run -skip-launcher)" OFF)
+
 message(STATUS "CMAKE_SYSTEM_VERSION: ${CMAKE_SYSTEM_VERSION}")
 message(STATUS "CMAKE_RC_COMPILER: ${CMAKE_RC_COMPILER}")
 message(STATUS "CMAKE_CXX_COMPILER: ${CMAKE_CXX_COMPILER}")

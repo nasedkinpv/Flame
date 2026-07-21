@@ -1,0 +1,17 @@
+diff --git a/macos/dk2-wine-runner.zsh b/macos/dk2-wine-runner.zsh
+index 813ee2c..a33de4c 100755
+--- a/macos/dk2-wine-runner.zsh
++++ b/macos/dk2-wine-runner.zsh
+@@ -48,7 +48,11 @@ env -i \
+   "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
+     -skip-launcher -game-res="${GAME_RES}" "${LEVEL_ARGS[@]}" \
+     -NoMovies -DisableGamma -Sound -Shadows "${SHADOW_LEVEL}" \
+-    -gog:video:HighRes=true -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
++    -gog:video:Bumpmap=false -gog:video:ExtraAntialias=false \
++    -gog:video:Vwait=false -gog:video:HighRes=false \
++    -gog:video:RealFullscreen=false  \
++    -flametal:MetalShadows=true -gog:MeshGpuPath=false \
++    -flametal:limit-tps=60 -gog:video:Vwait=0 \
+     -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1 >>"${LOG_FILE}" 2>&1
+ 
+ exec env WINEPREFIX="${PREFIX}" "${WINESERVER}" -w

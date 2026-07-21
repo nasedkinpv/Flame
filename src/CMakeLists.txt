@@ -66,9 +66,7 @@ add_library(${TARGET} SHARED
         dk2/CEngineStaticMeshAdd.cpp
         dk2/Shadows.cpp
         dk2/CreateMeshes.cpp
-        dk2/MyComputerPlayer_drop_condition.cpp
         dk2/MyComputerPlayer_drop_condition.h
-        dk2/computer_player_flags.cpp
         dk2/computer_player_flags.h
 
         dk2/components/CFrontEndComponent.cpp
@@ -174,17 +172,6 @@ add_library(${TARGET} SHARED
         patches/gui/game/game_layout.cpp
         patches/gui/game/esc_options/btn_autosave.cpp
 
-        patches/welcome_window/main/imgui_main_dx9.cpp
-        patches/welcome_window/main/imgui_texture_dx9.cpp
-
-#        patches/welcome_window/main/imgui_main_opengl3.cpp
-#        patches/welcome_window/main/imgui_texture_opengl3.cpp
-
-        patches/welcome_window/welcome_window.cpp
-        patches/welcome_window/options_section.cpp
-        patches/welcome_window/MyTimer.cpp
-        patches/welcome_window/alt_res_section.cpp
-
         ${GOG_PATCH_SOURCES}
         ${WEANETR_SOURCES}
 
@@ -196,12 +183,32 @@ target_compile_definitions(${TARGET} PRIVATE
         DIRECT3D_VERSION=0x0600
         NOMINMAX=1
         )
-set_source_files_properties(
-        patches/welcome_window/main/imgui_main_dx9.cpp
-        patches/welcome_window/main/imgui_texture_dx9.cpp
-        PROPERTIES COMPILE_DEFINITIONS
-        DIRECT3D_VERSION=0x0900
-)
+
+# Upstream Flame's ImGui welcome/options window: dead code with our
+# -skip-launcher-only flow, kept out of the shipped DLL by default (see
+# FLAMETAL_WELCOME_WINDOW in the top-level CMakeLists.txt).
+if(FLAMETAL_WELCOME_WINDOW)
+    target_sources(${TARGET} PRIVATE
+            patches/welcome_window/main/imgui_main_dx9.cpp
+            patches/welcome_window/main/imgui_texture_dx9.cpp
+
+#            patches/welcome_window/main/imgui_main_opengl3.cpp
+#            patches/welcome_window/main/imgui_texture_opengl3.cpp
+
+            patches/welcome_window/welcome_window.cpp
+            patches/welcome_window/options_section.cpp
+            patches/welcome_window/MyTimer.cpp
+            patches/welcome_window/alt_res_section.cpp
+            )
+    target_compile_definitions(${TARGET} PRIVATE FLAMETAL_WELCOME_WINDOW=1)
+    set_source_files_properties(
+            patches/welcome_window/main/imgui_main_dx9.cpp
+            patches/welcome_window/main/imgui_texture_dx9.cpp
+            PROPERTIES COMPILE_DEFINITIONS
+            DIRECT3D_VERSION=0x0900
+    )
+endif()
+
 target_link_libraries(${TARGET} PRIVATE
         dkii_genlib dkii_exe_api
 #        gog_patch_dll
@@ -221,8 +228,6 @@ target_link_libraries(${TARGET} PRIVATE
         cimg  # visual debug
         toml  # flametal config
         lodepng  # load/save png
-        imgui D3DX9  # welcome window
-#        imgui opengl32 stb  # welcome window
 
         imm32
         # wsock32 is old link target
@@ -231,6 +236,10 @@ target_link_libraries(${TARGET} PRIVATE
         Version
         Dbghelp
         )
+if(FLAMETAL_WELCOME_WINDOW)
+    target_link_libraries(${TARGET} PRIVATE imgui D3DX9)  # welcome window
+#    target_link_libraries(${TARGET} PRIVATE imgui opengl32 stb)  # welcome window
+endif()
 
 target_compile_options(${TARGET} PRIVATE
         /Gy  # Enable Function-Level Linking

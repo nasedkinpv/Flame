@@ -26,7 +26,9 @@
 #endif
 #include "alternative_resources.h"
 #include "patches/protocol_dump.h"
+#ifdef FLAMETAL_WELCOME_WINDOW
 #include "patches/welcome_window/welcome_window.h"
+#endif
 #include "patches/wine_support.h"
 #include "dk2_functions.h"
 
@@ -100,6 +102,7 @@ void patch::flametalInit(int argc, const char **argv) {
 
     auto skipLauncher = flametal_config::get_cmdl_option(o_skip_launcher.path);
     if(skipLauncher.ty != flametal_config::VT_Boolean || !skipLauncher.bool_value) {
+#ifdef FLAMETAL_WELCOME_WINDOW
         patch::welcome_window::welcome_data_t res;
         res.win32_class_name = L"Flametal_win32";
         res.win32_title = L"DungeonKeeper 2 Flametal";
@@ -109,6 +112,7 @@ void patch::flametalInit(int argc, const char **argv) {
             flametalCleanup();
             ExitProcess(0);
         }
+#endif  // FLAMETAL_WELCOME_WINDOW: without it we always behave as -skip-launcher
     }
 
     flametal_config::save();
