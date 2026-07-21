@@ -7,7 +7,6 @@ How to install:
 - (optional, but recommended) copy `Data` directory with replacement to the game directory
 - run `DKII-DX.exe` as usual
 
-The `Date` folder contains patches by Quuz for level editor
 
 If you have any bugs in the game, please describe them in the GitHub issues: https://github.com/nasedkinpv/Flametal/issues
 It helps a lot if you include steps how to reproduce found bug

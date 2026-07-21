@@ -1,0 +1,44 @@
+Flametal licensing
+==================
+
+This repository contains three distinct bodies of work:
+
+1. Flametal additions — the native macOS port introduced in this fork
+   relative to upstream DiaLight/Flame: the Metal host and bridge
+   (macos/, src/gog_patch_dll/metal_bridge/), the macOS build and
+   packaging scripts, and other changes authored in this fork.
+   Copyright (c) 2025-2026 the Flametal contributors.
+   Licensed under the MIT License (full text below).
+
+2. Upstream Flame decompilation and patch layer, inherited from
+   https://github.com/DiaLight/Flame — copyright its respective
+   authors. Upstream is published without an explicit license; no
+   rights beyond those granted by the upstream authors and applicable
+   law are conveyed here.
+
+3. Dungeon Keeper 2 itself remains copyright Electronic Arts. This
+   project grants no rights to the game. A legally obtained copy
+   (the GOG 1.7 release) is required to build or play.
+
+MIT License (applies to item 1 only)
+------------------------------------
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

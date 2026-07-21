@@ -9,6 +9,8 @@ But you can use `-original-compatible` flag to disable some patches that breaks 
 
 All of the original decompilation work, the DLL function-replacement approach, and the multiplayer/singleplayer bug fixes are [DiaLight](https://github.com/DiaLight)'s, from the upstream [Flame](https://github.com/DiaLight/Flame) project. Flametal builds the native macOS edition described below on top of that foundation; it isn't a rewrite or a replacement of DiaLight's work.
 
+Licensing: see [LICENSE](LICENSE) — the Flametal macOS additions are MIT; the inherited Flame decompilation carries no explicit upstream license; Dungeon Keeper 2 remains (c) Electronic Arts and is never distributed with this project.
+
 ## Native macOS edition
 
 This fork adds a self-contained Apple Silicon app that imports the user's original GOG 1.7 game into an isolated Wine prefix, then streams its Direct3D 3 command buffer to a native AppKit/Metal 4 renderer instead of going through WineD3D. Highlights:
@@ -48,7 +50,6 @@ Note 2: The `Data` directory are not required for this to work, but are recommen
 
 ## Files explained
 
-The `Data` folder in the zip file contains patches by Quuz for level editor
 
 # For Software Developers
 

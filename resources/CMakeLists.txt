@@ -27,6 +27,5 @@ if(VER_COMMENTS_LEN GREATER_EQUAL 255)
     string(APPEND VER_COMMENTS "...")
 endif ()
 
-install(DIRECTORY ${CMAKE_CURRENT_LIST_DIR}/PatchEditorByQuuz/ DESTINATION Data/editor)
 
 install(FILES "${CMAKE_CURRENT_LIST_DIR}/readme.txt" DESTINATION ".")
