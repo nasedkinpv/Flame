@@ -1194,8 +1194,7 @@ id<MTLTexture> composePage(id<MTLDevice> device, uint32_t textureId, PageState &
 // the id has mapped rects with pack art. Called on the TEXTURE_UPDATE path.
 id<MTLTexture> buildFromUpload(id<MTLDevice> device, uint32_t textureId,
                                const uint8_t *pixels, uint32_t width, uint32_t height,
-                               uint32_t pitch, uint32_t *packHits,
-                               uint32_t *pagesComposed) {
+                               uint32_t pitch, uint32_t *packHits) {
     auto it = pages().find(textureId);
     if (it == pages().end() || it->second.rects.empty()) return nil;
     if (width > kMaxPageDim || height > kMaxPageDim || !width || !height) return nil;
@@ -1211,7 +1210,6 @@ id<MTLTexture> buildFromUpload(id<MTLDevice> device, uint32_t textureId,
     st.rebuilds = 0;
     st.demoted = false;
     st.hdTexture = composePage(device, textureId, st, packHits);
-    if (st.hdTexture && pagesComposed) ++*pagesComposed;
     return st.hdTexture;
 }
 
@@ -1274,7 +1272,6 @@ bool applyRectToStored(uint32_t textureId, uint32_t x, uint32_t y,
 // changed this frame. Pages rect-updated too often demote back to a plain
 // 1x texture until their next full upload.
 void rebuildDirty(id<MTLDevice> device, uint32_t *packHits,
-                  uint32_t *pagesComposed, uint32_t *pagesRestored,
                   const std::unordered_set<uint32_t> &suspended,
                   void (^bind)(uint32_t textureId, id<MTLTexture> texture)) {
     uint32_t budget = kMaxRebuildsPerFrame;
@@ -1300,7 +1297,6 @@ void rebuildDirty(id<MTLDevice> device, uint32_t *packHits,
         id<MTLTexture> tex = composePage(device, kv.first, st, packHits);
         if (tex) {
             st.hdTexture = tex;
-            if (pagesComposed) ++*pagesComposed;
             bind(kv.first, tex);
         } else if (st.hdTexture) {
             // Map/pack no longer applies (file deleted, pack disabled):
@@ -1309,19 +1305,10 @@ void rebuildDirty(id<MTLDevice> device, uint32_t *packHits,
                     device, st.pixels1x.data(), st.w, st.h, kv.first);
             if (plain) {
                 st.hdTexture = nil;
-                if (pagesRestored) ++*pagesRestored;
                 bind(kv.first, plain);
             }
         }
     }
-}
-
-size_t residentPageCount() {
-    size_t count = 0;
-    for (const auto &entry : pages()) {
-        if (entry.second.hdTexture) ++count;
-    }
-    return count;
 }
 
 }  // namespace respack
@@ -1530,8 +1517,6 @@ struct FrameMetrics {
     uint32_t packMapCommands = 0;
     uint32_t packMappedRects = 0;
     uint32_t packHits = 0;
-    uint32_t packPagesComposed = 0;
-    uint32_t packPagesRestored = 0;
     uint32_t shadowLive = 0;
     uint32_t shadowMasksReceived = 0;
     uint32_t shadowMasksRendered = 0;
@@ -1572,8 +1557,7 @@ public:
         NSLog(@"PERF host us p50/p95/p99: encode=%u/%u/%u drawable-wait=%u/%u/%u "
                "gpu-wait=%u/%u/%u gpu-complete=%u/%u/%u; diagnostics totals: "
                "fvf1=%llu fvf2=%llu missing-texture=%llu binding-overflow=%llu invalid-draw=%llu "
-               "pack-maps(valid/received)=%llu/%llu pack-hits=%llu "
-               "pack-pages(composed/restored)=%llu/%llu resident=%zu",
+               "pack-maps(accepted/received)=%llu/%llu pack-hits=%llu",
               p(&FrameMetrics::encodeUs, 50), p(&FrameMetrics::encodeUs, 95),
               p(&FrameMetrics::encodeUs, 99), p(&FrameMetrics::drawableWaitUs, 50),
               p(&FrameMetrics::drawableWaitUs, 95), p(&FrameMetrics::drawableWaitUs, 99),
@@ -1583,9 +1567,7 @@ public:
               total(&FrameMetrics::fvf1Draws), total(&FrameMetrics::fvf2Draws),
               total(&FrameMetrics::missingTextures), total(&FrameMetrics::bindingOverflows),
               total(&FrameMetrics::invalidDraws), total(&FrameMetrics::packMappedRects),
-              total(&FrameMetrics::packMapCommands), total(&FrameMetrics::packHits),
-              total(&FrameMetrics::packPagesComposed),
-              total(&FrameMetrics::packPagesRestored), respack::residentPageCount());
+              total(&FrameMetrics::packMapCommands), total(&FrameMetrics::packHits));
         NSLog(@"PERF producer us p50/p95/p99: draw-copy=%u/%u/%u texture=%u/%u/%u "
                "overlay=%u/%u/%u",
               p(&FrameMetrics::producerDrawCopyUs, 50), p(&FrameMetrics::producerDrawCopyUs, 95),
@@ -2372,11 +2354,6 @@ bool inputLogEnabled() {
         id<MTLTexture> ring[kFramesInFlight] = {};
     };
     std::unordered_map<uint32_t, DynamicTexture> _dynamicTextures;
-    struct RetiredAllocation {
-        id<MTLAllocation> allocation;
-        uint64_t afterValue;
-    };
-    std::vector<RetiredAllocation> _retiredAllocations;
     std::vector<CommandView> _commandViews;
     std::vector<TextureBindingEntry> _frameTextureBindings;
     TelemetryWindow _telemetry;
@@ -3042,18 +3019,7 @@ static void *renderWorker(void *context) {
     @autoreleasepool {
         const auto encodeStarted = TelemetryClock::now();
         FrameMetrics metrics = {};
-        __block BOOL residencyChanged = NO;
         const uint64_t completedValue = _completed.signaledValue;
-        for (auto retired = _retiredAllocations.begin();
-             retired != _retiredAllocations.end();) {
-            if (retired->afterValue > completedValue) {
-                ++retired;
-                continue;
-            }
-            [_resources removeAllocation:retired->allocation];
-            retired = _retiredAllocations.erase(retired);
-            residencyChanged = YES;
-        }
         for (NSUInteger index = 0; index < kFramesInFlight; ++index) {
             if (_submittedValue[index] && _submittedValue[index] <= completedValue) {
                 metrics.gpuCompleteUs = std::max(
@@ -3146,25 +3112,7 @@ static void *renderWorker(void *context) {
         const double t = update.targetPresentationTimestamp;
         const double pulse = 0.5 + 0.5 * std::sin(t * 1.8);
         MTLClearColor clearColor = MTLClearColorMake(0.025 + pulse * 0.035, 0.07, 0.10 + pulse * 0.08, 1.0);
-        void (^retireTexture)(id<MTLTexture>) = ^(id<MTLTexture> texture) {
-            if (!texture) return;
-            const auto duplicate = std::find_if(
-                _retiredAllocations.begin(), _retiredAllocations.end(),
-                [texture](const RetiredAllocation &entry) {
-                    return entry.allocation == texture;
-                });
-            if (duplicate == _retiredAllocations.end()) {
-                _retiredAllocations.push_back({texture, _frame});
-            }
-        };
-        void (^installTexture)(uint32_t, id<MTLTexture>) =
-            ^(uint32_t textureId, id<MTLTexture> texture) {
-                if (!texture || _textures[textureId] == texture) return;
-                retireTexture(_textures[textureId]);
-                _textures[textureId] = texture;
-                [_resources addAllocation:texture];
-                residencyChanged = YES;
-            };
+        __block BOOL residencyChanged = NO;
         std::unordered_set<uint32_t> shadowTargetIds;
         if (snapshot && _shadowsAvailable) {
             for (const CommandView &view : _commandViews) {
@@ -3222,14 +3170,13 @@ static void *renderWorker(void *context) {
             promoted.label = [NSString stringWithFormat:@"DK2 shadow atlas %u", textureId];
             [promoted replaceRegion:MTLRegionMake2D(0, 0, promoted.width, promoted.height)
                         mipmapLevel:0 withBytes:pixels.data() bytesPerRow:targetWidth * 4];
-            for (auto &ringTexture : dyn.ring) {
-                if (ringTexture != oldTexture) retireTexture(ringTexture);
-                ringTexture = nil;
-            }
+            for (auto &ringTexture : dyn.ring) ringTexture = nil;
             dyn.dynamic = true;
             dyn.ringIndex = 0;
             dyn.ring[0] = promoted;
-            installTexture(textureId, promoted);
+            _textures[textureId] = promoted;
+            [_resources addAllocation:promoted];
+            residencyChanged = YES;
         }
         if (snapshot) {
             for (const CommandView &view : _commandViews) {
@@ -3290,8 +3237,7 @@ static void *renderWorker(void *context) {
                                                           textureUpdate.width,
                                                           textureUpdate.height,
                                                           textureUpdate.row_pitch,
-                                                          &metrics.packHits,
-                                                          &metrics.packPagesComposed);
+                                                          &metrics.packHits);
                             if (!hd) {
                                 hd = texhd::lookup(_device, pixels, textureUpdate.width,
                                                    textureUpdate.height, textureUpdate.row_pitch);
@@ -3299,12 +3245,6 @@ static void *renderWorker(void *context) {
                             if (hd) {
                                 dyn.misses = 0;
                                 if (dyn.dynamic) {
-                                    id<MTLTexture> currentTexture = _textures[key];
-                                    for (auto &ringTexture : dyn.ring) {
-                                        if (ringTexture != currentTexture) retireTexture(ringTexture);
-                                        ringTexture = nil;
-                                    }
-                                    dyn.ringIndex = 0;
                                     dyn.dynamic = false;
                                     NSLog(@"texture id %u recovered from dynamic: HD lookup back on",
                                           textureUpdate.texture_id);
@@ -3364,7 +3304,11 @@ static void *renderWorker(void *context) {
                                               textureUpdate.row_pitch, textureUpdate.texture_id);
                             }
                         } else if (hd) {
-                            installTexture(key, hd);
+                            if (_textures[key] != hd) {
+                                _textures[key] = hd;
+                                [_resources addAllocation:hd];
+                                residencyChanged = YES;
+                            }
                         } else {
                         id<MTLTexture> texture = _textures[key];
                         if (!texture || texture.width != textureUpdate.width ||
@@ -3382,7 +3326,9 @@ static void *renderWorker(void *context) {
                             texture = [_device newTextureWithDescriptor:descriptor];
                             if (texture) {
                                 texture.label = [NSString stringWithFormat:@"DK2 texture %u", textureUpdate.texture_id];
-                                installTexture(key, texture);
+                                _textures[key] = texture;
+                                [_resources addAllocation:texture];
+                                residencyChanged = YES;
                             }
                         }
                         if (texture) {
@@ -3441,11 +3387,14 @@ static void *renderWorker(void *context) {
         // Resource-pack pages whose atlas map or content changed this frame
         // (PAGE_ATLAS_MAP after the upload, or a rect update into a mapped
         // page) are rebuilt here from the stored 1x pixels.
-        respack::rebuildDirty(_device, &metrics.packHits,
-                              &metrics.packPagesComposed, &metrics.packPagesRestored,
-                              shadowTargetIds,
+        respack::rebuildDirty(_device, &metrics.packHits, shadowTargetIds,
                               ^(uint32_t textureId, id<MTLTexture> texture) {
-            installTexture(textureId, texture);
+            if (!texture) return;
+            if (_textures[textureId] != texture) {
+                _textures[textureId] = texture;
+                [_resources addAllocation:texture];
+                residencyChanged = YES;
+            }
         });
         if (residencyChanged) [_resources commit];
 
