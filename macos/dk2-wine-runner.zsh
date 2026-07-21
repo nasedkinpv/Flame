@@ -17,6 +17,7 @@ readonly LOG_DIR="${HOME}/Library/Logs/Dungeon Keeper II Metal"
 readonly LOG_FILE="${LOG_DIR}/game.log"
 readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-3}"
 readonly LEVEL="${DK2_LEVEL:-}"
+readonly GAME_RES="${DK2_GAME_RES:-1920x1200}"
 LEVEL_ARGS=()
 [[ -n "${LEVEL}" ]] && LEVEL_ARGS=(-LEVEL "${LEVEL}" -Q)
 
@@ -43,7 +44,7 @@ env -i \
   DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
   MVK_CONFIG_LOG_LEVEL='0' \
   "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
-    -skip-launcher -game-res=1600x1200 "${LEVEL_ARGS[@]}" \
+    -skip-launcher -game-res="${GAME_RES}" "${LEVEL_ARGS[@]}" \
     -NoMovies -DisableGamma -Sound -Shadows "${SHADOW_LEVEL}" \
     -gog:video:HighRes=true -gog:video:RealFullscreen=false -gog:video:Vwait=0 \
     -gog:misc:CpuIdle=1 -gog:misc:RestoreMode=1 >>"${LOG_FILE}" 2>&1
