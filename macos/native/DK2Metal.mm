@@ -1423,6 +1423,11 @@ bool inputLogEnabled() {
     id<MTLRenderPipelineState> _bloomBlurVerticalPipeline;
     id<MTLRenderPipelineState> _bloomCompositePipeline;
     id<MTL4ArgumentTable> _bloomArgumentTables[kFramesInFlight];
+    // Tracks whether bloom setup actually succeeded at runtime (metallib
+    // missing a function, pipeline/argument-table creation failing, etc.).
+    // Any such failure logs loudly and clears this instead of failing the
+    // whole renderer init - bloom is a cosmetic extra, never load-bearing.
+    BOOL _bloomAvailable;
     std::unordered_map<uint32_t, id<MTLTexture>> _textures;
     id<MTLResidencySet> _resources;
     id<MTL4CommandAllocator> _allocators[kFramesInFlight];
@@ -1627,10 +1632,25 @@ bool inputLogEnabled() {
         _bloomCompositePipeline = bloomVertexFunction && bloomCompositeFragment
             ? [_device newRenderPipelineStateWithDescriptor:bloomPipelineDescriptor error:&error] : nil;
 
-        if (!_bloomSampler || !_bloomThresholdPipeline || !_bloomBlurHorizontalPipeline ||
-            !_bloomBlurVerticalPipeline || !_bloomCompositePipeline) {
-            fail([NSString stringWithFormat:@"Metal bloom pipeline failed: %@", error.localizedDescription ?: @"library missing"]);
-            return nil;
+        // Bloom is a cosmetic extra layered on top of a renderer that must
+        // otherwise come up: a metallib mismatch or pipeline-state failure
+        // here logs loudly and disables bloom for the process lifetime
+        // instead of taking down the whole renderer via fail()/return nil.
+        _bloomAvailable = _bloomSampler && _bloomThresholdPipeline && _bloomBlurHorizontalPipeline &&
+            _bloomBlurVerticalPipeline && _bloomCompositePipeline;
+        if (!_bloomAvailable) {
+            NSLog(@"WARNING: Metal bloom setup failed (%@); continuing with bloom disabled.",
+                  error.localizedDescription ?: @"bloom function(s) missing from DK2Shaders.metallib");
+            _bloomSampler = nil;
+            _bloomThresholdPipeline = nil;
+            _bloomBlurHorizontalPipeline = nil;
+            _bloomBlurVerticalPipeline = nil;
+            _bloomCompositePipeline = nil;
+        } else {
+            // Threshold/intensity are literal constants in DK2Shaders.metal
+            // (kDK2BloomThreshold/kDK2BloomIntensity) - kept in sync here as
+            // a comment only, this is just a startup confirmation log.
+            NSLog(@"DK2 bloom: enabled (threshold=0.70 intensity=0.35); set DK2_BLOOM=0 to disable.");
         }
     }
 
@@ -1710,7 +1730,7 @@ bool inputLogEnabled() {
             [_argumentTables[index][bank]
                 setSamplerState:_sampler.gpuResourceID atIndex:0];
         }
-        if (dk2BloomEnabled()) {
+        if (_bloomAvailable) {
             MTL4ArgumentTableDescriptor *bloomTableDescriptor =
                 [[MTL4ArgumentTableDescriptor alloc] init];
             bloomTableDescriptor.maxTextureBindCount = 2;
@@ -1720,8 +1740,17 @@ bool inputLogEnabled() {
             _bloomArgumentTables[index] =
                 [_device newArgumentTableWithDescriptor:bloomTableDescriptor error:&error];
             if (!_bloomArgumentTables[index]) {
-                fail(@"Metal bloom argument table creation failed.");
-                return nil;
+                // Same cosmetic-extra reasoning as the pipeline setup above:
+                // log loudly, disable bloom for good, keep the renderer alive.
+                NSLog(@"WARNING: Metal bloom argument table creation failed for frame slot %lu (%@); "
+                       "disabling bloom.", index, error.localizedDescription ?: @"unknown error");
+                _bloomAvailable = NO;
+                _bloomSampler = nil;
+                _bloomThresholdPipeline = nil;
+                _bloomBlurHorizontalPipeline = nil;
+                _bloomBlurVerticalPipeline = nil;
+                _bloomCompositePipeline = nil;
+                continue;
             }
             [_bloomArgumentTables[index] setSamplerState:_bloomSampler.gpuResourceID atIndex:0];
         }
@@ -1792,7 +1821,7 @@ bool inputLogEnabled() {
     id<MTLAllocation> targets[] = {_multisampleColorTexture, _depthTexture};
     [_resources addAllocations:targets count:2];
 
-    if (dk2BloomEnabled()) {
+    if (dk2BloomEnabled() && _bloomAvailable) {
         MTLTextureDescriptor *sceneDescriptor = [MTLTextureDescriptor
             texture2DDescriptorWithPixelFormat:_layer.pixelFormat
                                         width:width height:height mipmapped:NO];
@@ -1810,7 +1839,19 @@ bool inputLogEnabled() {
         bloomDescriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
         _bloomTextureA = [_device newTextureWithDescriptor:bloomDescriptor];
         _bloomTextureB = [_device newTextureWithDescriptor:bloomDescriptor];
-        if (!_sceneColorTexture || !_bloomTextureA || !_bloomTextureB) return NO;
+        if (!_sceneColorTexture || !_bloomTextureA || !_bloomTextureB) {
+            // Never fail the base scene targets over a cosmetic extra: log
+            // loudly, drop back to presenting straight to the drawable (the
+            // per-frame bloomActive check below re-derives from these
+            // pointers, so nil here is enough to disable it), and keep going.
+            NSLog(@"WARNING: Metal bloom render target allocation failed at %lux%lu; "
+                   "disabling bloom.", (unsigned long)width, (unsigned long)height);
+            _bloomAvailable = NO;
+            _sceneColorTexture = nil;
+            _bloomTextureA = nil;
+            _bloomTextureB = nil;
+            return YES;
+        }
         _bloomTextureA.label = @"DK2 bloom half-res A";
         _bloomTextureB.label = @"DK2 bloom half-res B";
         id<MTLAllocation> bloomTargets[] = {_sceneColorTexture, _bloomTextureA, _bloomTextureB};
@@ -1829,6 +1870,23 @@ bool inputLogEnabled() {
                                  slot:(NSUInteger)slot
                      drawableTexture:(id<MTLTexture>)drawableTexture {
     id<MTL4ArgumentTable> table = _bloomArgumentTables[slot];
+    // Defense in depth: the caller only invokes this when every one of these
+    // is already known non-nil, but never risk encoding a pass with a nil
+    // pipeline/table/texture (that is API-validation-fatal, unlike an
+    // Objective-C nil message send) - log once and bail so the frame still
+    // presents (unresolved bloom this frame, not a torn-down process).
+    if (!table || !_bloomThresholdPipeline || !_bloomBlurHorizontalPipeline ||
+        !_bloomBlurVerticalPipeline || !_bloomCompositePipeline ||
+        !_sceneColorTexture || !_bloomTextureA || !_bloomTextureB) {
+        static bool loggedOnce = false;
+        if (!loggedOnce) {
+            loggedOnce = true;
+            NSLog(@"WARNING: encodeBloomIntoCommandBuffer called with a missing bloom "
+                   "resource; skipping bloom for this and later frames.");
+        }
+        _bloomAvailable = NO;
+        return;
+    }
 
     [table setTexture:_sceneColorTexture.gpuResourceID atIndex:0];
     MTL4RenderPassDescriptor *thresholdPass = [[MTL4RenderPassDescriptor alloc] init];
@@ -2145,7 +2203,9 @@ static void *renderWorker(void *context) {
         if (residencyChanged) [_resources commit];
         MTL4RenderPassDescriptor *pass = [[MTL4RenderPassDescriptor alloc] init];
         MTLRenderPassColorAttachmentDescriptor *color = pass.colorAttachments[0];
-        const BOOL bloomActive = dk2BloomEnabled() && _sceneColorTexture != nil;
+        const BOOL bloomActive = dk2BloomEnabled() && _bloomAvailable &&
+            _sceneColorTexture != nil && _bloomTextureA != nil && _bloomTextureB != nil &&
+            _bloomArgumentTables[slot] != nil;
         color.texture = _multisampleColorTexture;
         color.resolveTexture = bloomActive ? _sceneColorTexture : update.drawable.texture;
         color.loadAction = MTLLoadActionClear;
