@@ -2,8 +2,8 @@
 // Created by DiaLight on 08.11.2024.
 //
 
-#ifndef FLAME_BULLFROGNET_H
-#define FLAME_BULLFROGNET_H
+#ifndef FLAMETAL_BULLFROGNET_H
+#define FLAMETAL_BULLFROGNET_H
 
 #include "NetworkServiceProvider.h"
 #include "DnsResolver.h"
@@ -149,4 +149,4 @@ static_assert(sizeof(BullfrogNET) == 0x6D7);
 
 }  // namespace net
 
-#endif //FLAME_BULLFROGNET_H
+#endif //FLAMETAL_BULLFROGNET_H

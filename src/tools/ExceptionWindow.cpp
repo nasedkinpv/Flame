@@ -10,8 +10,8 @@
 #include <iostream>
 #include "win32_gui_layout.h"
 
-#define FlameException_title _T("DK2-Flame exception")
-#define FlameException_class _T("DK2-Flame-ExceptionWindow")
+#define FlametalException_title _T("DK2-Flametal exception")
+#define FlametalException_class _T("DK2-Flametal-ExceptionWindow")
 
 
 gui::edit_elem_t TextField(
@@ -193,7 +193,7 @@ void showError(const char *fmt, ...) {
     WriteConsoleA(GetStdHandle(STD_OUTPUT_HANDLE), tmp, len, NULL, NULL);
 #else
     tmp[len] = '\0';
-    MessageBox(NULL, tmp, FlameException_title, MB_ICONERROR | MB_DEFAULT_DESKTOP_ONLY | MB_TASKMODAL);
+    MessageBox(NULL, tmp, FlametalException_title, MB_ICONERROR | MB_DEFAULT_DESKTOP_ONLY | MB_TASKMODAL);
 #endif
     va_end(ap);
 }
@@ -215,7 +215,7 @@ BOOL ExceptionWindow::init(HINSTANCE hInstance) {
     wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
     wcex.hbrBackground = (HBRUSH) (COLOR_WINDOW + 1);
     wcex.lpszMenuName = NULL;
-    wcex.lpszClassName = FlameException_class;
+    wcex.lpszClassName = FlametalException_class;
     wcex.hIconSm = LoadIcon(wcex.hInstance, IDI_APPLICATION);
 
     if (!RegisterClassEx(&wcex)) {
@@ -231,8 +231,8 @@ BOOL ExceptionWindow::show(HINSTANCE hInstance) {
 
     HWND hWnd = CreateWindowEx(
             WS_EX_OVERLAPPEDWINDOW | WS_EX_TOPMOST,
-            FlameException_class,
-            FlameException_title,
+            FlametalException_class,
+            FlametalException_title,
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT, CW_USEDEFAULT, 640, 480,
             NULL,

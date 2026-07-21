@@ -2,8 +2,8 @@
 // Created by DiaLight on 19.12.2024.
 //
 
-#ifndef FLAME_MLDPLAY_H
-#define FLAME_MLDPLAY_H
+#ifndef FLAMETAL_MLDPLAY_H
+#define FLAMETAL_MLDPLAY_H
 
 #include <Windows.h>
 #include "structs.h"
@@ -136,4 +136,4 @@ static_assert(sizeof(MLDPlay) == 0x1C6);
 
 }  // namespace net
 
-#endif //FLAME_MLDPLAY_H
+#endif //FLAMETAL_MLDPLAY_H

@@ -2,8 +2,8 @@
 // Created by DiaLight on 08.08.2024.
 //
 
-#ifndef FLAME_ENTITIES_TYPE_H
-#define FLAME_ENTITIES_TYPE_H
+#ifndef FLAMETAL_ENTITIES_TYPE_H
+#define FLAMETAL_ENTITIES_TYPE_H
 
 
 #define CThing_types(cb) \
@@ -108,4 +108,4 @@ enum CObject_typeId {
 };
 const char *CObject_typeId_toString(int ty);
 
-#endif //FLAME_ENTITIES_TYPE_H
+#endif //FLAMETAL_ENTITIES_TYPE_H

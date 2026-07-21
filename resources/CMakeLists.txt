@@ -8,7 +8,7 @@ set(VER_PROJECT_URL "https://github.com/DiaLight/Flame")
 
 set(DKII_ICON "${CMAKE_CURRENT_LIST_DIR}/packed_icon.ico")
 set(VER_COMMENTS "url: ${VER_PROJECT_URL}")
-set(VER_FILE_SUFFIX " Flame build")
+set(VER_FILE_SUFFIX " Flametal build")
 if(NOT VER_BUILD_NUMBER EQUAL 0)
     string(APPEND VER_FILE_SUFFIX ".${VER_BUILD_NUMBER}")
 endif ()
@@ -27,7 +27,6 @@ if(VER_COMMENTS_LEN GREATER_EQUAL 255)
     string(APPEND VER_COMMENTS "...")
 endif ()
 
-# https://discord.com/channels/480505152806191114/1289590948702982176/1311063421818638396
 install(DIRECTORY ${CMAKE_CURRENT_LIST_DIR}/PatchEditorByQuuz/ DESTINATION Data/editor)
 
 install(FILES "${CMAKE_CURRENT_LIST_DIR}/readme.txt" DESTINATION ".")

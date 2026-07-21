@@ -2,8 +2,8 @@
 // Created by DiaLight on 10.01.2025.
 //
 
-#ifndef FLAME_WEANETR_MEMORY_H
-#define FLAME_WEANETR_MEMORY_H
+#ifndef FLAMETAL_WEANETR_MEMORY_H
+#define FLAMETAL_WEANETR_MEMORY_H
 
 #include <utility>
 
@@ -32,4 +32,4 @@ namespace net {
 
 }
 
-#endif //FLAME_WEANETR_MEMORY_H
+#endif //FLAMETAL_WEANETR_MEMORY_H

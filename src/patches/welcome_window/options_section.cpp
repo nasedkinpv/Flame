@@ -29,9 +29,9 @@ void OptionsSection::load() {
         std::map<std::string, int> byCategories;
     };
     std::map<std::string, root_idx_t> byRoots;
-    flame_config::iterateDefinedOptions([&](flame_config::defined_flame_option& opt) {
-        if(opt.group == flame_config::OG_HiddenState) return;
-        if(opt.group == flame_config::OG_GameProgress) return;
+    flametal_config::iterateDefinedOptions([&](flametal_config::defined_flametal_option& opt) {
+        if(opt.group == flametal_config::OG_HiddenState) return;
+        if(opt.group == flametal_config::OG_GameProgress) return;
         std::string path(opt.path);
 
         root_idx_t *pRoot = nullptr;
@@ -92,11 +92,11 @@ void OptionsSection::save() {
         for(auto& cat : root.categories) {
             for(auto& o : cat.options) {
                 if(o.value == o.opt->value) continue;
-                flame_config::set_option(o.opt->path, o.value);
+                flametal_config::set_option(o.opt->path, o.value);
             }
         }
     }
-    if(flame_config::changed()) flame_config::save();
+    if(flametal_config::changed()) flametal_config::save();
 }
 
 static char *formatStrId(const std::string &name, bool isChanged) {
@@ -131,8 +131,8 @@ void OptionsSection::render() {
                             bool isChanged = o.value == opt.value;
                             if(isChanged) ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(33./255, 79./255, 102./255, 138./255));
                             switch (o.value.ty) {
-                            case flame_config::VT_None: break;
-                            case flame_config::VT_String: {
+                            case flametal_config::VT_None: break;
+                            case flametal_config::VT_String: {
                                 ImGui::SetNextItemWidth(200);
                                 if(ImGui::InputText(o.name.c_str(), o.value.str_value.data(), o.value.str_value.capacity() + 1, ImGuiInputTextFlags_CallbackResize, [](ImGuiInputTextCallbackData* data) -> int {
                                         auto& str = *(std::string *)data->UserData;
@@ -151,7 +151,7 @@ void OptionsSection::render() {
                                 if(opt.help && *opt.help) {ImGui::SameLine(); HelpMarker(opt.help);}
                                 break;
                             }
-                            case flame_config::VT_Boolean: {
+                            case flametal_config::VT_Boolean: {
                                 ImGui::SetNextItemWidth(200);
                                 if(ImGui::Checkbox(o.name.c_str(), &o.value.bool_value)) {
                                     //                                        printf("changed bool %s\n", opt.path);
@@ -160,7 +160,7 @@ void OptionsSection::render() {
                                 if(opt.help && *opt.help) {ImGui::SameLine(); HelpMarker(opt.help);}
                                 break;
                             }
-                            case flame_config::VT_Int: {
+                            case flametal_config::VT_Int: {
                                 ImGui::SetNextItemWidth(200);
                                 if(ImGui::DragInt(o.name.c_str(), &o.value.int_value, 1)) {
                                     //                                        printf("changed int %s: %d\n", opt.path, o.value.int_value);
@@ -169,7 +169,7 @@ void OptionsSection::render() {
                                 if(opt.help && *opt.help) {ImGui::SameLine(); HelpMarker(opt.help);}
                                 break;
                             }
-                            case flame_config::VT_Float: {
+                            case flametal_config::VT_Float: {
                                 ImGui::SetNextItemWidth(200);
                                 if(ImGui::DragFloat(o.name.c_str(), &o.value.float_value, 0.1)) {
                                     //                                        printf("changed float %s: %.2f\n", opt.path, o.value.float_value);

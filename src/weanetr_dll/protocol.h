@@ -2,8 +2,8 @@
 // Created by DiaLight on 17.12.2024.
 //
 
-#ifndef FLAME_PROTOCOL_H
-#define FLAME_PROTOCOL_H
+#ifndef FLAMETAL_PROTOCOL_H
+#define FLAMETAL_PROTOCOL_H
 
 #include <Windows.h>
 #include "structs.h"
@@ -292,4 +292,4 @@ static_assert(sizeof(ScheduledPacket_B_PlayerList) == 0x1E3);
 
 }  // namespace net
 
-#endif //FLAME_PROTOCOL_H
+#endif //FLAMETAL_PROTOCOL_H

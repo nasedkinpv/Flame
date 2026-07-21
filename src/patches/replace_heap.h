@@ -2,8 +2,8 @@
 // Created by DiaLight on 9/23/2025.
 //
 
-#ifndef FLAME_REPLACE_HEAP_H
-#define FLAME_REPLACE_HEAP_H
+#ifndef FLAMETAL_REPLACE_HEAP_H
+#define FLAMETAL_REPLACE_HEAP_H
 
 
 namespace patch::replace_heap {
@@ -18,4 +18,4 @@ namespace patch::replace_heap {
 }
 
 
-#endif // FLAME_REPLACE_HEAP_H
+#endif // FLAMETAL_REPLACE_HEAP_H

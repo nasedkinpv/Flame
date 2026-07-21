@@ -2,8 +2,8 @@
 // Created by DiaLight on 20.07.2024.
 //
 
-#ifndef FLAME_MICRO_PATCHES_H
-#define FLAME_MICRO_PATCHES_H
+#ifndef FLAMETAL_MICRO_PATCHES_H
+#define FLAMETAL_MICRO_PATCHES_H
 
 #include <Windows.h>
 #include <cstdint>
@@ -151,4 +151,4 @@ namespace multi_interface_fix {
 }  // namespace patch
 
 
-#endif //FLAME_MICRO_PATCHES_H
+#endif //FLAMETAL_MICRO_PATCHES_H

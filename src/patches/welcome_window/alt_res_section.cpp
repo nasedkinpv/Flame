@@ -115,7 +115,7 @@ void AltResSection::updateAvailable() {
     g_available.clear();
     CHAR searchPat[MAX_PATH];
     strcpy(searchPat, dk2::fs_getExeDir());
-    strcat(searchPat, "flame\\resources\\*");
+    strcat(searchPat, "flametal\\resources\\*");
     dk2::DirIter iter;
     int status;
     if(*dk2::fs_DirIter_init(&status, searchPat, &iter, FILE_ATTRIBUTE_DIRECTORY) >= 0) {

@@ -2,8 +2,8 @@
 // Created by DiaLight on 19.01.2025.
 //
 
-#ifndef FLAME_PATCH_LOGGING_H
-#define FLAME_PATCH_LOGGING_H
+#ifndef FLAMETAL_PATCH_LOGGING_H
+#define FLAMETAL_PATCH_LOGGING_H
 
 
 #include <cstdarg>
@@ -28,4 +28,4 @@ namespace patch::log {
 }
 
 
-#endif //FLAME_PATCH_LOGGING_H
+#endif //FLAMETAL_PATCH_LOGGING_H

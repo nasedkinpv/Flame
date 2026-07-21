@@ -14,8 +14,8 @@ Matching HD files are MOVED to <hd>/_review, never deleted.
 
 Usage:
   python3 tools/curate_textures.py \
-      --dump "$HOME/Library/Application Support/Dungeon Keeper 2 Flame/texture-dump" \
-      --hd   "$HOME/Library/Application Support/Dungeon Keeper 2 Flame/textures-hd"
+      --dump "$HOME/Library/Application Support/Dungeon Keeper II/texture-dump" \
+      --hd   "$HOME/Library/Application Support/Dungeon Keeper II/textures-hd"
 """
 import argparse
 import collections

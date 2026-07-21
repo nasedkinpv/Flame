@@ -2,8 +2,8 @@
 // Created by DiaLight on 20.07.2024.
 //
 
-#ifndef FLAME_USE_WHEEL_TO_ZOOM_H
-#define FLAME_USE_WHEEL_TO_ZOOM_H
+#ifndef FLAMETAL_USE_WHEEL_TO_ZOOM_H
+#define FLAMETAL_USE_WHEEL_TO_ZOOM_H
 
 #include <Windows.h>
 
@@ -18,4 +18,4 @@ namespace patch::use_wheel_to_zoom {
 }
 
 
-#endif //FLAME_USE_WHEEL_TO_ZOOM_H
+#endif //FLAMETAL_USE_WHEEL_TO_ZOOM_H

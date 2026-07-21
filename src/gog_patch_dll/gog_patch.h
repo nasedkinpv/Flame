@@ -2,13 +2,13 @@
 // Created by DiaLight on 10.09.2024.
 //
 
-#ifndef FLAME_GOG_PATCH_H
-#define FLAME_GOG_PATCH_H
+#ifndef FLAMETAL_GOG_PATCH_H
+#define FLAMETAL_GOG_PATCH_H
 
 #include <Windows.h>
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 
-extern flame_config::define_flame_option<bool> o_gog_enabled;
+extern flametal_config::define_flame_option<bool> o_gog_enabled;
 namespace gog {
 
     namespace RtGuiView_fix {
@@ -32,4 +32,4 @@ namespace gog {
     }
 }
 
-#endif //FLAME_GOG_PATCH_H
+#endif //FLAMETAL_GOG_PATCH_H

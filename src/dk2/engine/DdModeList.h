@@ -2,8 +2,8 @@
 // Created by DiaLight on 1/10/2026.
 //
 
-#ifndef FLAME_DDMODELIST_H
-#define FLAME_DDMODELIST_H
+#ifndef FLAMETAL_DDMODELIST_H
+#define FLAMETAL_DDMODELIST_H
 
 #include <Windows.h>
 #include <cstdint>
@@ -41,4 +41,4 @@ namespace dk2 {
 }
 
 
-#endif // FLAME_DDMODELIST_H
+#endif // FLAMETAL_DDMODELIST_H

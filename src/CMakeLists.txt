@@ -1,10 +1,10 @@
-set(TARGET flame)
+set(TARGET flametal)
 
 set(RESOURCES_FILE ${CMAKE_CURRENT_BINARY_DIR}/resources.rc)
 set(WELCOME__HEADER ${CMAKE_CURRENT_LIST_DIR}/patches/welcome_window/resources/resources.h)
 set(WELCOME__MAIN_BACKGROUND ${CMAKE_CURRENT_LIST_DIR}/patches/welcome_window/resources/main_background.png)
-set(VER_PRODUCT_NAME "DKII Flame")
-set(VER_DESCRIPTION "DKII Flame unofficial patches v${OUTPUT_VERSION}")
+set(VER_PRODUCT_NAME "DKII Flametal")
+set(VER_DESCRIPTION "DKII Flametal unofficial patches v${OUTPUT_VERSION}")
 configure_file(
         ${CMAKE_CURRENT_LIST_DIR}/resources.rc.in
         ${RESOURCES_FILE}
@@ -125,7 +125,7 @@ add_library(${TARGET} SHARED
         tools/command_line.cpp
         tools/console.cpp
         tools/last_error.cpp
-        tools/flame_config.cpp
+        tools/flametal_config.cpp
         tools/visual_debug.cpp
 
         tools/bug_hunter.cpp
@@ -136,7 +136,7 @@ add_library(${TARGET} SHARED
         tools/bug_hunter/StackFrame.cpp
         tools/bug_hunter/MyVersionInfo.cpp
 
-        patches/flame_main.cpp
+        patches/flametal_main.cpp
         patches/replace_mouse_dinput_to_user32.cpp
         patches/use_wheel_to_zoom.cpp
         patches/micro_patches.cpp
@@ -211,7 +211,7 @@ target_link_libraries(${TARGET} PRIVATE
 
         # 3rdparty
         cimg  # visual debug
-        toml  # flame config
+        toml  # flametal config
         lodepng  # load/save png
         imgui D3DX9  # welcome window
 #        imgui opengl32 stb  # welcome window
@@ -239,17 +239,17 @@ target_link_options(${TARGET} PRIVATE /debug)  # generate pdb to extract FPO and
 target_link_options(${TARGET} PRIVATE /MAP)
 target_link_options(${TARGET} PRIVATE /OPT:NOREF)
 target_link_options(${TARGET} PRIVATE /DEF:${CMAKE_HOME_DIRECTORY}/libs/dkii_exe/genlib/dkii_exp.def)
-set(OUTPUT_NAME "Flame")
+set(OUTPUT_NAME "Flametal")
 set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME "${OUTPUT_NAME}")
 
 
-install(FILES $<TARGET_FILE:${TARGET}> DESTINATION "flame")
+install(FILES $<TARGET_FILE:${TARGET}> DESTINATION "flametal")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_link_options(${TARGET} PRIVATE /PDBALTPATH:${OUTPUT_NAME}.pdb)
-    install(FILES $<TARGET_PDB_FILE:${TARGET}> DESTINATION "flame")
+    install(FILES $<TARGET_PDB_FILE:${TARGET}> DESTINATION "flametal")
     target_link_options(${TARGET} PRIVATE /ILK:${CMAKE_CURRENT_BINARY_DIR}/${OUTPUT_NAME}.ilk)  # dont put ilk to bin dir
 endif()
-set_target_properties(${TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/flame")
+set_target_properties(${TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/flametal")
 
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/../dev")
     include(../dev/dev.cmake)

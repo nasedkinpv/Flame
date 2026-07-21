@@ -2,9 +2,9 @@
 
 The current native pipeline keeps the original 32-bit game simulation isolated in Wine and renders it in a separate arm64 AppKit/Metal 4 host:
 
-`DK2 + Flame (i386/Wine) → shared protocol v9 → AppKit + Metal 4 (arm64)`
+`DK2 + Flametal (i386/Wine) → shared protocol v9 → AppKit + Metal 4 (arm64)`
 
-Flame (the underlying [DiaLight/Flame](https://github.com/DiaLight/Flame) patch layer this fork is built on) captures the game's Direct3D 3 command stream without asking WineD3D to render it. The native host owns presentation, scaling, focus, keyboard and mouse input. Absolute pointer coordinates use AppKit, raw relative motion and keyboard state use GameController, and scrolling uses AppKit's precise wheel events.
+Flametal (the underlying [DiaLight/Flame](https://github.com/DiaLight/Flame) patch layer this fork is built on) captures the game's Direct3D 3 command stream without asking WineD3D to render it. The native host owns presentation, scaling, focus, keyboard and mouse input. Absolute pointer coordinates use AppKit, raw relative motion and keyboard state use GameController, and scrolling uses AppKit's precise wheel events.
 
 ## Rendering paths
 
@@ -24,7 +24,7 @@ Two rendering paths coexist over the same bridge:
   vertex shader then performs projection and DK2's exact per-vertex point-light
   accumulation, replacing the original engine's per-vertex CPU loop. The first
   rerouted emitter is the deformed/dynamic mesh family (`sub_57B6D0`); enable it
-  with `MeshGpuPath = true` in the `[gog]` section of `flame/config.toml` for
+  with `MeshGpuPath = true` in the `[gog]` section of `flametal/config.toml` for
   A/B testing. The camera matrix is assembled in closed form from the same
   globals the original projection uses, so GPU output lands in the same clip
   space as legacy draws and z-testing orders the two paths correctly.
@@ -53,7 +53,7 @@ open "dist/Dungeon Keeper II.app"
 ```
 
 The resulting app contains the native Metal host, the pinned Wine runtime, and
-Flame, but no Dungeon Keeper 2 executable, WAD, media, or other game data.
+Flametal, but no Dungeon Keeper 2 executable, WAD, media, or other game data.
 
 The game itself is never included. On the first run, a native folder picker
 asks for the user's original Dungeon Keeper 2 installation, validates the GOG
@@ -69,14 +69,14 @@ The first public importer intentionally accepts an already installed original
 GOG copy. Automating the GOG offline installer is kept separate so the normal
 launch path does not depend on a particular third-party installer version.
 
-The Metal launcher defaults to DK2 shadow level 3. The bounds-safe Flame
+The Metal launcher defaults to DK2 shadow level 3. The bounds-safe Flametal
 rasterizer keeps the original dynamic-shadow mode from writing outside its
 32x32 coverage surface. Set `DK2_SHADOW_LEVEL=0`, `1`, or `2` before launching
 to select a cheaper mode when profiling older hardware.
 
 The packaging script pins Wine 11 and verifies its SHA-256 checksum. Maintainer
-builds take the matching Release Flame payload from the CI cache; set
-`DK2_FLAME_PAYLOAD=/path/to/artifact` to select one explicitly. A Developer ID
+builds take the matching Release Flametal payload from the CI cache; set
+`DK2_FLAMETAL_PAYLOAD=/path/to/artifact` to select one explicitly. A Developer ID
 can be supplied with `DK2_CODESIGN_IDENTITY`; local builds use ad-hoc signing.
 
 ## Cursor assets
@@ -97,9 +97,9 @@ hash-based `textures-hd` lookup.
 ## Isolation and data
 
 - Native host: `macos/native/build/Dungeon Keeper II.app`
-- Private prefix: `~/Library/Application Support/Dungeon Keeper II Metal/prefix`
-- Bridge: `~/Library/Application Support/Dungeon Keeper II Metal/prefix/drive_c/dk2-metal/frame.bin`
-- Log: `~/Library/Logs/Dungeon Keeper II Metal/game.log`
+- Private prefix: `~/Library/Application Support/Dungeon Keeper II/prefix`
+- Bridge: `~/Library/Application Support/Dungeon Keeper II/prefix/drive_c/dk2-metal/frame.bin`
+- Log: `~/Library/Logs/Dungeon Keeper II/game.log`
 
 The private prefix exposes only its `C:` drive. Wine's `Z:` drive and links to macOS user folders are removed. Saves stay outside the application bundle, so rebuilding the app preserves them.
 
@@ -116,4 +116,4 @@ The private prefix exposes only its `C:` drive. Wine's `Z:` drive and links to m
 
 Apple's D3DMetal translation path is not used because DK2 is a 32-bit Direct3D 3/DirectDraw title. Metal 4 is used directly by the native renderer, following the lifecycle, display-link, residency, and input patterns in the GPTK 4 beta samples mounted with the toolkit.
 
-References: [Apple Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/), [Apple GPTK repository](https://github.com/apple/game-porting-toolkit/), [Gcenx macOS Wine builds](https://github.com/Gcenx/macOS_Wine_builds), [WineHQ Dungeon Keeper 2 entry](https://appdb.winehq.org/objectManager.php?sClass=version&iId=3696), [Flame](https://github.com/DiaLight/Flame), [macOS Flame fork release](https://github.com/nasedkinpv/Flame/releases/tag/v1.7.0-260718-macos-native).
+References: [Apple Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/), [Apple GPTK repository](https://github.com/apple/game-porting-toolkit/), [Gcenx macOS Wine builds](https://github.com/Gcenx/macOS_Wine_builds), [WineHQ Dungeon Keeper 2 entry](https://appdb.winehq.org/objectManager.php?sClass=version&iId=3696), [Flame](https://github.com/DiaLight/Flame), [macOS Flametal fork release](https://github.com/nasedkinpv/Flametal/releases/tag/v1.7.0-260718-macos-native).

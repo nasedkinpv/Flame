@@ -2,8 +2,8 @@
 // Created by DiaLight on 19.01.2025.
 //
 
-#ifndef FLAME_ORIGINAL_COMPATIBLE_H
-#define FLAME_ORIGINAL_COMPATIBLE_H
+#ifndef FLAMETAL_ORIGINAL_COMPATIBLE_H
+#define FLAMETAL_ORIGINAL_COMPATIBLE_H
 
 
 namespace patch::original_compatible {
@@ -17,4 +17,4 @@ namespace patch::original_compatible {
 }
 
 
-#endif //FLAME_ORIGINAL_COMPATIBLE_H
+#endif //FLAMETAL_ORIGINAL_COMPATIBLE_H

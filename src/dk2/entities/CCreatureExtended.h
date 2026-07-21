@@ -2,8 +2,8 @@
 // Created by DiaLight on 04.05.2025.
 //
 
-#ifndef FLAME_CCREATUREEXTENDED_H
-#define FLAME_CCREATUREEXTENDED_H
+#ifndef FLAMETAL_CCREATUREEXTENDED_H
+#define FLAMETAL_CCREATUREEXTENDED_H
 
 #include "dk2/entities/CCreature.h"
 
@@ -28,4 +28,4 @@ namespace dk2ex {
 #endif
 
 
-#endif //FLAME_CCREATUREEXTENDED_H
+#endif //FLAMETAL_CCREATUREEXTENDED_H

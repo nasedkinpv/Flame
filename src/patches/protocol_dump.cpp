@@ -7,7 +7,7 @@
 #include <iostream>
 #include <iomanip>
 #include <chrono>
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 
 #include "dk2/network/protocol.h"
 #include "dk2/network/MyGuaranteedData.h"
@@ -555,8 +555,8 @@ namespace {
     DWORD dk2Proto_lastSave = 0;
 }
 
-flame_config::define_flame_option<bool> o_log_protocol(
-    "flame:logging:protocol", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_log_protocol(
+    "flametal:logging:protocol", flametal_config::OG_Config,
     "Try to parse DK2 packet content and dump\n",
     false
 );

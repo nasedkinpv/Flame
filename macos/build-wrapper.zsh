@@ -6,16 +6,16 @@ export MVK_CONFIG_LOG_LEVEL=0
 readonly SCRIPT_DIR="${0:A:h}"
 readonly REPO_ROOT="${SCRIPT_DIR:h}"
 readonly SOURCE_PREFIX="${DK2_SOURCE_PREFIX:-${HOME}/.wine}"
-readonly DATA_ROOT="${DK2_FLAME_DATA_DIR:-${HOME}/Library/Application Support/Dungeon Keeper 2 Flame}"
+readonly DATA_ROOT="${DK2_FLAMETAL_DATA_DIR:-${HOME}/Library/Application Support/Dungeon Keeper II}"
 readonly PREFIX="${DATA_ROOT}/prefix-native"
 readonly GAME_RELATIVE="drive_c/GOG Games/Dungeon Keeper 2"
 readonly CACHE_DIR="${REPO_ROOT}/.cache"
 readonly DIST_DIR="${REPO_ROOT}/dist"
-readonly APP_PATH="${DIST_DIR}/Dungeon Keeper 2 Flame.app"
+readonly APP_PATH="${DIST_DIR}/Dungeon Keeper II.app"
 
-readonly FLAME_ARCHIVE="${CACHE_DIR}/Flame-1.7.0-260718-macos-native.zip"
-readonly FLAME_URL="https://github.com/nasedkinpv/Flame/releases/download/v1.7.0-260718-macos-native/Flame-1.7.0-260718-macos-native.zip"
-readonly FLAME_SHA256="a529723f0ce6b5fbc4375170739218d2bbe79d1a8f92ef07c8d1e120053533f9"
+readonly FLAMETAL_ARCHIVE="${CACHE_DIR}/Flame-1.7.0-260718-macos-native.zip"
+readonly FLAMETAL_URL="https://github.com/nasedkinpv/Flametal/releases/download/v1.7.0-260718-macos-native/Flame-1.7.0-260718-macos-native.zip"
+readonly FLAMETAL_SHA256="a529723f0ce6b5fbc4375170739218d2bbe79d1a8f92ef07c8d1e120053533f9"
 
 readonly WINE_ARCHIVE="${CACHE_DIR}/wine-stable-11.0_1-osx64.tar.xz"
 readonly WINE_URL="https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.0_1/wine-stable-11.0_1-osx64.tar.xz"
@@ -57,7 +57,7 @@ wine_reg_delete() {
   )
 }
 
-set_flame_config_value() {
+set_flametal_config_value() {
   local config="$1" key="$2" value="$3"
   [[ -f "${config}" ]] || return 0
   if /usr/bin/grep -q "^${key}[[:space:]]*=" "${config}"; then
@@ -81,7 +81,7 @@ source_game="${SOURCE_PREFIX}/${GAME_RELATIVE}"
 [[ -f "${source_game}/DKII-DX.exe" ]] || fail "DKII-DX.exe not found in ${SOURCE_PREFIX}"
 /bin/mkdir -p "${CACHE_DIR}" "${DIST_DIR}" "${DATA_ROOT}"
 
-download_verified "${FLAME_URL}" "${FLAME_ARCHIVE}" "${FLAME_SHA256}"
+download_verified "${FLAMETAL_URL}" "${FLAMETAL_ARCHIVE}" "${FLAMETAL_SHA256}"
 download_verified "${WINE_URL}" "${WINE_ARCHIVE}" "${WINE_SHA256}"
 
 if [[ ! -x "${WINE_CACHE}/bin/wine" ]]; then
@@ -93,11 +93,11 @@ fi
 
 app_stage_root="$(/usr/bin/mktemp -d "${DIST_DIR}/.app-build.XXXXXX")"
 trap '/bin/rm -rf -- "${app_stage_root}"' EXIT
-app_stage="${app_stage_root}/Dungeon Keeper 2 Flame.app"
+app_stage="${app_stage_root}/Dungeon Keeper II.app"
 /bin/mkdir -p "${app_stage}/Contents/MacOS" "${app_stage}/Contents/Resources"
 /bin/cp "${SCRIPT_DIR}/Info.plist" "${app_stage}/Contents/Info.plist"
-/bin/cp "${SCRIPT_DIR}/dk2-flame.zsh" "${app_stage}/Contents/MacOS/dk2-flame"
-/bin/chmod 755 "${app_stage}/Contents/MacOS/dk2-flame"
+/bin/cp "${SCRIPT_DIR}/dk2-flametal.zsh" "${app_stage}/Contents/MacOS/dk2-flametal"
+/bin/chmod 755 "${app_stage}/Contents/MacOS/dk2-flametal"
 /usr/bin/ditto "${WINE_CACHE}" "${app_stage}/Contents/Resources/wine"
 
 icon_source="${source_game}/goggame-1207658959.ico"
@@ -118,7 +118,7 @@ fi
 /usr/bin/codesign --force --deep --sign - --timestamp=none "${app_stage}" >/dev/null
 /usr/bin/codesign --verify --deep --strict "${app_stage}"
 
-[[ "${APP_PATH}" == "${REPO_ROOT}/dist/Dungeon Keeper 2 Flame.app" ]] || fail "unexpected app path"
+[[ "${APP_PATH}" == "${REPO_ROOT}/dist/Dungeon Keeper II.app" ]] || fail "unexpected app path"
 [[ ! -e "${APP_PATH}" ]] || /bin/rm -rf -- "${APP_PATH}"
 /bin/mv "${app_stage}" "${APP_PATH}"
 /bin/rm -rf -- "${app_stage_root}"
@@ -145,17 +145,17 @@ game_dir="${PREFIX}/${GAME_RELATIVE}"
 [[ -f "${game_dir}/patch.gog.dll" ]] || /bin/cp -p "${game_dir}/patch.dll" "${game_dir}/patch.gog.dll"
 disable_local_compatibility_dlls "${game_dir}"
 
-flame_stage="$(/usr/bin/mktemp -d "${DATA_ROOT}/.flame-update.XXXXXX")"
-trap '/bin/rm -rf -- "${flame_stage}"' EXIT
-/usr/bin/unzip -oq "${FLAME_ARCHIVE}" -d "${flame_stage}"
-/usr/bin/ditto "${flame_stage}" "${game_dir}"
-/bin/rm -rf -- "${flame_stage}"
+flametal_stage="$(/usr/bin/mktemp -d "${DATA_ROOT}/.flametal-update.XXXXXX")"
+trap '/bin/rm -rf -- "${flametal_stage}"' EXIT
+/usr/bin/unzip -oq "${FLAMETAL_ARCHIVE}" -d "${flametal_stage}"
+/usr/bin/ditto "${flametal_stage}" "${game_dir}"
+/bin/rm -rf -- "${flametal_stage}"
 trap - EXIT
 
-[[ -f "${game_dir}/flame/Flame.dll" ]] || fail "Flame.dll is missing"
-[[ -f "${game_dir}/flame/DKII.dll" ]] || fail "DKII.dll is missing"
-/bin/cp -p "${game_dir}/flame/Flame.dll" "${game_dir}/Flame.dll"
-/bin/cp -p "${game_dir}/flame/DKII.dll" "${game_dir}/DKII.dll"
+[[ -f "${game_dir}/flametal/Flametal.dll" ]] || fail "Flametal.dll is missing"
+[[ -f "${game_dir}/flametal/DKII.dll" ]] || fail "DKII.dll is missing"
+/bin/cp -p "${game_dir}/flametal/Flametal.dll" "${game_dir}/Flametal.dll"
+/bin/cp -p "${game_dir}/flametal/DKII.dll" "${game_dir}/DKII.dll"
 
 wine_reg_add "${PREFIX}" "${wine_bin}" 'HKCU\Software\Wine\Direct3D' VideoMemorySize REG_SZ 2048
 wine_reg_delete "${PREFIX}" "${wine_bin}" 'HKCU\Software\Wine\Direct3D' renderer
@@ -168,14 +168,14 @@ wine_reg_add "${PREFIX}" "${wine_bin}" 'HKCU\Software\Bullfrog Productions Ltd\D
 wine_reg_delete "${PREFIX}" "${wine_bin}" 'HKCU\Software\Wine\Explorer' Desktop
 wine_reg_delete "${PREFIX}" "${wine_bin}" 'HKCU\Software\Wine\Explorer\Desktops' Default
 
-config="${game_dir}/flame/config.toml"
-set_flame_config_value "${config}" Screen_Width 640
-set_flame_config_value "${config}" Screen_Height 480
-set_flame_config_value "${config}" Screen_Windowed false
-set_flame_config_value "${config}" game-res '""'
-set_flame_config_value "${config}" no-initial-size true
-set_flame_config_value "${config}" lock-window-size false
-set_flame_config_value "${config}" single-core true
+config="${game_dir}/flametal/config.toml"
+set_flametal_config_value "${config}" Screen_Width 640
+set_flametal_config_value "${config}" Screen_Height 480
+set_flametal_config_value "${config}" Screen_Windowed false
+set_flametal_config_value "${config}" game-res '""'
+set_flametal_config_value "${config}" no-initial-size true
+set_flametal_config_value "${config}" lock-window-size false
+set_flametal_config_value "${config}" single-core true
 env WINEPREFIX="${PREFIX}" "${wineserver_bin}" -k 2>/dev/null || true
 
 for link in "${PREFIX}/dosdevices/"*(N); do

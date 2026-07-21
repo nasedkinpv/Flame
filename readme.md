@@ -1,6 +1,6 @@
 # Flametal
 
-Flametal is a fork of [DiaLight/Flame](https://github.com/DiaLight/Flame), which modifies the Dungeon Keeper 2 code to fix bugs found in both single and multiplayer and works with the Disk, Steam and GOG versions of the game.
+Flametal is a fork of [DiaLight/Flame](https://github.com/DiaLight/Flame), which modifies the Dungeon Keeper 2 code to fix bugs found in both single and multiplayer and works with the Disk, Steam and GOG versions of the game. The goal of this fork is preservation: keeping Dungeon Keeper 2 running natively on current hardware, starting with Apple Silicon Macs and, longer term, iOS.
 
 Warning: Saves and network sessions between Flame/Flametal and non-Flame Dungeon Keeper 2 versions are [incompatible](https://github.com/DiaLight/Flame/issues/57).
 But you can use `-original-compatible` flag to disable some patches that breaks compatibility.
@@ -8,8 +8,6 @@ But you can use `-original-compatible` flag to disable some patches that breaks 
 ## Credits
 
 All of the original decompilation work, the DLL function-replacement approach, and the multiplayer/singleplayer bug fixes are [DiaLight](https://github.com/DiaLight)'s, from the upstream [Flame](https://github.com/DiaLight/Flame) project. Flametal builds the native macOS edition described below on top of that foundation; it isn't a rewrite or a replacement of DiaLight's work.
-
-(Internal paths, project files and identifiers still say "Flame"/"DK2" in places - a full rename is planned separately and isn't done yet.)
 
 ## Native macOS edition
 
@@ -19,17 +17,17 @@ This fork adds a self-contained Apple Silicon app that imports the user's origin
 - **GPU mesh pipeline (in progress)**: a second, opt-in rendering path (bridge protocol v9) moves DK2's per-vertex CPU work - projection and point-light accumulation - into the Metal vertex shader. Meshes cross the bridge in object/world space with a per-frame camera, light list and the engine's own falloff LUT; the lighting model is a bit-exact port of the original. First rerouted emitter: the deformed/dynamic mesh family (`MeshGpuPath = true` in `[gog]`).
 - **Native windowing and input**: real AppKit window/fullscreen lifecycle, Retina/high-resolution output, native cursor and keyboard/text input routing, one-command launch and first-run game import.
 - **Performance**: a large ongoing campaign translating hot original x87 engine paths (vertex/matrix math, lighting, mesh and animation traversal, spatial queries, shadows) into SSE2 C++, plus CPU-side frame telemetry on both sides of the bridge to find the next hotspot.
-- **Textures**: optional HD texture replacement, a texture dump/curation pipeline (collage/sprite detection, ComfyUI batch upscaling), and 16-bit bump-map pixel format support.
+- **Textures**: optional HD texture replacement, a texture dump/curation pipeline (collage/sprite detection, batch image upscaling), and 16-bit bump-map pixel format support.
 
 See [macos/README.md](macos/README.md) for the build, packaging, import and run instructions. No copyrighted game data is included.
 
 ## How to report a bug
 
-1) If you have any bugs in the game, please describe them in the discord channel: https://discord.gg/RvrQpCFUZc or in the GitHub issues.
+1) If you have any bugs in the game, please describe them in the [GitHub issues](https://github.com/nasedkinpv/Flametal/issues).
 2) It helps a lot if you include steps how to reproduce found bug
 3) Attaching a good test map is welcome
 
-If you reporting several bugs, please split them to several Discord messages / GitHub issues. Please, be sure to have followed the recommended installation steps.
+If you are reporting several bugs, please open separate issues for each one. Please, be sure to have followed the recommended installation steps.
 
 ### What bugs are in priority to fix?
 Imagine you are playing through a storyline campaign and there are moments
@@ -56,11 +54,11 @@ The `Data` folder in the zip file contains patches by Quuz for level editor
 
 ## How it is done
 
-Flame is a new approach to modifying the compiled code of Dungeon Keeper 2
+Flametal is a new approach to modifying the compiled code of Dungeon Keeper 2
 
-Flame recompiles some functions of `DKII.EXE` into a separate `flame/Flame.dll` file.
-`DKII-DX.EXE` depends on `PATCH.dll`. I decompiled whole `PATCH.dll` functional and included it into `flame/Flame.dll`.
-Flame comes with its own `PATCH.dll` which handles loading `flame/Flame.dll` and replacing the references to
+Flametal recompiles some functions of `DKII.EXE` into a separate `flametal/Flametal.dll` file.
+`DKII-DX.EXE` depends on `PATCH.dll`. I decompiled whole `PATCH.dll` functional and included it into `flametal/Flametal.dll`.
+Flametal comes with its own `PATCH.dll` which handles loading `flametal/Flametal.dll` and replacing the references to
 the original functions with the references to recompiled functions.
 Recompiled functions are supplemented with switchable changes that fix some game bugs and add some functionality
 
@@ -86,4 +84,4 @@ cmd (instructions is not for powershell):
 - `cmake --build .`
 - `cmake --install .`
 - `copy /Y "..\install\PATCH.dll" "<Dungeon Keeper2 dir>\PATCH.dll"`
-- `copy /Y "..\install\flame" "<Dungeon Keeper2 dir>\flame"`
+- `copy /Y "..\install\flametal" "<Dungeon Keeper2 dir>\flametal"`

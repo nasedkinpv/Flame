@@ -2,8 +2,8 @@
 // Created by DiaLight on 9/28/2025.
 //
 
-#ifndef FLAME_BIG_RESOLUTION_FIX_H
-#define FLAME_BIG_RESOLUTION_FIX_H
+#ifndef FLAMETAL_BIG_RESOLUTION_FIX_H
+#define FLAMETAL_BIG_RESOLUTION_FIX_H
 
 
 
@@ -12,4 +12,4 @@ namespace patch::big_resolution_fix {
 }
 
 
-#endif // FLAME_BIG_RESOLUTION_FIX_H
+#endif // FLAMETAL_BIG_RESOLUTION_FIX_H

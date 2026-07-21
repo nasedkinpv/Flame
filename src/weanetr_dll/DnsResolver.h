@@ -2,8 +2,8 @@
 // Created by DiaLight on 18.12.2024.
 //
 
-#ifndef FLAME_DNSRESOLVER_H
-#define FLAME_DNSRESOLVER_H
+#ifndef FLAMETAL_DNSRESOLVER_H
+#define FLAMETAL_DNSRESOLVER_H
 
 #include <Windows.h>
 #include "structs.h"
@@ -39,4 +39,4 @@ static_assert(sizeof(DnsResolver) == 0x293);
 
 }  // namespace net
 
-#endif //FLAME_DNSRESOLVER_H
+#endif //FLAMETAL_DNSRESOLVER_H

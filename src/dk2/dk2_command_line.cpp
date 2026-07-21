@@ -1,7 +1,7 @@
 //
 // Created by DiaLight on 4/8/2025.
 //
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 
 #include "dk2/MyWindow.h"
 #include "dk2/MyMouseUpdater.h"
@@ -12,260 +12,260 @@
 #include "gog_cfg.h"
 
 
-flame_config::define_flame_option<std::string> o_dk2_level(
-    "dk2:Level", flame_config::OG_Config,
+flametal_config::define_flame_option<std::string> o_dk2_level(
+    "dk2:Level", flametal_config::OG_Config,
     "Plays a level (arg is the level name)",
     ""
 );
-flame_config::define_flame_option<bool> o_dk2_q(
-    "dk2:Q", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_q(
+    "dk2:Q", flametal_config::OG_Config,
     "Combined with the -LEVEL command, plays in Campaign mode",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_pd(
-    "dk2:PD", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_pd(
+    "dk2:PD", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<int> o_dk2_ddd(
-    "dk2:DDD", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_dk2_ddd(
+    "dk2:DDD", flametal_config::OG_Config,
     "",
     -1
 );
-flame_config::define_flame_option<bool> o_dk2_engine(
-    "dk2:Engine", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_engine(
+    "dk2:Engine", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_software(
-    "dk2:Software", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_software(
+    "dk2:Software", flametal_config::OG_Config,
     "disables hardware acceleration",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_chooseCard(
-    "dk2:ChooseCard", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_chooseCard(
+    "dk2:ChooseCard", flametal_config::OG_Config,
     "Sets Dungeon Keeper 2 to run using your default video card",
     false
 );
-flame_config::define_flame_option<std::string> o_dk2_pload(
-    "dk2:PLoad", flame_config::OG_Config,
+flametal_config::define_flame_option<std::string> o_dk2_pload(
+    "dk2:PLoad", flametal_config::OG_Config,
     "Load a packet where arg is the name of the file (must be use with -LEVEL command)\n"
     "Must be used with dk2:pload-freq option\n",
     ""
 );
-flame_config::define_flame_option<int> o_dk2_pload_freq(
-    "dk2:PLoadFreq", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_dk2_pload_freq(
+    "dk2:PLoadFreq", flametal_config::OG_Config,
     "Set renderer frequency\n"
     "Must be used with dk2:pload option\n",
     -1
     );
-flame_config::define_flame_option<std::string> o_dk2_psave(
-    "dk2:PSave", flame_config::OG_Config,
+flametal_config::define_flame_option<std::string> o_dk2_psave(
+    "dk2:PSave", flametal_config::OG_Config,
     "Must be used with dk2:pload-freq option\n",
     ""
 );
-flame_config::define_flame_option<int> o_dk2_pquit(
-    "dk2:PQuit", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_dk2_pquit(
+    "dk2:PQuit", flametal_config::OG_Config,
     "",
     -1
 );
-flame_config::define_flame_option<int> o_dk2_pnumber(
-    "dk2:PNumber", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_dk2_pnumber(
+    "dk2:PNumber", flametal_config::OG_Config,
     "",
     -1
 );
-flame_config::define_flame_option<bool> o_dk2_pNoCamera(
-    "dk2:PNoCamera", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_pNoCamera(
+    "dk2:PNoCamera", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_pLoadDemoKey(
-    "dk2:PLoadDemoKey", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_pLoadDemoKey(
+    "dk2:PLoadDemoKey", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_pNoSound(
-    "dk2:NoSound", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_pNoSound(
+    "dk2:NoSound", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_pSound(
-    "dk2:Sound", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_pSound(
+    "dk2:Sound", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_pFps(
-    "dk2:Fps", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_pFps(
+    "dk2:Fps", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_pNoFps(
-    "dk2:NoFps", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_pNoFps(
+    "dk2:NoFps", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<int> o_dk2_pSpec(
-    "dk2:Spec", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_dk2_pSpec(
+    "dk2:Spec", flametal_config::OG_Config,
     "",
     -1
 );
-flame_config::define_flame_option<bool> o_dk2_noErrors(
-    "dk2:NoErrors", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_noErrors(
+    "dk2:NoErrors", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_noMusic(
-    "dk2:NoMusic", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_noMusic(
+    "dk2:NoMusic", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_noSpeech(
-    "dk2:NoSpeech", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_noSpeech(
+    "dk2:NoSpeech", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_noIntMouse(
-    "dk2:NoIntMouse", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_noIntMouse(
+    "dk2:NoIntMouse", flametal_config::OG_Config,
     "Disables frame-rate independant mouse pointer",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_32BitDisplay(
-    "dk2:32BitDisplay", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_32BitDisplay(
+    "dk2:32BitDisplay", flametal_config::OG_Config,
     "Enables 32Bit Display (32bit colours instead of 16bit)",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_32BitZBuffer(
-    "dk2:32BitZBuffer", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_32BitZBuffer(
+    "dk2:32BitZBuffer", flametal_config::OG_Config,
     "Enables 32Bit ZBuffer (32bit ZBuffer instead of 16bit ZBuffer)",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_32BitTextures(
-    "dk2:32BitTextures", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_32BitTextures(
+    "dk2:32BitTextures", flametal_config::OG_Config,
     "Enables 32Bit Textures",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_32BitEverything(
-    "dk2:32BitEverything", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_32BitEverything(
+    "dk2:32BitEverything", flametal_config::OG_Config,
     "Enables 32Bit Textures, ZBuffer and Display",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_softwareFilter(
-    "dk2:SoftwareFilter", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_softwareFilter(
+    "dk2:SoftwareFilter", flametal_config::OG_Config,
     "Enables Software Filter (Bilinear Filtering)",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_fe3d(
-    "dk2:FE3d", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_fe3d(
+    "dk2:FE3d", flametal_config::OG_Config,
     "Defines 3D FrontEnd (?)",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_fe(
-    "dk2:FE", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_fe(
+    "dk2:FE", flametal_config::OG_Config,
     "Defines 2D FrontEnd (I tried and the screen stayed black so, beware!) (?)",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_noFileChecksum(
-    "dk2:NoFileChecksum", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_noFileChecksum(
+    "dk2:NoFileChecksum", flametal_config::OG_Config,
     "Disables File CheckSum",
     false
 );
-flame_config::define_flame_option<int> o_dk2_eheap(
-    "dk2:EHeap", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_dk2_eheap(
+    "dk2:EHeap", flametal_config::OG_Config,
     "Defines Engine Heap Size in Mb",
     -1
 );
-flame_config::define_flame_option<bool> o_dk2_disableGamma(
-    "dk2:DisableGamma", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_disableGamma(
+    "dk2:DisableGamma", flametal_config::OG_Config,
     "Corrects screen tinting and colour corruption caused by the mouse cursor",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_highResTextures(
-    "dk2:HighResTextures", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_highResTextures(
+    "dk2:HighResTextures", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_lowResTextures(
-    "dk2:LowResTextures", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_lowResTextures(
+    "dk2:LowResTextures", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_cheapLightning(
-    "dk2:CheapLightning", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_cheapLightning(
+    "dk2:CheapLightning", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_enableBumpMapping(
-    "dk2:EnableBumpMapping", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_enableBumpMapping(
+    "dk2:EnableBumpMapping", flametal_config::OG_Config,
     "Enables BumpMapping (try it and check the lava)",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_enableBumpLuminance(
-    "dk2:EnableBumpLuminance", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_enableBumpLuminance(
+    "dk2:EnableBumpLuminance", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<int> o_dk2_textureReductionLevel(
-    "dk2:TextureReductionLevel", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_dk2_textureReductionLevel(
+    "dk2:TextureReductionLevel", flametal_config::OG_Config,
     "",
     -1
 );
-flame_config::define_flame_option<bool> o_dk2_enableArtPatching(
-    "dk2:EnableArtPatching", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_enableArtPatching(
+    "dk2:EnableArtPatching", flametal_config::OG_Config,
     "Allows to use the extracted WAD files instead of the compressed ones",
     false
 );
-flame_config::define_flame_option<std::string> o_dk2_language(
-    "dk2:Language", flame_config::OG_Config,
+flametal_config::define_flame_option<std::string> o_dk2_language(
+    "dk2:Language", flametal_config::OG_Config,
     "",
     ""
 );
-flame_config::define_flame_option<std::string> o_dk2_cdPath(
-    "dk2:CdPath", flame_config::OG_Config,
+flametal_config::define_flame_option<std::string> o_dk2_cdPath(
+    "dk2:CdPath", flametal_config::OG_Config,
     "",
     ""
 );
-flame_config::define_flame_option<bool> o_dk2_noShadows(
-    "dk2:NoShadows", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_noShadows(
+    "dk2:NoShadows", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<int> o_dk2_shadows(
-    "dk2:Shadows", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_dk2_shadows(
+    "dk2:Shadows", flametal_config::OG_Config,
     "Defines \"Shadow Level\"",
     -1
 );
-flame_config::define_flame_option<bool> o_dk2_noMovies(
-    "dk2:NoMovies", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_noMovies(
+    "dk2:NoMovies", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_preloadResources(
-    "dk2:PreloadResources", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_preloadResources(
+    "dk2:PreloadResources", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_cheat(
-    "dk2:Cheat", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_cheat(
+    "dk2:Cheat", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_noChecksum(
-    "dk2:NoChecksum", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_noChecksum(
+    "dk2:NoChecksum", flametal_config::OG_Config,
     "",
     false
 );
-flame_config::define_flame_option<int> o_dk2_pmesh(
-    "dk2:PMesh", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_dk2_pmesh(
+    "dk2:PMesh", flametal_config::OG_Config,
     "Defines \"PMesh Reduction Level\"",
     -1
 );
-flame_config::define_flame_option<bool> o_dk2_logOos(
-    "dk2:LogOOS", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_logOos(
+    "dk2:LogOOS", flametal_config::OG_Config,
     "logging of out of sync",
     false
 );
-flame_config::define_flame_option<bool> o_dk2_enableFilePatching(
-    "dk2:EnableFilePatching", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_dk2_enableFilePatching(
+    "dk2:EnableFilePatching", flametal_config::OG_Config,
     "Allows to use the extracted WAD files instead of the compressed ones",
     false
 );

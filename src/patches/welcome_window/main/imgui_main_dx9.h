@@ -2,8 +2,8 @@
 // Created by DiaLight on 11/8/2025.
 //
 
-#ifndef FLAME_IMGUI_MAIN_DX9_H
-#define FLAME_IMGUI_MAIN_DX9_H
+#ifndef FLAMETAL_IMGUI_MAIN_DX9_H
+#define FLAMETAL_IMGUI_MAIN_DX9_H
 
 #include <d3d9.h>
 
@@ -15,4 +15,4 @@ namespace patch::welcome_window {
     extern D3DPRESENT_PARAMETERS g_d3dpp;
 }
 
-#endif // FLAME_IMGUI_MAIN_DX9_H
+#endif // FLAMETAL_IMGUI_MAIN_DX9_H

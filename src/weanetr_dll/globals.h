@@ -2,8 +2,8 @@
 // Created by DiaLight on 09.01.2025.
 //
 
-#ifndef FLAME_GLOBALS_H
-#define FLAME_GLOBALS_H
+#ifndef FLAMETAL_GLOBALS_H
+#define FLAMETAL_GLOBALS_H
 
 #include <Windows.h>
 
@@ -17,4 +17,4 @@ namespace net {
 }
 
 
-#endif //FLAME_GLOBALS_H
+#endif //FLAMETAL_GLOBALS_H

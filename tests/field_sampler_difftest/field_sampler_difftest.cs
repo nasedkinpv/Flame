@@ -191,7 +191,7 @@ internal static class FieldSamplerDiffTest {
         if (IntPtr.Size != 4) throw new InvalidOperationException("build with /platform:x86");
         if (args.Length < 1 || args.Length > 2) {
             Console.Error.WriteLine(
-                "usage: field_sampler_difftest.exe path-to-DKII-DX.exe [replacement-Flame.dll]");
+                "usage: field_sampler_difftest.exe path-to-DKII-DX.exe [replacement-Flametal.dll]");
             return 2;
         }
         byte[] image = File.ReadAllBytes(args[0]);

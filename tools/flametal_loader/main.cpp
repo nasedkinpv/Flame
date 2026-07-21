@@ -52,7 +52,7 @@ public:
         wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
         wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW+1);
         wcex.lpszMenuName = NULL;
-        wcex.lpszClassName = "FlameProgressWindow";
+        wcex.lpszClassName = "FlametalProgressWindow";
         wcex.hIconSm = NULL;
         RegisterClassEx(&wcex);
 
@@ -178,7 +178,7 @@ std::map<std::string, std::vector<std::byte>> unpackResources(HMODULE mod, const
         FreeResource(myResourceData);
     }
     if(packedResources.empty()) {
-        log_err("Failed to decompress Flame resources");
+        log_err("Failed to decompress Flametal resources");
         return {};
     }
     std::map<std::string, std::vector<std::byte>> resources;
@@ -242,11 +242,11 @@ struct Resources {
     std::vector<Symbol> dkiiSyms;
     std::vector<VaReloc> dkiiRelocs;
     std::vector<std::byte> dkiiFpo;
-    std::vector<std::byte> flameFpo;
+    std::vector<std::byte> flametalFpo;
     std::string version;
 
     bool load(HMODULE mod) {
-        ProgressWindow progress("Flame unpack and parse progress");
+        ProgressWindow progress("Flametal unpack and parse progress");
         progress.updateText("unpack resources");
         constexpr float parts = 20;
         std::map<std::string, std::vector<std::byte>> resources;
@@ -256,7 +256,7 @@ struct Resources {
             });
         }
         if(resources.empty()) {
-            log_err("Failed to unpack Flame resources");
+            log_err("Failed to unpack Flametal resources");
             return false;
         }
 //        for(auto &e : resources) {
@@ -281,10 +281,10 @@ struct Resources {
             return false;
         }
         progress.update((parts - 2)/parts);
-        progress.updateText("extract Flame FPO buf");
-        flameFpo = pop(resources, "flame_fpo");
-        if(flameFpo.empty()) {
-            log_err("[-] Failed to read flame_fpo");
+        progress.updateText("extract Flametal FPO buf");
+        flametalFpo = pop(resources, "flametal_fpo");
+        if(flametalFpo.empty()) {
+            log_err("[-] Failed to read flametal_fpo");
             return false;
         }
         progress.update((parts - 1)/parts);
@@ -311,45 +311,45 @@ void *findText(HMODULE mod, size_t &size) {
     }
     return nullptr;
 }
-bool collectImportsExports(HMODULE flame, std::map<std::string, void *> &flameImports, std::map<std::string, void *> &flameExports) {
-    auto *nt = (IMAGE_NT_HEADERS *) (((IMAGE_DOS_HEADER *) flame)->e_lfanew + (std::byte *) flame);
-    auto *exp = (IMAGE_EXPORT_DIRECTORY *)(nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress + (std::byte *) flame);
-    auto *names = (DWORD *) (exp->AddressOfNames + (std::byte *) flame);
-    auto *ordinals = (WORD *) (exp->AddressOfNameOrdinals + (std::byte *) flame);
-    auto *funs = (DWORD *) (exp->AddressOfFunctions + (std::byte *) flame);
+bool collectImportsExports(HMODULE flametal, std::map<std::string, void *> &flametalImports, std::map<std::string, void *> &flametalExports) {
+    auto *nt = (IMAGE_NT_HEADERS *) (((IMAGE_DOS_HEADER *) flametal)->e_lfanew + (std::byte *) flametal);
+    auto *exp = (IMAGE_EXPORT_DIRECTORY *)(nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress + (std::byte *) flametal);
+    auto *names = (DWORD *) (exp->AddressOfNames + (std::byte *) flametal);
+    auto *ordinals = (WORD *) (exp->AddressOfNameOrdinals + (std::byte *) flametal);
+    auto *funs = (DWORD *) (exp->AddressOfFunctions + (std::byte *) flametal);
     for(
-        auto *imp = (IMAGE_IMPORT_DESCRIPTOR *)(nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress + (std::byte *) flame);
+        auto *imp = (IMAGE_IMPORT_DESCRIPTOR *)(nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress + (std::byte *) flametal);
         imp->FirstThunk;
         imp++
     ) {
-        auto *name = (char *) (imp->Name + (std::byte *) flame);
+        auto *name = (char *) (imp->Name + (std::byte *) flametal);
         if(strcmp(name, "DKII.dll") != 0) continue;
         for(
-            auto *thunk = (IMAGE_THUNK_DATA *) (imp->FirstThunk + (std::byte *) flame),
-                 *othunk = (IMAGE_THUNK_DATA *) (imp->OriginalFirstThunk + (std::byte *) flame);
+            auto *thunk = (IMAGE_THUNK_DATA *) (imp->FirstThunk + (std::byte *) flametal),
+                 *othunk = (IMAGE_THUNK_DATA *) (imp->OriginalFirstThunk + (std::byte *) flametal);
             thunk->u1.AddressOfData;
             thunk++, othunk++
         ) {
             if(othunk->u1.AddressOfData & IMAGE_ORDINAL_FLAG) {
-                log_err("[-] Flame has ordinal import");
+                log_err("[-] Flametal has ordinal import");
                 return false;
             }
-            auto *byName = (IMAGE_IMPORT_BY_NAME *) (othunk->u1.AddressOfData + (std::byte *) flame);
+            auto *byName = (IMAGE_IMPORT_BY_NAME *) (othunk->u1.AddressOfData + (std::byte *) flametal);
             auto *ptr = &thunk->u1.Function;
-            flameImports.insert(std::make_pair(byName->Name, ptr));
+            flametalImports.insert(std::make_pair(byName->Name, ptr));
         }
     }
     for (int i = 0; i < exp->NumberOfNames; ++i) {
-        auto *name = (char *) (names[i] + (std::byte *) flame);
-        void *fun = (funs[ordinals[i]] + (std::byte *) flame);
-        flameExports.insert(std::make_pair(name, fun));
+        auto *name = (char *) (names[i] + (std::byte *) flametal);
+        void *fun = (funs[ordinals[i]] + (std::byte *) flametal);
+        flametalExports.insert(std::make_pair(name, fun));
     }
-    if(flameImports.empty()) {
-        log_err("[-] Flame has no imports");
+    if(flametalImports.empty()) {
+        log_err("[-] Flametal has no imports");
         return false;
     }
-    if(flameExports.empty()) {
-        log_err("[-] Flame has no exports");
+    if(flametalExports.empty()) {
+        log_err("[-] Flametal has no exports");
         return false;
     }
     return true;
@@ -361,20 +361,20 @@ std::vector<VaReloc>::iterator find_ge_byDst(std::vector<VaReloc> &vec, uint32_t
     });
 }
 
-bool connectFlameAndDkii(
+bool connectFlametalAndDkii(
     const std::vector<Symbol> &dkiiSyms,
     const std::vector<VaReloc> &dkiiRelocs,
-    const std::map<std::string, void *> &flameImports,
-    const std::map<std::string, void *> &flameExports
+    const std::map<std::string, void *> &flametalImports,
+    const std::map<std::string, void *> &flametalExports
 ) {
-    // pre-flight: verify every replace symbol resolves in Flame before writing anything,
-    // so a version-mismatched Flame.dll (e.g. stale copy shadowing flame/Flame.dll in
+    // pre-flight: verify every replace symbol resolves in Flametal before writing anything,
+    // so a version-mismatched Flametal.dll (e.g. stale copy shadowing flametal/Flametal.dll in
     // the dll search order) fails cleanly instead of leaving DKII .text half-patched
     {
         bool missing = false;
         for(auto &s : dkiiSyms) {
-            if(s.replace && !flameExports.contains(s.name)) {
-                log_err("[-] replace sym %s is not found in Flame", s.name.c_str());
+            if(s.replace && !flametalExports.contains(s.name)) {
+                log_err("[-] replace sym %s is not found in Flametal", s.name.c_str());
                 missing = true;
             }
         }
@@ -389,7 +389,7 @@ bool connectFlameAndDkii(
 
     for(auto &s : dkiiSyms) {
         if(s.replace) {
-            if(const auto &it = flameExports.find(s.name); it != flameExports.end()) {
+            if(const auto &it = flametalExports.find(s.name); it != flametalExports.end()) {
                 auto *fptr = it->second;
 //                log_inf("%p %s", fptr, s.name.c_str());
                 std::vector<const VaReloc*> refs;
@@ -419,11 +419,11 @@ bool connectFlameAndDkii(
                     log_err("[-] nothing to replace for symbol %s in DKII", s.name.c_str());
                 }
             } else {
-                log_err("[-] replace sym %s is not found in Flame", s.name.c_str());
+                log_err("[-] replace sym %s is not found in Flametal", s.name.c_str());
                 return false;
             }
         } else {  // !s.replace
-            if(const auto &it = flameImports.find(s.name); it != flameImports.end()) {
+            if(const auto &it = flametalImports.find(s.name); it != flametalImports.end()) {
                 auto *fptr = it->second;
                 DWORD p;
                 VirtualProtect((LPVOID) fptr, 4, PAGE_EXECUTE_READWRITE, &p);
@@ -435,7 +435,7 @@ bool connectFlameAndDkii(
     return true;
 }
 
-bool patchMain(HMODULE flame) {
+bool patchMain(HMODULE flametal) {
     HMODULE dkii = GetModuleHandleA(NULL);
     if(dkii == NULL) {
         DWORD lastError = GetLastError();
@@ -450,30 +450,30 @@ bool patchMain(HMODULE flame) {
         return false;
     }
 
-    std::map<std::string, void *> flameImports;
-    std::map<std::string, void *> flameExports;
-    if(!collectImportsExports(flame, flameImports, flameExports)) return false;
+    std::map<std::string, void *> flametalImports;
+    std::map<std::string, void *> flametalExports;
+    if(!collectImportsExports(flametal, flametalImports, flametalExports)) return false;
 
-    if(!connectFlameAndDkii(g_resources.dkiiSyms, g_resources.dkiiRelocs, flameImports, flameExports)) {
-        log_err("[-] Failed to connectFlameAndDkii");
+    if(!connectFlametalAndDkii(g_resources.dkiiSyms, g_resources.dkiiRelocs, flametalImports, flametalExports)) {
+        log_err("[-] Failed to connectFlametalAndDkii");
         return false;
     }
 
-    if(auto it = flameExports.find("_dkii_fpomap_start"); it != flameExports.end()) {
+    if(auto it = flametalExports.find("_dkii_fpomap_start"); it != flametalExports.end()) {
         *(void **) it->second = g_resources.dkiiFpo.data();
     } else {
         log_err("[-] Failed to patch _dkii_fpomap_start");
         return false;
     }
 
-    if(auto it = flameExports.find("_flame_fpomap_start"); it != flameExports.end()) {
-        *(void **) it->second = g_resources.flameFpo.data();
+    if(auto it = flametalExports.find("_flametal_fpomap_start"); it != flametalExports.end()) {
+        *(void **) it->second = g_resources.flametalFpo.data();
     } else {
-        log_err("[-] Failed to patch _flame_fpomap_start");
+        log_err("[-] Failed to patch _flametal_fpomap_start");
         return false;
     }
 
-    if(auto it = flameExports.find("Flame_version"); it != flameExports.end()) {
+    if(auto it = flametalExports.find("Flametal_version"); it != flametalExports.end()) {
         auto pos = g_resources.version.find("build");
         if(pos != -1) {
             g_resources.version = " V" + g_resources.version.substr(0, pos - 1) + "\n " + g_resources.version.substr(pos);
@@ -483,19 +483,19 @@ bool patchMain(HMODULE flame) {
         strncpy_s((char *) it->second, 64, g_resources.version.data(), 63);
         VirtualProtect((LPVOID) it->second, 64, p, &p);
     } else {
-        log_err("[-] Failed to patch Flame_version");
+        log_err("[-] Failed to patch Flametal_version");
         return false;
     }
 
     size_t size;
     if(auto *text = findText(dkii, size)) {
-        if(auto it = flameExports.find("_dkii_text_start"); it != flameExports.end()) {
+        if(auto it = flametalExports.find("_dkii_text_start"); it != flametalExports.end()) {
             *(void **) it->second = text;
         } else {
             log_err("[-] Failed to patch _dkii_text_start");
             return false;
         }
-        if(auto it = flameExports.find("_dkii_text_end"); it != flameExports.end()) {
+        if(auto it = flametalExports.find("_dkii_text_end"); it != flametalExports.end()) {
             *(void **) it->second = (std::byte *) text + size;
         } else {
             log_err("[-] Failed to patch _dkii_text_end");
@@ -505,27 +505,27 @@ bool patchMain(HMODULE flame) {
         log_err("[-] Failed to find dkii .text");
         return false;
     }
-    if(auto it = flameExports.find("_flame_base"); it != flameExports.end()) {
-        *(void **) it->second = flame;
+    if(auto it = flametalExports.find("_flametal_base"); it != flametalExports.end()) {
+        *(void **) it->second = flametal;
     } else {
-        log_err("[-] Failed to patch _flame_base");
+        log_err("[-] Failed to patch _flametal_base");
         return false;
     }
-    if(auto *text = findText(flame, size)) {
-        if(auto it = flameExports.find("_flame_text_start"); it != flameExports.end()) {
+    if(auto *text = findText(flametal, size)) {
+        if(auto it = flametalExports.find("_flametal_text_start"); it != flametalExports.end()) {
             *(void **) it->second = text;
         } else {
-            log_err("[-] Failed to patch _flame_text_start");
+            log_err("[-] Failed to patch _flametal_text_start");
             return false;
         }
-        if(auto it = flameExports.find("_flame_text_end"); it != flameExports.end()) {
+        if(auto it = flametalExports.find("_flametal_text_end"); it != flametalExports.end()) {
             *(void **) it->second = (std::byte *) text + size;
         } else {
-            log_err("[-] Failed to patch _flame_text_end");
+            log_err("[-] Failed to patch _flametal_text_end");
             return false;
         }
     } else {
-        log_err("[-] Failed to find flame .text");
+        log_err("[-] Failed to find flametal .text");
         return false;
     }
     return true;
@@ -646,31 +646,31 @@ bool entryHook_t::hook(HMODULE mod, CallbackProc onEntry) {
 }
 
 
-bool flameLoaderMain(HMODULE loader) {
+bool flametalLoaderMain(HMODULE loader) {
     if(!g_resources.load(loader)) {
         log_err("[-] Failed to load resources");
         return false;
     }
-    log_inf("Flame resources loaded v%s", g_resources.version.c_str());
+    log_inf("Flametal resources loaded v%s", g_resources.version.c_str());
 
-    // I need to patch Flame.dll before dll entry call. Only way I see for now is to hook NtMapViewOfSection while calling LoadLibraryA
-    SetDllDirectoryA("flame");
-    HMODULE flame = HookedLoadLibraryA("Flame.dll", [](auto flame) -> bool {
+    // I need to patch Flametal.dll before dll entry call. Only way I see for now is to hook NtMapViewOfSection while calling LoadLibraryA
+    SetDllDirectoryA("flametal");
+    HMODULE flametal = HookedLoadLibraryA("Flametal.dll", [](auto flametal) -> bool {
         // Ok, I have a mapped dll and the entry point still hasn't been called
         // I still cant replace links because ntdll hasn't done the relocations yet
         // Relocate process will erase my links if I replace them now
         // I need to patch entry point and continue at the entry point begin
-        return g_entryHook.hook(flame, [](auto flame) -> bool {
+        return g_entryHook.hook(flametal, [](auto flametal) -> bool {
             // Finally! Relocations already applied and entry is not called in both PEs
-            // we can now link Flame.dll and DKII-DX.exe together
-            return patchMain(flame);
+            // we can now link Flametal.dll and DKII-DX.exe together
+            return patchMain(flametal);
         });
     });
     SetDllDirectoryA(NULL);
 
-    if(flame == NULL) {
+    if(flametal == NULL) {
         DWORD lastError = GetLastError();
-        log_err("[-] Failed to load flame dll. lastError: %08X", lastError);
+        log_err("[-] Failed to load flametal dll. lastError: %08X", lastError);
         return false;
     }
     if(!g_entryHook.hookResult) {
@@ -684,18 +684,18 @@ bool flameLoaderMain(HMODULE loader) {
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     switch(fdwReason) {
     case DLL_PROCESS_ATTACH:
-        if (!CreateDirectory("flame", NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
-            MessageBoxA(NULL, "Failed to create flame directory", "Flame loader error", MB_OK);
+        if (!CreateDirectory("flametal", NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
+            MessageBoxA(NULL, "Failed to create flametal directory", "Flametal loader error", MB_OK);
             return FALSE;
         }
         loader::log::init();
         initDependency();
-        if(!flameLoaderMain(hinstDLL)) {
+        if(!flametalLoaderMain(hinstDLL)) {
             fflush(stdout);
-            MessageBoxA(NULL, "Load Flame failed", "Flame loader error", MB_OK);
+            MessageBoxA(NULL, "Load Flametal failed", "Flametal loader error", MB_OK);
             return FALSE;
         }
-        log_inf("Flame loader succeeded");
+        log_inf("Flametal loader succeeded");
         return TRUE;
         break;
     case DLL_THREAD_ATTACH:

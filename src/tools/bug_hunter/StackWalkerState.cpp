@@ -43,14 +43,14 @@ bool isDkiiFunctionStart(DWORD eip) {
     auto it = bughunter::find_le(bughunter::dkii_fpomap, rva);
     return it != bughunter::dkii_fpomap.end() && rva == it->rva;
 }
-bool isFlameFunctionStart(DWORD eip) {
-    if(!bughunter::isFlameCode(eip)) return false;
-    DWORD rva = eip - bughunter::flame_base;
-    auto it = bughunter::find_le(bughunter::flame_fpomap, rva);
-    return it != bughunter::flame_fpomap.end() && rva == it->rva;
+bool isFlametalFunctionStart(DWORD eip) {
+    if(!bughunter::isFlametalCode(eip)) return false;
+    DWORD rva = eip - bughunter::flametal_base;
+    auto it = bughunter::find_le(bughunter::flametal_fpomap, rva);
+    return it != bughunter::flametal_fpomap.end() && rva == it->rva;
 }
 bool isKnownFunctionStart(LoadedModule *mod, DWORD eip) {
-    if(isDkiiFunctionStart(eip) || isFlameFunctionStart(eip)) return true;
+    if(isDkiiFunctionStart(eip) || isFlametalFunctionStart(eip)) return true;
     if(auto *exp = mod->find_export_le(eip)) if(exp->addr == eip) return true;
 //    uint8_t prologue[] {0x55, 0x8B, 0xEC};
 //    if(IsBadReadPtr((void *) eip, 5)) return false;
@@ -64,16 +64,16 @@ void StackWalkerState::tryStep() {
     std::vector<MyFpoFun>* fpos = nullptr;
     bool willEbpBeValid = true;
     bool isDkii = bughunter::isDkiiCode(ctx.Eip);
-    bool isFlame = !isDkii && bughunter::isFlameCode(ctx.Eip);
+    bool isFlametal = !isDkii && bughunter::isFlametalCode(ctx.Eip);
     if(isDkii) {
         frame.libBase = bughunter::dkii_base;
         frame.libName = "DKII";
         fpos = &bughunter::dkii_fpomap;
         willEbpBeValid = false;
-    } else if(isFlame) {
-        frame.libBase = bughunter::flame_base;
-        frame.libName = "Flame";
-        fpos = &bughunter::flame_fpomap;
+    } else if(isFlametal) {
+        frame.libBase = bughunter::flametal_base;
+        frame.libName = "Flametal";
+        fpos = &bughunter::flametal_fpomap;
     } else if(bughunter::qmixer && bughunter::qmixer->codeContains(ctx.Eip)) {
         willEbpBeValid = false;
     }

@@ -7,10 +7,10 @@ set -euo pipefail
 readonly SCRIPT_DIR="${0:A:h}"
 readonly APP="${DK2_METAL_APP_BUNDLE:-${SCRIPT_DIR}/native/build/Dungeon Keeper II.app}"
 readonly RUNNER="${SCRIPT_DIR}/dk2-wine-runner.zsh"
-readonly PREFIX="${DK2_METAL_PREFIX:-${HOME}/Library/Application Support/Dungeon Keeper II Metal/prefix}"
+readonly PREFIX="${DK2_METAL_PREFIX:-${HOME}/Library/Application Support/Dungeon Keeper II/prefix}"
 readonly BRIDGE_FILE="${PREFIX}/drive_c/dk2-metal/frame.bin"
 readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-3}"
-readonly DUMP_DIR="${DK2_TEXTURE_DUMP:-${HOME}/Library/Application Support/Dungeon Keeper 2 Flame/texture-dump}"
+readonly DUMP_DIR="${DK2_TEXTURE_DUMP:-${HOME}/Library/Application Support/Dungeon Keeper II/texture-dump}"
 
 if (( $# == 0 )); then
   LEVEL=''

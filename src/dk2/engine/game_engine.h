@@ -2,8 +2,8 @@
 // Created by DiaLight on 12/10/2025.
 //
 
-#ifndef FLAME_GAME_ENGINE_H
-#define FLAME_GAME_ENGINE_H
+#ifndef FLAMETAL_GAME_ENGINE_H
+#define FLAMETAL_GAME_ENGINE_H
 
 #include <ddraw.h>
 #include <dk2/MyDdSurfaceEx.h>
@@ -64,4 +64,4 @@ namespace dk2 {
 
 }
 
-#endif // FLAME_GAME_ENGINE_H
+#endif // FLAMETAL_GAME_ENGINE_H

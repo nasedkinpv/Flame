@@ -2,8 +2,8 @@
 // Created by DiaLight on 15.06.2024.
 //
 
-#ifndef FLAME_CHUNK_H
-#define FLAME_CHUNK_H
+#ifndef FLAMETAL_CHUNK_H
+#define FLAMETAL_CHUNK_H
 
 #include <vector>
 #include <map>
@@ -53,4 +53,4 @@ struct Chunk {
 };
 
 
-#endif //FLAME_CHUNK_H
+#endif //FLAMETAL_CHUNK_H

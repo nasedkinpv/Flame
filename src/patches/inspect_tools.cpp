@@ -3,7 +3,7 @@
 //
 
 #include "inspect_tools.h"
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 
 #include "dk2/entities/CObject.h"
 #include "weanetr_dll/protocol.h"
@@ -14,8 +14,8 @@
 
 bool patch::inspect_tools::enable = false;
 
-flame_config::define_flame_option<bool> o_inspect(
-    "flame:inspect", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_inspect(
+    "flametal:inspect", flametal_config::OG_Config,
     "Some debug info. Used in development\n",
     false
 );
@@ -23,7 +23,7 @@ flame_config::define_flame_option<bool> o_inspect(
 void patch::inspect_tools::init() {
     inspect_tools::enable = o_inspect.get();
     if(!inspect_tools::enable) return;
-    printf("Flame inspect tools enabled\n");
+    printf("Flametal inspect tools enabled\n");
 }
 
 void patch::inspect_tools::sockBind(SOCKET hSock, ULONG ipv4) {

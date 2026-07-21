@@ -2,8 +2,8 @@
 // Created by DiaLight on 10/12/2025.
 //
 
-#ifndef FLAME_WELCOME_WINDOW_H
-#define FLAME_WELCOME_WINDOW_H
+#ifndef FLAMETAL_WELCOME_WINDOW_H
+#define FLAMETAL_WELCOME_WINDOW_H
 
 #include <Windows.h>
 #include <vector>
@@ -27,4 +27,4 @@ namespace patch::welcome_window {
     
 }
 
-#endif // FLAME_WELCOME_WINDOW_H
+#endif // FLAMETAL_WELCOME_WINDOW_H

@@ -2,8 +2,8 @@
 // Created by DiaLight on 11/29/2025.
 //
 
-#ifndef FLAME_ALT_RES_SECTION_H
-#define FLAME_ALT_RES_SECTION_H
+#ifndef FLAMETAL_ALT_RES_SECTION_H
+#define FLAMETAL_ALT_RES_SECTION_H
 
 
 #include <cstdlib>
@@ -11,9 +11,9 @@
 #include <string>
 #include <vector>
 #include "imgui.h"
-#include "tools/flame_config.h"
+#include "tools/flametal_config.h"
 
-extern flame_config::define_flame_option<std::string> o_altResources;
+extern flametal_config::define_flame_option<std::string> o_altResources;
 
 class OptionsSection;
 
@@ -84,4 +84,4 @@ struct AltResSection {
 };
 
 
-#endif // FLAME_ALT_RES_SECTION_H
+#endif // FLAMETAL_ALT_RES_SECTION_H

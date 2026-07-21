@@ -2,8 +2,8 @@
 // Created by DiaLight on 11/8/2025.
 //
 
-#ifndef FLAME_WELCOME_WINDOW_IMGUI_H
-#define FLAME_WELCOME_WINDOW_IMGUI_H
+#ifndef FLAMETAL_WELCOME_WINDOW_IMGUI_H
+#define FLAMETAL_WELCOME_WINDOW_IMGUI_H
 
 #include "welcome_window.h"
 #include "imgui.h"
@@ -19,4 +19,4 @@ namespace patch::welcome_window {
 
 }
 
-#endif // FLAME_WELCOME_WINDOW_IMGUI_H
+#endif // FLAMETAL_WELCOME_WINDOW_IMGUI_H

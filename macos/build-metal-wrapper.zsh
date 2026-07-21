@@ -24,13 +24,13 @@ sha256() {
 }
 
 find_payload() {
-  if [[ -n "${DK2_FLAME_PAYLOAD:-}" ]]; then
-    print -r -- "${DK2_FLAME_PAYLOAD}"
+  if [[ -n "${DK2_FLAMETAL_PAYLOAD:-}" ]]; then
+    print -r -- "${DK2_FLAMETAL_PAYLOAD}"
     return
   fi
   local candidates
   candidates=("${(@f)$(/usr/bin/find "${CACHE_DIR}/native-metal-ci" -mindepth 2 -maxdepth 2 -type f -name PATCH.dll -print 2>/dev/null | /usr/bin/sort)}")
-  (( ${#candidates} > 0 )) || fail "set DK2_FLAME_PAYLOAD to a Release artifact directory"
+  (( ${#candidates} > 0 )) || fail "set DK2_FLAMETAL_PAYLOAD to a Release artifact directory"
   print -r -- "${candidates[-1]:h}"
 }
 
@@ -47,22 +47,22 @@ if [[ ! -x "${WINE_CACHE}/bin/wine" ]]; then
 fi
 payload="$(find_payload)"
 [[ -f "${payload}/PATCH.dll" ]] || fail "PATCH.dll is missing from ${payload}"
-[[ -f "${payload}/flame/Flame.dll" ]] || fail "Flame.dll is missing from ${payload}"
-[[ -f "${payload}/flame/DKII.dll" ]] || fail "DKII.dll is missing from ${payload}"
+[[ -f "${payload}/flametal/Flametal.dll" ]] || fail "Flametal.dll is missing from ${payload}"
+[[ -f "${payload}/flametal/DKII.dll" ]] || fail "DKII.dll is missing from ${payload}"
 
 /bin/mkdir -p "${DIST_DIR}"
 stage_root="$(/usr/bin/mktemp -d "${DIST_DIR}/.metal-app-build.XXXXXX")"
 trap '/bin/rm -rf -- "${stage_root}"' EXIT
 stage="${stage_root}/Dungeon Keeper II.app"
-/bin/mkdir -p "${stage}/Contents/MacOS" "${stage}/Contents/Resources/Flame/flame"
+/bin/mkdir -p "${stage}/Contents/MacOS" "${stage}/Contents/Resources/Flametal/flametal"
 /bin/cp "${SCRIPT_DIR}/MetalInfo.plist" "${stage}/Contents/Info.plist"
 /bin/cp "${NATIVE_APP}/Contents/MacOS/DK2Metal" "${stage}/Contents/MacOS/DK2Metal"
 /bin/cp "${NATIVE_APP}/Contents/Resources/DK2Shaders.metallib" "${stage}/Contents/Resources/DK2Shaders.metallib"
 /bin/cp "${SCRIPT_DIR}/dk2-metal-launcher.zsh" "${stage}/Contents/Resources/dk2-game-runner"
 /bin/cp "${SCRIPT_DIR}/import-original-game.zsh" "${stage}/Contents/Resources/import-original-game"
-/bin/cp "${payload}/PATCH.dll" "${stage}/Contents/Resources/Flame/PATCH.dll"
-/bin/cp "${payload}/flame/Flame.dll" "${stage}/Contents/Resources/Flame/flame/Flame.dll"
-/bin/cp "${payload}/flame/DKII.dll" "${stage}/Contents/Resources/Flame/flame/DKII.dll"
+/bin/cp "${payload}/PATCH.dll" "${stage}/Contents/Resources/Flametal/PATCH.dll"
+/bin/cp "${payload}/flametal/Flametal.dll" "${stage}/Contents/Resources/Flametal/flametal/Flametal.dll"
+/bin/cp "${payload}/flametal/DKII.dll" "${stage}/Contents/Resources/Flametal/flametal/DKII.dll"
 /usr/bin/ditto "${WINE_CACHE}" "${stage}/Contents/Resources/wine"
 /bin/chmod 755 "${stage}/Contents/MacOS/DK2Metal" \
   "${stage}/Contents/Resources/dk2-game-runner" \

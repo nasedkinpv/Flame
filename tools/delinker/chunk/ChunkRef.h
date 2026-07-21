@@ -2,8 +2,8 @@
 // Created by DiaLight on 15.06.2024.
 //
 
-#ifndef FLAME_CHUNKREF_H
-#define FLAME_CHUNKREF_H
+#ifndef FLAMETAL_CHUNKREF_H
+#define FLAMETAL_CHUNKREF_H
 
 
 #include <cstdint>
@@ -49,4 +49,4 @@ struct ChunkRef {
 };
 
 
-#endif //FLAME_RELOC_H
+#endif //FLAMETAL_RELOC_H

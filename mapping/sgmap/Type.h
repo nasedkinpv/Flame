@@ -2,8 +2,8 @@
 // Created by DiaLight on 23.06.2024.
 //
 
-#ifndef FLAME_TYPE_H
-#define FLAME_TYPE_H
+#ifndef FLAMETAL_TYPE_H
+#define FLAMETAL_TYPE_H
 
 #include <map>
 #include <string>
@@ -229,4 +229,4 @@ private:
 [[nodiscard]] Type *parseType(ScopeLineIter &sli, std::map<std::string, std::string> &shortProps, SGMapArena &arena);
 
 
-#endif //FLAME_TYPE_H
+#endif //FLAMETAL_TYPE_H

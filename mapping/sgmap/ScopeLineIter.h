@@ -2,8 +2,8 @@
 // Created by DiaLight on 23.06.2024.
 //
 
-#ifndef FLAME_SCOPELINEITER_H
-#define FLAME_SCOPELINEITER_H
+#ifndef FLAMETAL_SCOPELINEITER_H
+#define FLAMETAL_SCOPELINEITER_H
 
 #include "LineIter.h"
 #include <vector>
@@ -38,4 +38,4 @@ void split(const std::string &str, const std::string &delimiter, std::vector<std
 [[nodiscard]] size_t getIntOptional(std::map<std::string, std::string> &shortProps, const std::string &key, size_t def);
 
 
-#endif //FLAME_SCOPELINEITER_H
+#endif //FLAMETAL_SCOPELINEITER_H

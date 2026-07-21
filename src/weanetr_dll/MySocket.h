@@ -2,8 +2,8 @@
 // Created by DiaLight on 20.12.2024.
 //
 
-#ifndef FLAME_MYSOCKET_H
-#define FLAME_MYSOCKET_H
+#ifndef FLAMETAL_MYSOCKET_H
+#define FLAMETAL_MYSOCKET_H
 
 #include <Windows.h>
 
@@ -29,4 +29,4 @@ int __stdcall MySocket_send(MySocket *src, MySocket *dst, void *buf, size_t len)
 
 }
 
-#endif //FLAME_MYSOCKET_H
+#endif //FLAMETAL_MYSOCKET_H

@@ -2,8 +2,8 @@
 // Created by DiaLight on 25.06.2024.
 //
 
-#ifndef FLAME_CHUNKARENA_H
-#define FLAME_CHUNKARENA_H
+#ifndef FLAMETAL_CHUNKARENA_H
+#define FLAMETAL_CHUNKARENA_H
 
 #include <vector>
 #include <memory>
@@ -19,4 +19,4 @@ struct ChunkArena {
 };
 
 
-#endif //FLAME_CHUNKARENA_H
+#endif //FLAMETAL_CHUNKARENA_H

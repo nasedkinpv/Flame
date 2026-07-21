@@ -5,7 +5,7 @@
 #include <lodepng.h>
 #include <map>
 #include <thread>
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 #include <xutility>
 #include "MyTimer.h"
 #include "alt_res_section.h"
@@ -65,7 +65,7 @@ struct WelcomeWindow {
         io.IniFilename = NULL;
         io.LogFilename = NULL;
 
-        HMODULE mod = GetModuleHandle("flame.dll");
+        HMODULE mod = GetModuleHandle("flametal.dll");
         if(mod) {
             HRSRC myResource = ::FindResource(mod, MAKEINTRESOURCE(IDR_WELCOME__MAIN_BACKGROUND), RT_RCDATA);
             if(HGLOBAL myResourceData = ::LoadResource(mod, myResource)) {
@@ -275,7 +275,7 @@ struct WelcomeWindow {
                 }
             }
             ImGui::Text("Single core: %s", isSingleCore ? "true" : "false");
-            {ImGui::SameLine(); HelpMarker("The Flame and Gog patches separately limit the number of cores. To try multithreading, disable single-core in both patches. The pre-configured Affinity mask also affects multithreading");}
+            {ImGui::SameLine(); HelpMarker("The Flametal and Gog patches separately limit the number of cores. To try multithreading, disable single-core in both patches. The pre-configured Affinity mask also affects multithreading");}
         }
     }
 

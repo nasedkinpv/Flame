@@ -2,8 +2,8 @@
 // Created by DiaLight on 11/20/2025.
 //
 
-#ifndef FLAME_MYVERSIONINFO_H
-#define FLAME_MYVERSIONINFO_H
+#ifndef FLAMETAL_MYVERSIONINFO_H
+#define FLAMETAL_MYVERSIONINFO_H
 
 #include <Windows.h>
 #include <string>
@@ -32,4 +32,4 @@ struct MyVersionInfo {
 };
 
 
-#endif // FLAME_MYVERSIONINFO_H
+#endif // FLAMETAL_MYVERSIONINFO_H

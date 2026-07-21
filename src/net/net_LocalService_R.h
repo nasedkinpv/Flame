@@ -2,8 +2,8 @@
 // Created by DiaLight on 1/10/2026.
 //
 
-#ifndef FLAME_NET_LOCALSERVICE_R_H
-#define FLAME_NET_LOCALSERVICE_R_H
+#ifndef FLAMETAL_NET_LOCALSERVICE_R_H
+#define FLAMETAL_NET_LOCALSERVICE_R_H
 
 #include <net/net_LocalService.h>
 
@@ -46,4 +46,4 @@ namespace net {
 
 }
 
-#endif // FLAME_NET_LOCALSERVICE_R_H
+#endif // FLAMETAL_NET_LOCALSERVICE_R_H

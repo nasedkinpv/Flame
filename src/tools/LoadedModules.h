@@ -2,8 +2,8 @@
 // Created by DiaLight on 21.09.2024.
 //
 
-#ifndef FLAME_LOADEDMODULES_H
-#define FLAME_LOADEDMODULES_H
+#ifndef FLAMETAL_LOADEDMODULES_H
+#define FLAMETAL_LOADEDMODULES_H
 
 #include <Windows.h>
 #include <string>
@@ -78,4 +78,4 @@ private:
 };
 
 
-#endif //FLAME_LOADEDMODULES_H
+#endif //FLAMETAL_LOADEDMODULES_H

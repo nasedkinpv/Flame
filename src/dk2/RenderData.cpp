@@ -387,7 +387,7 @@ int __cdecl dk2::sub_58B190(int idx, Vec3f *v) {
 
 
 // 0058B2A0: per-vertex attribute copy (positions + uv sets) for the cached
-// path (flags bit 2). Cache misses stay inside Flame so the hot FVF1 emitter
+// path (flags bit 2). Cache misses stay inside Flametal so the hot FVF1 emitter
 // does not bounce back through Rosetta's original x87 body.
 uint8_t __cdecl dk2::renderFun_sub_58B2A0(int idx, Vec3f *vecs, Uv2f *uvs) {
     if (!(g_idxFlags[idx] & 4)) return (uint8_t) renderFun_sub_58B440(idx, vecs, uvs);
@@ -405,7 +405,7 @@ uint8_t __cdecl dk2::renderFun_sub_58B2A0(int idx, Vec3f *vecs, Uv2f *uvs) {
 
 
 // 0058B370: cached attribute path for the alternative flexible-vertex format.
-// It mirrors 58B2A0 and keeps cache misses inside Flame's verified 58B680
+// It mirrors 58B2A0 and keeps cache misses inside Flametal's verified 58B680
 // translation, avoiding a Rosetta bounce through the original x87 body.
 uint8_t __cdecl dk2::renderFun_sub_58B370(int idx, Vec3f *vecs, Uv2f *uvs) {
     if (!(g_idxFlags[idx] & 4)) return (uint8_t) renderFun_sub_58B680(idx, vecs, uvs);

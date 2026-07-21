@@ -3,13 +3,13 @@
 //
 #include "gog_patch.h"
 
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 
 #include "gog_globals.h"
 #include "gog_debug.h"
 
-flame_config::define_flame_option<bool> o_gog_enabled(
-    "gog:enabled", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_gog_enabled(
+    "gog:enabled", flametal_config::OG_Config,
     "Enable gog patches in fullscreen mode\n",
     true
 );

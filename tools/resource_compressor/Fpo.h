@@ -2,8 +2,8 @@
 // Created by DiaLight on 9/5/2025.
 //
 
-#ifndef FLAME_FPO_H
-#define FLAME_FPO_H
+#ifndef FLAMETAL_FPO_H
+#define FLAMETAL_FPO_H
 
 
 #include <utility>
@@ -47,4 +47,4 @@ bool parseStack(const std::string &path, std::vector<FpoFun> &syms);
 
 
 
-#endif // FLAME_FPO_H
+#endif // FLAMETAL_FPO_H

@@ -2,8 +2,8 @@
 // Created by DiaLight on 03.02.2025.
 //
 
-#ifndef FLAME_DK2_PROTOCOL_H
-#define FLAME_DK2_PROTOCOL_H
+#ifndef FLAMETAL_DK2_PROTOCOL_H
+#define FLAMETAL_DK2_PROTOCOL_H
 
 #include <cstdint>
 #include "dk2/network/protocol/DataMessage_1.h"
@@ -356,4 +356,4 @@ namespace dk2 {
 }
 
 
-#endif //FLAME_DK2_PROTOCOL_H
+#endif //FLAMETAL_DK2_PROTOCOL_H

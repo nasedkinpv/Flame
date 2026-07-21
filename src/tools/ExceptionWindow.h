@@ -2,8 +2,8 @@
 // Created by DiaLight on 26.09.2024.
 //
 
-#ifndef FLAME_EXCEPTIONWINDOW_H
-#define FLAME_EXCEPTIONWINDOW_H
+#ifndef FLAMETAL_EXCEPTIONWINDOW_H
+#define FLAMETAL_EXCEPTIONWINDOW_H
 
 #include <Windows.h>
 #include <queue>
@@ -27,4 +27,4 @@ private:
 };
 
 
-#endif //FLAME_EXCEPTIONWINDOW_H
+#endif //FLAMETAL_EXCEPTIONWINDOW_H

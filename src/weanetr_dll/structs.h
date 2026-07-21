@@ -2,8 +2,8 @@
 // Created by DiaLight on 17.12.2024.
 //
 
-#ifndef FLAME_STRUCTS_H
-#define FLAME_STRUCTS_H
+#ifndef FLAMETAL_STRUCTS_H
+#define FLAMETAL_STRUCTS_H
 
 #include <Windows.h>
 #include "MySocket.h"
@@ -381,4 +381,4 @@ typedef void (__stdcall *EnumerateServicesCallback)(MyLocalService *service, wch
 
 }  // namespace net
 
-#endif //FLAME_STRUCTS_H
+#endif //FLAMETAL_STRUCTS_H

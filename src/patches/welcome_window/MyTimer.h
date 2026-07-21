@@ -2,8 +2,8 @@
 // Created by DiaLight on 11/29/2025.
 //
 
-#ifndef FLAME_MYTIMER_H
-#define FLAME_MYTIMER_H
+#ifndef FLAMETAL_MYTIMER_H
+#define FLAMETAL_MYTIMER_H
 
 #include <Windows.h>
 
@@ -23,4 +23,4 @@ struct MyTimer {
 };
 
 
-#endif // FLAME_MYTIMER_H
+#endif // FLAMETAL_MYTIMER_H

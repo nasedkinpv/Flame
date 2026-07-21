@@ -53,7 +53,7 @@ NSString *directory() {
         NSString *path = env[0] == '/'
                 ? @(env)
                 : [NSHomeDirectory() stringByAppendingPathComponent:
-                          @"Library/Application Support/Dungeon Keeper 2 Flame/texture-dump"];
+                          @"Library/Application Support/Dungeon Keeper II/texture-dump"];
         if ([[NSFileManager defaultManager] createDirectoryAtPath:path
                                       withIntermediateDirectories:YES
                                                        attributes:nil
@@ -371,7 +371,7 @@ NSString *directory() {
         NSString *path = (env && *env)
                 ? @(env)
                 : [NSHomeDirectory() stringByAppendingPathComponent:
-                          @"Library/Application Support/Dungeon Keeper 2 Flame/textures-hd"];
+                          @"Library/Application Support/Dungeon Keeper II/textures-hd"];
         BOOL isDir = NO;
         if ([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDir] && isDir) {
             dir = path;
@@ -2676,7 +2676,7 @@ static void *renderWorker(void *context) {
                                                  appropriateForURL:nil
                                                             create:YES
                                                              error:&error];
-    NSURL *bridgeDirectory = [[support URLByAppendingPathComponent:@"Dungeon Keeper II Metal"
+    NSURL *bridgeDirectory = [[support URLByAppendingPathComponent:@"Dungeon Keeper II"
                                                         isDirectory:YES]
         URLByAppendingPathComponent:@"prefix/drive_c/dk2-metal" isDirectory:YES];
     if (!support || ![NSFileManager.defaultManager createDirectoryAtURL:bridgeDirectory

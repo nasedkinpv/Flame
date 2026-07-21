@@ -2,8 +2,8 @@
 // Created by DiaLight on 30.06.2024.
 //
 
-#ifndef FLAME_VARELOC_H
-#define FLAME_VARELOC_H
+#ifndef FLAMETAL_VARELOC_H
+#define FLAMETAL_VARELOC_H
 
 #include <vector>
 #include <string>
@@ -34,4 +34,4 @@ std::vector<VaReloc>::iterator find_lt(std::vector<VaReloc> &relocs, uint32_t of
 std::vector<VaReloc>::iterator find_le(std::vector<VaReloc> &relocs, uint32_t offs);
 
 
-#endif //FLAME_VARELOC_H
+#endif //FLAMETAL_VARELOC_H

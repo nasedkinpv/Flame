@@ -46,7 +46,7 @@ enum MainWindowId {
     MWID_UnkList = 47,
     MWID_MyPetDungeon_Other = 48,
 
-    // flame patch
+    // flametal patch
     MWID_SinglePlayer_CustomCampaign = 50,
 };
 

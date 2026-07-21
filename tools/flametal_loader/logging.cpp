@@ -19,7 +19,7 @@ void loader::log::init() {
     g_log_initialized = true;
     g_start_tick = GetTickCount();
     {  // clear latest file
-        std::ofstream ofs("flame/latest.log", std::ios::out );
+        std::ofstream ofs("flametal/latest.log", std::ios::out );
         ofs.close();
     }
 }
@@ -58,7 +58,7 @@ void vlog(const char *level, const char *format, va_list args) {
     pch[0] = '\0';
     fprintf(stdout, "%s\n", conStart);
     {
-        std::ofstream ofs("flame/latest.log", std::ios::out | std::ios::app);
+        std::ofstream ofs("flametal/latest.log", std::ios::out | std::ios::app);
         ofs << msg << '\n';
         ofs.close();
     }

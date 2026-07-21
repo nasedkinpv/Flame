@@ -2,8 +2,8 @@
 // Created by DiaLight on 9/14/2025.
 //
 
-#ifndef FLAME_LOGGING_H
-#define FLAME_LOGGING_H
+#ifndef FLAMETAL_LOGGING_H
+#define FLAMETAL_LOGGING_H
 
 
 #include <cstdarg>
@@ -25,4 +25,4 @@ namespace loader::log {
 #define log_warn(fmt, ...) loader::log::warn(fname(fmt, __VA_ARGS__))
 
 
-#endif // FLAME_LOGGING_H
+#endif // FLAMETAL_LOGGING_H

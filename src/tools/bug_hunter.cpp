@@ -25,7 +25,7 @@
 #include <codecvt>
 
 #include "console.h"
-#include "flame_config.h"
+#include "flametal_config.h"
 #include "sha1.hpp"
 #include "tools/bug_hunter/MyFpoFun.h"
 #include "tools/bug_hunter/MyVersionInfo.h"
@@ -119,10 +119,10 @@ EXTERN_C __declspec(dllexport) void *_dkii_fpomap_start = nullptr;
 EXTERN_C __declspec(dllexport) void *_dkii_text_start = nullptr;
 EXTERN_C __declspec(dllexport) void *_dkii_text_end = nullptr;
 
-EXTERN_C __declspec(dllexport) void *_flame_base = nullptr;
-EXTERN_C __declspec(dllexport) void *_flame_fpomap_start = nullptr;
-EXTERN_C __declspec(dllexport) void *_flame_text_start = nullptr;
-EXTERN_C __declspec(dllexport) void *_flame_text_end = nullptr;
+EXTERN_C __declspec(dllexport) void *_flametal_base = nullptr;
+EXTERN_C __declspec(dllexport) void *_flametal_fpomap_start = nullptr;
+EXTERN_C __declspec(dllexport) void *_flametal_text_start = nullptr;
+EXTERN_C __declspec(dllexport) void *_flametal_text_end = nullptr;
 
 std::shared_ptr<LoadedModule> bughunter::weanetr;
 std::shared_ptr<LoadedModule> bughunter::qmixer;
@@ -151,14 +151,14 @@ bool bughunter::isDkiiCode(DWORD ptr) noexcept {
     return dkii_text_start <= ptr && ptr < dkii_text_end;
 }
 
-uintptr_t bughunter::flame_base = 0;
-uintptr_t bughunter::flame_fpomap_start = 0;
-uintptr_t bughunter::flame_text_start = 0;
-uintptr_t bughunter::flame_text_end = 0;
-std::vector<MyFpoFun> bughunter::flame_fpomap;
+uintptr_t bughunter::flametal_base = 0;
+uintptr_t bughunter::flametal_fpomap_start = 0;
+uintptr_t bughunter::flametal_text_start = 0;
+uintptr_t bughunter::flametal_text_end = 0;
+std::vector<MyFpoFun> bughunter::flametal_fpomap;
 
-bool bughunter::isFlameCode(DWORD ptr) noexcept {
-    return flame_text_start <= ptr && ptr < flame_text_end;
+bool bughunter::isFlametalCode(DWORD ptr) noexcept {
+    return flametal_text_start <= ptr && ptr < flametal_text_end;
 }
 
 bool ichar_equals(char a, char b) {
@@ -183,10 +183,10 @@ void resolveLocs() {
     bughunter::dkii_text_start = (uintptr_t) _dkii_text_start;
     bughunter::dkii_text_end = (uintptr_t) _dkii_text_end;
 
-    bughunter::flame_base = (uintptr_t) _flame_base;
-    bughunter::flame_fpomap_start = (uintptr_t) _flame_fpomap_start;
-    bughunter::flame_text_start = (uintptr_t) _flame_text_start;
-    bughunter::flame_text_end = (uintptr_t) _flame_text_end;
+    bughunter::flametal_base = (uintptr_t) _flametal_base;
+    bughunter::flametal_fpomap_start = (uintptr_t) _flametal_fpomap_start;
+    bughunter::flametal_text_start = (uintptr_t) _flametal_text_start;
+    bughunter::flametal_text_end = (uintptr_t) _flametal_text_end;
 
     LoadedModules modules;
     modules.update();
@@ -424,13 +424,13 @@ void formatModules(std::stringstream &ss, LoadedModules &modules) {
 
 void formatConfig(std::stringstream &ss) {
     ss << "config:\n";
-    ss << flame_config::shortDump();
+    ss << flametal_config::shortDump();
 }
 
 void buildFileName(FILETIME &timestamp, const char *namePart, char *reportFile, size_t bufCount) {
     char curDir[MAX_PATH];
     GetCurrentDirectoryA(MAX_PATH, curDir);
-    strcat(curDir, "\\flame\\");
+    strcat(curDir, "\\flametal\\");
     strcat(curDir, namePart);
 
     if (!CreateDirectory(curDir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
@@ -444,10 +444,10 @@ void buildFileName(FILETIME &timestamp, const char *namePart, char *reportFile, 
 
     SYSTEMTIME stime;
     FileTimeToSystemTime(&timestamp, &stime);
-    snprintf(reportFile, bufCount, "%s\\Flame-%s-%02d%02d%02d.txt", curDir, namePart,
+    snprintf(reportFile, bufCount, "%s\\Flametal-%s-%02d%02d%02d.txt", curDir, namePart,
              stime.wYear % 100, stime.wMonth, stime.wDay);
     for (int suffix = 1; fs::exists(reportFile); suffix++) {
-        snprintf(reportFile, bufCount, "%s\\Flame-%s-%02d%02d%02d[%d].txt", curDir, namePart,
+        snprintf(reportFile, bufCount, "%s\\Flametal-%s-%02d%02d%02d[%d].txt", curDir, namePart,
                  stime.wYear % 100, stime.wMonth, stime.wDay, suffix);
     }
 }
@@ -615,7 +615,7 @@ LONG WINAPI TopLevelExceptionFilter(_In_ struct _EXCEPTION_POINTERS *ExceptionIn
     }
     std::cerr << text << std::endl;
 
-    SetEnvironmentVariableA("FLAME_CRASH_FILE", reportFile);
+    SetEnvironmentVariableA("FLAMETAL_CRASH_FILE", reportFile);
 
     char exeFile[MAX_PATH];
     GetModuleFileNameA(NULL, exeFile, MAX_PATH);
@@ -697,24 +697,24 @@ void displayCrashMessage() {
     gui::initDPI();
     std::stringstream ss;
     ss << "The Dungeon Keeper 2 process has crashed" << std::endl;
-    ss << "But! Flame has collected crash info in the text file" << std::endl;
+    ss << "But! Flametal has collected crash info in the text file" << std::endl;
 
     char exeDir[MAX_PATH];
     GetCurrentDirectoryA(MAX_PATH, exeDir);
     char crashFile[MAX_PATH];
-    if(GetEnvironmentVariableA("FLAME_CRASH_FILE", crashFile, MAX_PATH) != 0) {
+    if(GetEnvironmentVariableA("FLAMETAL_CRASH_FILE", crashFile, MAX_PATH) != 0) {
         ss << "CrashInfo location:" << std::endl;
         ss << crashFile << std::endl;
     } else {
         crashFile[0] = '\0';
         ss << "CrashInfos location:" << std::endl;
-        ss << exeDir << "\\flame\\CrashInfo\\Flame-CrashInfo-*.txt" << std::endl;
+        ss << exeDir << "\\flametal\\CrashInfo\\Flametal-CrashInfo-*.txt" << std::endl;
     }
     ss << std::endl;
     ss << "ok - open directory and exit" << std::endl;
     ss << "cancel - exit" << std::endl;
     std::string text = ss.str();
-    int res = MessageBoxA(NULL, text.c_str(), "Flame bug hunter", MB_OKCANCEL | MB_ICONERROR);
+    int res = MessageBoxA(NULL, text.c_str(), "Flametal bug hunter", MB_OKCANCEL | MB_ICONERROR);
     if(res == IDOK) {
         // try open directory and select file
         if(crashFile[0]) {
@@ -738,7 +738,7 @@ void bug_hunter::displayCrash() {
 void bug_hunter::init() {
     resolveLocs();
     parseFpomap(bughunter::dkii_fpomap_start, bughunter::dkii_fpomap);
-    parseFpomap(bughunter::flame_fpomap_start, bughunter::flame_fpomap);
+    parseFpomap(bughunter::flametal_fpomap_start, bughunter::flametal_fpomap);
     g_prev = SetUnhandledExceptionFilter(TopLevelExceptionFilter);
 }
 

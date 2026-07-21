@@ -2,8 +2,8 @@
 // Created by DiaLight on 9/17/2025.
 //
 
-#ifndef FLAME_WALKERERROR_H
-#define FLAME_WALKERERROR_H
+#ifndef FLAMETAL_WALKERERROR_H
+#define FLAMETAL_WALKERERROR_H
 
 #include <string>
 
@@ -26,4 +26,4 @@ private:
 };
 
 
-#endif // FLAME_WALKERERROR_H
+#endif // FLAMETAL_WALKERERROR_H

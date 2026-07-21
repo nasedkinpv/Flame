@@ -2,8 +2,8 @@
 // Created by DiaLight on 13.09.2024.
 //
 
-#ifndef FLAME_BUG_HUNTER_H
-#define FLAME_BUG_HUNTER_H
+#ifndef FLAMETAL_BUG_HUNTER_H
+#define FLAMETAL_BUG_HUNTER_H
 
 #include <Windows.h>
 #include <memory>
@@ -35,13 +35,13 @@ namespace bughunter {
 
     bool isDkiiCode(DWORD ptr) noexcept;
 
-    extern uintptr_t flame_base;
-    extern uintptr_t flame_fpomap_start;
-    extern uintptr_t flame_text_start;
-    extern uintptr_t flame_text_end;
-    extern std::vector<MyFpoFun> flame_fpomap;
+    extern uintptr_t flametal_base;
+    extern uintptr_t flametal_fpomap_start;
+    extern uintptr_t flametal_text_start;
+    extern uintptr_t flametal_text_end;
+    extern std::vector<MyFpoFun> flametal_fpomap;
 
-    bool isFlameCode(DWORD ptr) noexcept;
+    bool isFlametalCode(DWORD ptr) noexcept;
 }
 
 
@@ -49,4 +49,4 @@ void dumpCurrentStack(int numFrames=-1);
 void traceCurrentStack(std::vector<StackFrame> &frames, WalkerError &err);
 
 
-#endif //FLAME_BUG_HUNTER_H
+#endif //FLAMETAL_BUG_HUNTER_H

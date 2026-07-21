@@ -2,8 +2,8 @@
 // Created by DiaLight on 4/6/2025.
 //
 
-#ifndef FLAME_CONFIG_H
-#define FLAME_CONFIG_H
+#ifndef FLAMETAL_CONFIG_H
+#define FLAMETAL_CONFIG_H
 
 #include <string>
 #include <vector>
@@ -11,7 +11,7 @@
 #include <functional>
 
 
-namespace flame_config {
+namespace flametal_config {
     enum value_type {
         VT_None,
         VT_String,
@@ -20,7 +20,7 @@ namespace flame_config {
         VT_Float,
     };
 
-    struct flame_value {
+    struct flametal_value {
 
         typedef std::string string_ty;
         typedef bool bool_ty;
@@ -35,16 +35,16 @@ namespace flame_config {
             float_ty float_value;
         };
 
-        explicit flame_value() : ty(VT_None) { int_value = 0; }
-        explicit flame_value(const char *value) : ty(VT_String) { new (&str_value) string_ty(value); }
-        explicit flame_value(const std::string &value) : ty(VT_String) { new (&str_value) string_ty(value); }
-        explicit flame_value(bool value) : ty(VT_Boolean) { new (&bool_value) bool_ty(value); }
-        explicit flame_value(int value) : ty(VT_Int) { new (&int_value) int_ty(value); }
-        explicit flame_value(float value) : ty(VT_Float) { new (&float_value) float_ty(value); }
-        flame_value(const flame_value &other) : flame_value() { *this = other; }
-        flame_value(flame_value &&other) noexcept : flame_value() { *this = std::move(other); }
+        explicit flametal_value() : ty(VT_None) { int_value = 0; }
+        explicit flametal_value(const char *value) : ty(VT_String) { new (&str_value) string_ty(value); }
+        explicit flametal_value(const std::string &value) : ty(VT_String) { new (&str_value) string_ty(value); }
+        explicit flametal_value(bool value) : ty(VT_Boolean) { new (&bool_value) bool_ty(value); }
+        explicit flametal_value(int value) : ty(VT_Int) { new (&int_value) int_ty(value); }
+        explicit flametal_value(float value) : ty(VT_Float) { new (&float_value) float_ty(value); }
+        flametal_value(const flametal_value &other) : flametal_value() { *this = other; }
+        flametal_value(flametal_value &&other) noexcept : flametal_value() { *this = std::move(other); }
 
-        flame_value & operator=(const flame_value &other) {
+        flametal_value & operator=(const flametal_value &other) {
             if (this == &other) return *this;
             cleanup();
             ty = other.ty;
@@ -58,7 +58,7 @@ namespace flame_config {
             return *this;
         }
 
-        flame_value & operator=(flame_value &&other) noexcept {
+        flametal_value & operator=(flametal_value &&other) noexcept {
             if (this == &other) return *this;
             cleanup();
             ty = other.ty;
@@ -74,7 +74,7 @@ namespace flame_config {
             return *this;
         }
 
-        ~flame_value() {
+        ~flametal_value() {
             cleanup();
         }
 
@@ -102,12 +102,12 @@ namespace flame_config {
 
     };
 
-    bool operator==(const flame_value& lhs, const flame_value& rhs);
+    bool operator==(const flametal_value& lhs, const flametal_value& rhs);
 
-    flame_value get_option(const std::string &path);
-    void set_option(const std::string &path, flame_value value);
-    flame_value get_cmdl_option(const std::string &path);
-    void set_tmp_option(const std::string &path, flame_value value);
+    flametal_value get_option(const std::string &path);
+    void set_option(const std::string &path, flametal_value value);
+    flametal_value get_cmdl_option(const std::string &path);
+    void set_tmp_option(const std::string &path, flametal_value value);
 
     void help();
     void load(std::string &file);
@@ -121,43 +121,43 @@ namespace flame_config {
         OG_HiddenState,  // will not be shown in gui
     };
 
-    struct defined_flame_option {
+    struct defined_flametal_option {
         const char *path;
         OptionGroup group;
         const char *help;
 
-        flame_value defaultValue;
-        flame_value &value;
+        flametal_value defaultValue;
+        flametal_value &value;
 
         bool affected_by_command_line = false;
 
-        defined_flame_option(const char *path, OptionGroup group, const char *help, flame_value &&defaultValue, flame_value &value)
+        defined_flametal_option(const char *path, OptionGroup group, const char *help, flametal_value &&defaultValue, flametal_value &value)
             : path(path), group(group), help(help), defaultValue(std::move(defaultValue)), value(value) {
         }
     };
-    void iterateDefinedOptions(const std::function<void(defined_flame_option&)> &cb);
+    void iterateDefinedOptions(const std::function<void(defined_flametal_option&)> &cb);
 
-    void _register_flame_option(const char *path, OptionGroup group, const char *help, flame_value &&defaultValue, flame_value &value);
+    void _register_flametal_option(const char *path, OptionGroup group, const char *help, flametal_value &&defaultValue, flametal_value &value);
 
     template <typename T>
     struct define_flame_option {
 
         const char *path = NULL;
-        flame_value value;  // cache for faster access
+        flametal_value value;  // cache for faster access
         define_flame_option() = delete;
-        define_flame_option(const char *path, OptionGroup group, const char *help, T defaultValue) : path(path) { _register_flame_option(path, group, help, flame_value(defaultValue), value); }
+        define_flame_option(const char *path, OptionGroup group, const char *help, T defaultValue) : path(path) { _register_flametal_option(path, group, help, flametal_value(defaultValue), value); }
 
         // n template: failed requirement
         // 'std::is_same<bool, std::basic_string<char, std::char_traits<char>, std::allocator<char>>>::value'
         // ; 'enable_if' cannot be used to disable this declaration
         void set(T &value) requires std::is_same<T, std::string>::value {
-            set_option(path, flame_value(value));
+            set_option(path, flametal_value(value));
         }
         void set(T value) requires (!std::is_same<T, std::string>::value) {
-            set_option(path, flame_value(value));
+            set_option(path, flametal_value(value));
         }
         void set_tmp(T value) requires (!std::is_same<T, std::string>::value) {
-            set_tmp_option(path, flame_value(value));
+            set_tmp_option(path, flametal_value(value));
         }
 
         T &get() requires std::is_same<T, std::string>::value {
@@ -204,4 +204,4 @@ namespace flame_config {
 
 }
 
-#endif //FLAME_CONFIG_H
+#endif //FLAMETAL_CONFIG_H

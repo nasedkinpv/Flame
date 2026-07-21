@@ -161,7 +161,7 @@ int main(int argc, char * argv[]) {
         }
         def_os << "LIBRARY DKII" << std::endl;
         def_os << "EXPORTS" << std::endl;
-//        exp_os << "LIBRARY DKII-Flame" << std::endl;
+//        exp_os << "LIBRARY DKII-Flametal" << std::endl;
         exp_os << "EXPORTS" << std::endl;
 
         asm_os << ".386" << std::endl;

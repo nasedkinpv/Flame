@@ -2,8 +2,8 @@
 // Created by DiaLight on 11.03.2025.
 //
 
-#ifndef FLAME_PROTOCOL_DUMP_H
-#define FLAME_PROTOCOL_DUMP_H
+#ifndef FLAMETAL_PROTOCOL_DUMP_H
+#define FLAMETAL_PROTOCOL_DUMP_H
 
 
 namespace patch::protocol_dump {
@@ -18,4 +18,4 @@ namespace patch::protocol_dump {
 };
 
 
-#endif //FLAME_PROTOCOL_DUMP_H
+#endif //FLAMETAL_PROTOCOL_DUMP_H

@@ -6,7 +6,7 @@
 #include <WS2tcpip.h>
 #include "micro_patches.h"
 
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 
 #include "dk2/utils/Pos2i.h"
 #include "dk2/utils/AABB.h"
@@ -76,8 +76,8 @@ void patch::null_surf_fix::init() {
 }
 
 
-flame_config::define_flame_option<int> o_experimentalRoomsLimit(
-    "flame:experimental:rooms-limit", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_experimentalRoomsLimit(
+    "flametal:experimental:rooms-limit", flametal_config::OG_Config,
     "Extending rooms limit. DK2 1.7 value is 96. max value: 255\n",
     255
 );
@@ -88,7 +88,7 @@ uint8_t patch::override_max_room_count::getLimit() {
 void patch::use_wasd_by_default_patch::useAlternativeName(LPCSTR &lpValueName) {
     if(!use_wasd_by_default_patch::enabled) return;
     if(lpValueName && strncmp(lpValueName, "Key Table", 12) == 0) {
-        lpValueName = "Key Table Flame";
+        lpValueName = "Key Table Flametal";
     }
 }
 
@@ -179,8 +179,8 @@ bool patch::skippable_title_screen::skipKeyPressed() {
 }
 
 
-flame_config::define_flame_option<std::string> o_myip(
-    "flame:myip", flame_config::OG_Config,
+flametal_config::define_flame_option<std::string> o_myip(
+    "flametal:myip", flametal_config::OG_Config,
     "force set local ip address in network sessions",
     ""
 );
@@ -196,7 +196,7 @@ void patch::multi_interface_fix::init() {
         printf("[multi_interface_fix] force use provided by flags ipv4 %s\n", ipv4Str.c_str());
         userProvidedIpv4 = sa.sin_addr.S_un.S_addr;
     } else {
-        MessageBoxA(NULL, "you provided invalid flame:myip option", "Flame:multi_interface_fix", MB_OK);
+        MessageBoxA(NULL, "you provided invalid flametal:myip option", "Flametal:multi_interface_fix", MB_OK);
         exit(1);
     }
 }

@@ -2,8 +2,8 @@
 // Created by DiaLight on 9/28/2025.
 //
 
-#ifndef FLAME_EXPAND_SURF_IDX_ARRAY_H
-#define FLAME_EXPAND_SURF_IDX_ARRAY_H
+#ifndef FLAMETAL_EXPAND_SURF_IDX_ARRAY_H
+#define FLAMETAL_EXPAND_SURF_IDX_ARRAY_H
 
 
 #include "dk2/RtGuiView.h"
@@ -18,4 +18,4 @@ namespace patch::expand_surf_idx_array {
 }
 
 
-#endif // FLAME_EXPAND_SURF_IDX_ARRAY_H
+#endif // FLAMETAL_EXPAND_SURF_IDX_ARRAY_H

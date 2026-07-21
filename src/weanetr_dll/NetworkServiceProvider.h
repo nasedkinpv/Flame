@@ -2,8 +2,8 @@
 // Created by DiaLight on 17.12.2024.
 //
 
-#ifndef FLAME_NETWORKSERVICEPROVIDER_H
-#define FLAME_NETWORKSERVICEPROVIDER_H
+#ifndef FLAMETAL_NETWORKSERVICEPROVIDER_H
+#define FLAMETAL_NETWORKSERVICEPROVIDER_H
 
 #include <Windows.h>
 #include <thread>
@@ -228,4 +228,4 @@ static_assert(sizeof(NetworkServiceProvider) == 0x565);
 
 }  // namespace net
 
-#endif //FLAME_NETWORKSERVICEPROVIDER_H
+#endif //FLAMETAL_NETWORKSERVICEPROVIDER_H

@@ -5,12 +5,12 @@
 #include "wine_support.h"
 #include <Windows.h>
 #include "logging.h"
-#include "tools/flame_config.h"
+#include "tools/flametal_config.h"
 #include <string>
 
 
-flame_config::define_flame_option<bool> o_wine_main_thread_priority(
-    "flame:wine:main-thread-priority", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_wine_main_thread_priority(
+    "flametal:wine:main-thread-priority", flametal_config::OG_Config,
     "Raise the main game thread priority to HIGHEST.\n"
     "Under Wine on macOS this maps to a higher QoS class, letting\n"
     "the Game Mode scheduler boost reach the busiest thread",
@@ -168,8 +168,8 @@ void patch::wine_support::init() {
         snprintf(
             msg, sizeof(msg),
             "Detected Wine, but Wine\\AppDefaults\\%s\\Direct3D.VideoMemorySize is not configured\n"
-            "Allow Flame to configure Wine?", modName.c_str());
-        int res = MessageBoxA(NULL, msg, "Flame", MB_YESNO);
+            "Allow Flametal to configure Wine?", modName.c_str());
+        int res = MessageBoxA(NULL, msg, "Flametal", MB_YESNO);
         if(res != IDYES) {
             patch::log::dbg("skipping wine configuration");
             return;
@@ -180,11 +180,11 @@ void patch::wine_support::init() {
             if(RegKeyCxx d3d = mod.create_subkey("Direct3D")) {
                 if(d3d.set_str("VideoMemorySize", "2048")) {
                     patch::log::dbg("Wine registry has been patched!");
-                    MessageBoxA(NULL, "Direct3D.VideoMemorySize has been configured!\nPlease restart the game!", "Flame", MB_OK);
+                    MessageBoxA(NULL, "Direct3D.VideoMemorySize has been configured!\nPlease restart the game!", "Flametal", MB_OK);
                     ExitProcess(0);
                 }
             }
         }
     }
-    MessageBoxA(NULL, "Failed to configure Wine", "Flame", MB_OK);
+    MessageBoxA(NULL, "Failed to configure Wine", "Flametal", MB_OK);
 }

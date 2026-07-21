@@ -2,8 +2,8 @@
 // Created by DiaLight on 20.06.2024.
 //
 
-#ifndef FLAME_SGMAP_H
-#define FLAME_SGMAP_H
+#ifndef FLAMETAL_SGMAP_H
+#define FLAMETAL_SGMAP_H
 
 #include <string>
 #include <vector>
@@ -32,4 +32,4 @@ struct SGMapArena {
 );
 
 
-#endif //FLAME_SGMAP_H
+#endif //FLAMETAL_SGMAP_H

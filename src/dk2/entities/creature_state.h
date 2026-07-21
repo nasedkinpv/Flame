@@ -2,8 +2,8 @@
 // Created by DiaLight on 08.08.2024.
 //
 
-#ifndef FLAME_CREATURE_STATE_H
-#define FLAME_CREATURE_STATE_H
+#ifndef FLAMETAL_CREATURE_STATE_H
+#define FLAMETAL_CREATURE_STATE_H
 
 
 #define StateFlags1_InHand 0x00000001
@@ -58,4 +58,4 @@
 #define StateFlags2_Fleeing 0x00100000
 #define StateFlags2_InWater 0x00200000
 
-#endif //FLAME_CREATURE_STATE_H
+#endif //FLAMETAL_CREATURE_STATE_H

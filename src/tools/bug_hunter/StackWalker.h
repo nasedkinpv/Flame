@@ -2,8 +2,8 @@
 // Created by DiaLight on 9/17/2025.
 //
 
-#ifndef FLAME_STACKWALKER_H
-#define FLAME_STACKWALKER_H
+#ifndef FLAMETAL_STACKWALKER_H
+#define FLAMETAL_STACKWALKER_H
 
 #include <Windows.h>
 #include <memory>
@@ -28,4 +28,4 @@ public:
 };
 
 
-#endif // FLAME_STACKWALKER_H
+#endif // FLAMETAL_STACKWALKER_H

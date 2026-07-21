@@ -2,8 +2,8 @@
 // Created by DiaLight on 16.06.2024.
 //
 
-#ifndef FLAME_DK2_H
-#define FLAME_DK2_H
+#ifndef FLAMETAL_DK2_H
+#define FLAMETAL_DK2_H
 
 #include <vector>
 #include "chunk/ChunkRef.h"
@@ -27,4 +27,4 @@ bool buildChunks(std::vector<SectionChunk> &&sections, std::vector<VaReloc> &&re
 bool collectImports(uint8_t *base, std::vector<Global *> &out, SGMapArena &arena);
 
 
-#endif //FLAME_DK2_H
+#endif //FLAMETAL_DK2_H

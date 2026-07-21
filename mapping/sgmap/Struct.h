@@ -2,8 +2,8 @@
 // Created by DiaLight on 23.06.2024.
 //
 
-#ifndef FLAME_STRUCT_H
-#define FLAME_STRUCT_H
+#ifndef FLAMETAL_STRUCT_H
+#define FLAMETAL_STRUCT_H
 
 #include <map>
 #include <utility>
@@ -55,4 +55,4 @@ struct Struct {
 
 };
 
-#endif //FLAME_STRUCT_H
+#endif //FLAMETAL_STRUCT_H

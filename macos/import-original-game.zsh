@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly SCRIPT_DIR="${0:A:h}"
 readonly REPO_ROOT="${SCRIPT_DIR:h}"
-readonly PREFIX="${DK2_METAL_PREFIX:-${HOME}/Library/Application Support/Dungeon Keeper II Metal/prefix}"
+readonly PREFIX="${DK2_METAL_PREFIX:-${HOME}/Library/Application Support/Dungeon Keeper II/prefix}"
 readonly GAME_PARENT="${PREFIX}/drive_c/GOG Games"
 readonly GAME_DIR="${GAME_PARENT}/Dungeon Keeper 2"
 readonly WINE="${DK2_WINE_BIN:-${REPO_ROOT}/.cache/wine-stable-11.0_1/Contents/Resources/wine/bin/wine}"
@@ -56,13 +56,13 @@ validate_source() {
 }
 
 find_payload() {
-  if [[ -n "${DK2_FLAME_PAYLOAD:-}" ]]; then
-    print -r -- "${DK2_FLAME_PAYLOAD}"
+  if [[ -n "${DK2_FLAMETAL_PAYLOAD:-}" ]]; then
+    print -r -- "${DK2_FLAMETAL_PAYLOAD}"
     return
   fi
   local candidates
   candidates=("${(@f)$(/usr/bin/find "${REPO_ROOT}/.cache/native-metal-ci" -mindepth 2 -maxdepth 2 -type f -name PATCH.dll -print 2>/dev/null | /usr/bin/sort)}")
-  (( ${#candidates} > 0 )) || fail "Flame payload is missing; set DK2_FLAME_PAYLOAD"
+  (( ${#candidates} > 0 )) || fail "Flametal payload is missing; set DK2_FLAMETAL_PAYLOAD"
   print -r -- "${candidates[-1]:h}"
 }
 
@@ -88,8 +88,8 @@ print -- "Validated: ${source_game}"
 [[ -x "${WINE}" && -x "${WINESERVER}" ]] || fail "the bundled Wine runtime is missing"
 payload="$(find_payload)"
 [[ -f "${payload}/PATCH.dll" ]] || fail "PATCH.dll is missing from ${payload}"
-[[ -f "${payload}/flame/Flame.dll" ]] || fail "Flame.dll is missing from ${payload}"
-[[ -f "${payload}/flame/DKII.dll" ]] || fail "DKII.dll is missing from ${payload}"
+[[ -f "${payload}/flametal/Flametal.dll" ]] || fail "Flametal.dll is missing from ${payload}"
+[[ -f "${payload}/flametal/DKII.dll" ]] || fail "DKII.dll is missing from ${payload}"
 
 /bin/mkdir -p "${PREFIX}" "${GAME_PARENT}"
 if [[ ! -f "${PREFIX}/system.reg" ]]; then
@@ -108,12 +108,12 @@ trap '/bin/rm -rf -- "${stage}"' EXIT INT TERM HUP
 for dll in ddraw.dll d3dimm.dll dinput.dll; do
   [[ ! -f "${stage}/${dll}" ]] || /bin/mv "${stage}/${dll}" "${stage}/${dll}.disabled"
 done
-/bin/mkdir -p "${stage}/flame"
+/bin/mkdir -p "${stage}/flametal"
 /bin/cp -p "${payload}/PATCH.dll" "${stage}/PATCH.dll"
-/bin/cp -p "${payload}/flame/Flame.dll" "${stage}/Flame.dll"
-/bin/cp -p "${payload}/flame/DKII.dll" "${stage}/DKII.dll"
-/bin/cp -p "${payload}/flame/Flame.dll" "${stage}/flame/Flame.dll"
-/bin/cp -p "${payload}/flame/DKII.dll" "${stage}/flame/DKII.dll"
+/bin/cp -p "${payload}/flametal/Flametal.dll" "${stage}/Flametal.dll"
+/bin/cp -p "${payload}/flametal/DKII.dll" "${stage}/DKII.dll"
+/bin/cp -p "${payload}/flametal/Flametal.dll" "${stage}/flametal/Flametal.dll"
+/bin/cp -p "${payload}/flametal/DKII.dll" "${stage}/flametal/DKII.dll"
 /bin/mv "${stage}" "${GAME_DIR}"
 trap - EXIT INT TERM HUP
 

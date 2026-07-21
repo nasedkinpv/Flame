@@ -2,8 +2,8 @@
 // Created by DiaLight on 11/27/2025.
 //
 
-#ifndef FLAME_ALTERNATIVE_RESOURCES_H
-#define FLAME_ALTERNATIVE_RESOURCES_H
+#ifndef FLAMETAL_ALTERNATIVE_RESOURCES_H
+#define FLAMETAL_ALTERNATIVE_RESOURCES_H
 
 
 namespace patch::alternative_resources {
@@ -15,4 +15,4 @@ namespace patch::alternative_resources {
 }
 
 
-#endif // FLAME_ALTERNATIVE_RESOURCES_H
+#endif // FLAMETAL_ALTERNATIVE_RESOURCES_H

@@ -2,8 +2,8 @@
 // Created by DiaLight on 01.10.2024.
 //
 
-#ifndef FLAME_ROOM_TYPE_H
-#define FLAME_ROOM_TYPE_H
+#ifndef FLAMETAL_ROOM_TYPE_H
+#define FLAMETAL_ROOM_TYPE_H
 
 #define CRoom_types(cb) \
     cb(1, Treasury)\
@@ -40,4 +40,4 @@ enum CRoom_typeId {
 };
 const char *CRoom_typeId_toString(int ty);
 
-#endif //FLAME_ROOM_TYPE_H
+#endif //FLAMETAL_ROOM_TYPE_H

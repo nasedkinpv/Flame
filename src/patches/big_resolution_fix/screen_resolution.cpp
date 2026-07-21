@@ -9,13 +9,13 @@
 #include <iostream>
 #include <ostream>
 #include <tools/command_line.h>
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 
 
 extern bool patch::screen_resolution::enabled = true;
 
-flame_config::define_flame_option<std::string> o_menuRes(
-    "flame:menu-res", flame_config::OG_Config,
+flametal_config::define_flame_option<std::string> o_menuRes(
+    "flametal:menu-res", flametal_config::OG_Config,
     "Force set Menu resolution\n"
     "dk2 supported values:\n"
     "- 640x480\n"
@@ -28,8 +28,8 @@ flame_config::define_flame_option<std::string> o_menuRes(
     ""
 );
 
-flame_config::define_flame_option<std::string> o_gameRes(
-    "flame:game-res", flame_config::OG_Config,
+flametal_config::define_flame_option<std::string> o_gameRes(
+    "flametal:game-res", flametal_config::OG_Config,
     "Force set Game resolution. overrides registry:configuration:video:Screen_[Width,Height] controlled by dk2\n"
     "dk2 supported values:\n"
     "- 400x300\n"

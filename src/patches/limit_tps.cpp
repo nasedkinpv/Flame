@@ -3,7 +3,7 @@
 //
 
 #include "limit_tps.h"
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 #include <Windows.h>
 
 
@@ -32,8 +32,8 @@ namespace {
 }
 
 
-flame_config::define_flame_option<int> o_limitTps(
-    "flame:limit-tps", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_limitTps(
+    "flametal:limit-tps", flametal_config::OG_Config,
     "For displays with high frequency you can limit game loop time\n"
     "I don't know what fps value the dk2 developers were adjusting to\n"
     "I was comfortable with 60 (frames/ticks) per second\n"

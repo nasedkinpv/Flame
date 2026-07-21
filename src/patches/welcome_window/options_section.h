@@ -2,24 +2,24 @@
 // Created by DiaLight on 11/29/2025.
 //
 
-#ifndef FLAME_OPTIONS_SECTION_H
-#define FLAME_OPTIONS_SECTION_H
+#ifndef FLAMETAL_OPTIONS_SECTION_H
+#define FLAMETAL_OPTIONS_SECTION_H
 
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 #include <map>
 
 
-extern flame_config::define_flame_option<bool> o_console;
-extern flame_config::define_flame_option<bool> o_windowed;
-extern flame_config::define_flame_option<bool> o_single_core;
-extern flame_config::define_flame_option<bool> o_skip_launcher;
-extern flame_config::define_flame_option<std::string> o_menuRes;
-extern flame_config::define_flame_option<std::string> o_gameRes;
-extern flame_config::define_flame_option<bool> o_gog_enabled;
-extern flame_config::define_flame_option<bool> o_gog_Video_HighRes;
-extern flame_config::define_flame_option<bool> o_gog_Misc_SingleCore;
-extern flame_config::define_flame_option<int> o_autosave;
-extern flame_config::define_flame_option<bool> o_external_textures;
+extern flametal_config::define_flame_option<bool> o_console;
+extern flametal_config::define_flame_option<bool> o_windowed;
+extern flametal_config::define_flame_option<bool> o_single_core;
+extern flametal_config::define_flame_option<bool> o_skip_launcher;
+extern flametal_config::define_flame_option<std::string> o_menuRes;
+extern flametal_config::define_flame_option<std::string> o_gameRes;
+extern flametal_config::define_flame_option<bool> o_gog_enabled;
+extern flametal_config::define_flame_option<bool> o_gog_Video_HighRes;
+extern flametal_config::define_flame_option<bool> o_gog_Misc_SingleCore;
+extern flametal_config::define_flame_option<int> o_autosave;
+extern flametal_config::define_flame_option<bool> o_external_textures;
 constexpr const char *op_Screen_Width = "registry:configuration:video:Screen_Width";
 constexpr const char *op_Screen_Height = "registry:configuration:video:Screen_Height";
 constexpr const char *op_Res_1024_768_Enabled = "registry:configuration:video:Res_1024_768_Enabled";
@@ -34,8 +34,8 @@ struct OptionsSection {
 
     struct option_t {
         std::string name;
-        flame_config::defined_flame_option *opt;
-        flame_config::flame_value value;
+        flametal_config::defined_flametal_option *opt;
+        flametal_config::flametal_value value;
         std::function<void()> changed;
     };
     struct category_t {
@@ -61,4 +61,4 @@ struct OptionsSection {
 };
 
 
-#endif // FLAME_OPTIONS_SECTION_H
+#endif // FLAMETAL_OPTIONS_SECTION_H

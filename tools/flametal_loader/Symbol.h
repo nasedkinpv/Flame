@@ -2,8 +2,8 @@
 // Created by DiaLight on 9/5/2025.
 //
 
-#ifndef FLAME_SYMBOL_H
-#define FLAME_SYMBOL_H
+#ifndef FLAMETAL_SYMBOL_H
+#define FLAMETAL_SYMBOL_H
 
 
 #include <utility>
@@ -32,4 +32,4 @@ std::vector<Symbol>::iterator find_le(std::vector<Symbol> &syms, uint32_t offs);
 
 
 
-#endif // FLAME_SYMBOL_H
+#endif // FLAMETAL_SYMBOL_H

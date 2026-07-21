@@ -2,8 +2,8 @@
 // Created by DiaLight on 18.01.2025.
 //
 
-#ifndef FLAME_HEXDUMP_HPP
-#define FLAME_HEXDUMP_HPP
+#ifndef FLAMETAL_HEXDUMP_HPP
+#define FLAMETAL_HEXDUMP_HPP
 
 #include <iostream>
 #include <iomanip>
@@ -39,4 +39,4 @@ static void hexdump(std::ostream &os, const void* data, size_t size) {
     }
 }
 
-#endif //FLAME_HEXDUMP_HPP
+#endif //FLAMETAL_HEXDUMP_HPP

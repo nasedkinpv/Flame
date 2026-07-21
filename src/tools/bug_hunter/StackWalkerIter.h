@@ -2,8 +2,8 @@
 // Created by DiaLight on 9/17/2025.
 //
 
-#ifndef FLAME_STACKWALKERITER_H
-#define FLAME_STACKWALKERITER_H
+#ifndef FLAMETAL_STACKWALKERITER_H
+#define FLAMETAL_STACKWALKERITER_H
 
 struct StackFrame;
 struct StackWalkerState;
@@ -25,4 +25,4 @@ public:
 };
 
 
-#endif // FLAME_STACKWALKERITER_H
+#endif // FLAMETAL_STACKWALKERITER_H

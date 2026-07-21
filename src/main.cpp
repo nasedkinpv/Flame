@@ -13,7 +13,7 @@
 
 #include "dk2/engine/game_engine.h"
 #include "dk2/resources/DirIter.h"
-#include "patches/flame_main.h"
+#include "patches/flametal_main.h"
 #include "tools/bug_hunter.h"
 
 namespace dk2 {
@@ -222,12 +222,12 @@ int __cdecl dk2::dk2_main(int argc, LPCSTR *argv) {
     MyMutex mutex;
     mutex.constructor("DKII MUTEX");
     if (!mutex.alredyExists) {
-        patch::flameInit(argc, argv);
+        patch::flametalInit(argc, argv);
         bool result = dk2_main1(argc, argv);
-        patch::flameCleanup();
+        patch::flametalCleanup();
         if(!result) {
             if(patch::print_game_start_errors::enabled) {
-                MessageBoxA(NULL, "Game failed to start", "Flame", MB_OK);
+                MessageBoxA(NULL, "Game failed to start", "Flametal", MB_OK);
             }
         }
     } else if(patch::notify_another_instance_is_running::enabled) {
@@ -287,7 +287,7 @@ int dk2::dk2_start() {
     int nShowCmd = wShowWindow;
     HMODULE ModuleHandleA = GetModuleHandleA(NULL);
     int result = dk2::WinMain(ModuleHandleA, NULL, lpCmdLine, nShowCmd);
-    {  // flame patch
+    {  // flametal patch
         dk2::_doexit(result, 0, 1);
         return result;
     }
@@ -315,7 +315,7 @@ void __cdecl dk2::_doexit(UINT uExitCode, int a2_callOnExitList, int a3_dontExit
                 } while (cur >= first);
             }
         }
-        patch::flameStaticCleanup();
+        patch::flametalStaticCleanup();
         dk2::__initterm(&dk2::__xt_a_0, &dk2::__xt_a_0 + 2);
     }
     dk2::__initterm(&dk2::__xt_a_1, &dk2::__xt_a_1 + 2);

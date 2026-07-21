@@ -20,7 +20,7 @@
 #include <fake/FakeTexture.h>
 #include <metal_bridge/DK2BridgeProtocol.h>
 #include <metal_bridge/MetalBridgeProducer.h>
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 #include <windows.h>
 
 #include <cstddef>
@@ -31,8 +31,8 @@
 // Reroutes the translated deformed-mesh emitter (sub_57B6D0) to the Metal
 // bridge's world-space mesh pipeline: the GPU does projection and per-vertex
 // point-light accumulation instead of the original per-vertex CPU loop.
-flame_config::define_flame_option<bool> o_gog_meshGpuPath(
-    "gog:MeshGpuPath", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_gog_meshGpuPath(
+    "gog:MeshGpuPath", flametal_config::OG_Config,
     "Emit dynamic meshes through the Metal world-space pipeline (GPU transform + lighting)",
     false
 );

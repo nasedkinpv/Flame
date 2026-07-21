@@ -2,8 +2,8 @@
 // Created by DiaLight on 10/7/2025.
 //
 
-#ifndef FLAME_WINE_SUPPORT_H
-#define FLAME_WINE_SUPPORT_H
+#ifndef FLAMETAL_WINE_SUPPORT_H
+#define FLAMETAL_WINE_SUPPORT_H
 
 
 namespace patch::wine_support {
@@ -13,4 +13,4 @@ namespace patch::wine_support {
 }
 
 
-#endif // FLAME_WINE_SUPPORT_H
+#endif // FLAMETAL_WINE_SUPPORT_H

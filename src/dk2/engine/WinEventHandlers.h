@@ -2,8 +2,8 @@
 // Created by DiaLight on 1/9/2026.
 //
 
-#ifndef FLAME_WINEVENTHANDLERS_H
-#define FLAME_WINEVENTHANDLERS_H
+#ifndef FLAMETAL_WINEVENTHANDLERS_H
+#define FLAMETAL_WINEVENTHANDLERS_H
 
 #include <cstdint>
 #include <dk2/MyDdSurfaceEx.h>
@@ -30,4 +30,4 @@ namespace dk2 {
 }
 
 
-#endif // FLAME_WINEVENTHANDLERS_H
+#endif // FLAMETAL_WINEVENTHANDLERS_H

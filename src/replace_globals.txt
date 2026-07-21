@@ -422,7 +422,7 @@
 005848B0 void CEngineAnimMesh::fun_5848B0(int, SceneObject2E *)
 
 # CEngineDynamicMesh
-# Staged: both the translated low-mode body and returning from Flame into the
+# Staged: both the translated low-mode body and returning from Flametal into the
 # original large body regress this path under Wine 11 WOW64.  Keep the complete
 # implementation, but leave the original dispatcher untouched for production.
 #00582CE0 void CEngineDynamicMesh::fun_582CE0(int, SceneObject2E *)

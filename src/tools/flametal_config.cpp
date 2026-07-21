@@ -1,7 +1,7 @@
 //
 // Created by DiaLight on 4/6/2025.
 //
-#include "flame_config.h"
+#include "flametal_config.h"
 
 #include <fstream>
 #include <iostream>
@@ -53,7 +53,7 @@ using toml_value = toml::basic_value<toml_type_config>;
 using toml_table = typename toml_value::table_type;
 using toml_array = typename toml_value::array_type;
 
-bool flame_config::operator==(const flame_value& lhs, const flame_value& rhs) {
+bool flametal_config::operator==(const flametal_value& lhs, const flametal_value& rhs) {
     if (lhs.ty != rhs.ty) return false;
     switch (lhs.ty) {
     case VT_None: return true;
@@ -65,23 +65,23 @@ bool flame_config::operator==(const flame_value& lhs, const flame_value& rhs) {
     return true;
 }
 
-toml_value toTomlValue(const flame_config::flame_value &val) {
+toml_value toTomlValue(const flametal_config::flametal_value &val) {
     switch (val.ty) {
-    case flame_config::VT_String: return {val.str_value};
-    case flame_config::VT_Boolean: return {val.bool_value};
-    case flame_config::VT_Int: return {val.int_value};
-    case flame_config::VT_Float: return {val.float_value};
+    case flametal_config::VT_String: return {val.str_value};
+    case flametal_config::VT_Boolean: return {val.bool_value};
+    case flametal_config::VT_Int: return {val.int_value};
+    case flametal_config::VT_Float: return {val.float_value};
     default: break;;
     }
     return {};
 }
-flame_config::flame_value fromTomlValue(toml_value &val) {
+flametal_config::flametal_value fromTomlValue(toml_value &val) {
     switch (val.type()) {
-    case toml::value_t::boolean: return flame_config::flame_value(val.as_boolean());
-    case toml::value_t::integer: return flame_config::flame_value((int) val.as_integer());
-    case toml::value_t::floating: return flame_config::flame_value((float) val.as_floating());
-    case toml::value_t::string: return flame_config::flame_value(val.as_string());
-    default: return flame_config::flame_value();
+    case toml::value_t::boolean: return flametal_config::flametal_value(val.as_boolean());
+    case toml::value_t::integer: return flametal_config::flametal_value((int) val.as_integer());
+    case toml::value_t::floating: return flametal_config::flametal_value((float) val.as_floating());
+    case toml::value_t::string: return flametal_config::flametal_value(val.as_string());
+    default: return flametal_config::flametal_value();
     }
 }
 
@@ -164,13 +164,13 @@ namespace {
     int config_version = -1;
     std::string toml_config_file;
     toml_value toml_config_state;
-    toml_value cmdl_state;  // command line args should not affect flame-config.toml but should affect flame_config::get_option, so keep them separate
+    toml_value cmdl_state;  // command line args should not affect flametal-config.toml but should affect flametal_config::get_option, so keep them separate
     bool toml_changed = true;
 
     struct defined_options_t {
-        std::map<std::string, std::unique_ptr<flame_config::defined_flame_option>> dict;
+        std::map<std::string, std::unique_ptr<flametal_config::defined_flametal_option>> dict;
 
-        void add(std::unique_ptr<flame_config::defined_flame_option> &&option) {
+        void add(std::unique_ptr<flametal_config::defined_flametal_option> &&option) {
             dict[option->path] = std::move(option);
         }
     };
@@ -186,12 +186,12 @@ toml_value *_get_option(const std::string &path) {
     if (toml_value *cur = getOrNullToml(toml_config_state, path)) return cur;
     return nullptr;
 }
-flame_config::flame_value flame_config::get_option(const std::string &path) {
+flametal_config::flametal_value flametal_config::get_option(const std::string &path) {
     if (toml_value *cur = _get_option(path)) return fromTomlValue(*cur);
-    return flame_value();
+    return flametal_value();
 }
 
-void flame_config::set_option(const std::string &path, flame_value value) {
+void flametal_config::set_option(const std::string &path, flametal_value value) {
     removeToml(cmdl_state, path);
     if (setToml(toml_config_state, path, toTomlValue(value))) {
         toml_changed = true;
@@ -204,12 +204,12 @@ void flame_config::set_option(const std::string &path, flame_value value) {
     }
 }
 
-flame_config::flame_value flame_config::get_cmdl_option(const std::string &path) {
+flametal_config::flametal_value flametal_config::get_cmdl_option(const std::string &path) {
     if (toml_value *cur = getOrNullToml(cmdl_state, path)) return fromTomlValue(*cur);
-    return flame_value();
+    return flametal_value();
 }
 
-void flame_config::set_tmp_option(const std::string &path, flame_value value) {
+void flametal_config::set_tmp_option(const std::string &path, flametal_value value) {
     setToml(cmdl_state, path, toTomlValue(value));
     auto &options = defined_options();
     auto it = options.dict.find(path);
@@ -219,15 +219,15 @@ void flame_config::set_tmp_option(const std::string &path, flame_value value) {
     }
 }
 
-void flame_config::iterateDefinedOptions(const std::function<void(defined_flame_option&)> &cb) {
+void flametal_config::iterateDefinedOptions(const std::function<void(defined_flametal_option&)> &cb) {
     for (auto &e : defined_options().dict) {
         auto& opt = e.second;
         cb(*opt);
     }
 }
 
-void flame_config::_register_flame_option(const char *path, OptionGroup group, const char *help, flame_value &&defaultValue, flame_value &value) {
-    defined_options().add(std::make_unique<defined_flame_option>(path, group, help, std::move(defaultValue), value));
+void flametal_config::_register_flametal_option(const char *path, OptionGroup group, const char *help, flametal_value &&defaultValue, flametal_value &value) {
+    defined_options().add(std::make_unique<defined_flametal_option>(path, group, help, std::move(defaultValue), value));
 }
 
 void updateDefinedComments(toml_value &root) {
@@ -260,16 +260,16 @@ void updateDefinedComments(toml_value &root) {
     if(auto *ver = patch::game_version_patch::getFileVersion()) version = ver;
     std::replace(version.begin(), version.end(), '\n', ' ');
     root.comments() = std::vector<std::string> {
-        " Flame config generated by " + version,
-        " Warning: this config is controlled by Flame and DKII",
+        " Flametal config generated by " + version,
+        " Warning: this config is controlled by Flametal and DKII",
         " Comments/docs is rewrite every config save. Any manual changes to comments will be erased",
-        " if you want edit/add docs to values, please edit them in the the Flame source code",
-        " Extra sections and values not controlled by Flame and DKII will be erased",
+        " if you want edit/add docs to values, please edit them in the the Flametal source code",
+        " Extra sections and values not controlled by Flametal and DKII will be erased",
         " You can made one-time change to any value in config by command line arguments. Use -h for help"
     };
 }
 
-void set_cmdl_option(flame_config::defined_flame_option &opt, flame_config::flame_value value) {
+void set_cmdl_option(flametal_config::defined_flametal_option &opt, flametal_config::flametal_value value) {
     toml_value toml_value = toTomlValue(value);
     setToml(cmdl_state, opt.path, toml_value);
     opt.affected_by_command_line = true;
@@ -298,10 +298,10 @@ bool parse_boolean(const std::string &val) {
     if (val == "0") return false;
     return true;
 }
-bool processCommandLine(std::map<std::string, std::string> &unused_dict, std::vector<std::string> &unused_flags, flame_config::defined_flame_option &opt, const std::string &key) {
-    if (opt.defaultValue.ty == flame_config::VT_Boolean) {  // flag
+bool processCommandLine(std::map<std::string, std::string> &unused_dict, std::vector<std::string> &unused_flags, flametal_config::defined_flametal_option &opt, const std::string &key) {
+    if (opt.defaultValue.ty == flametal_config::VT_Boolean) {  // flag
         if (cmdl::hasFlag(key)) {
-            set_cmdl_option(opt, flame_config::flame_value(true));
+            set_cmdl_option(opt, flametal_config::flametal_value(true));
             vec_remove(unused_flags, key);
             return true;
         }
@@ -310,13 +310,13 @@ bool processCommandLine(std::map<std::string, std::string> &unused_dict, std::ve
     if (it == cmdl::dict.end()) return false;
     unused_dict.erase(key);
     try {
-        flame_config::flame_value value;
+        flametal_config::flametal_value value;
         switch (opt.defaultValue.ty) {
-        case flame_config::VT_None: break;
-        case flame_config::VT_String: value = flame_config::flame_value(it->second); break;
-        case flame_config::VT_Boolean: value = flame_config::flame_value(parse_boolean(it->second)); break;
-        case flame_config::VT_Int: value = flame_config::flame_value(std::stoi(it->second)); break;
-        case flame_config::VT_Float: value = flame_config::flame_value(std::stof(it->second)); break;
+        case flametal_config::VT_None: break;
+        case flametal_config::VT_String: value = flametal_config::flametal_value(it->second); break;
+        case flametal_config::VT_Boolean: value = flametal_config::flametal_value(parse_boolean(it->second)); break;
+        case flametal_config::VT_Int: value = flametal_config::flametal_value(std::stoi(it->second)); break;
+        case flametal_config::VT_Float: value = flametal_config::flametal_value(std::stof(it->second)); break;
         }
         set_cmdl_option(opt, value);
     } catch (const std::exception &e) {
@@ -336,8 +336,8 @@ void applyCommandLine() {
         if (key.starts_with("dk2:")) {
             key = key.substr(4);
             processCommandLine(unused_dict, unused_flags, *opt, key);
-        } else if (key.starts_with("flame:")) {
-            key = key.substr(6);
+        } else if (key.starts_with("flametal:")) {
+            key = key.substr(9);
             processCommandLine(unused_dict, unused_flags, *opt, key);
         }
     }
@@ -456,7 +456,7 @@ toml_value extractGameProgress(toml_value &root) {
     std::vector<toml_location> remove;
     for (auto &e : defined_options().dict) {
         auto& opt = e.second;
-        if(opt->group != flame_config::OG_GameProgress) continue;
+        if(opt->group != flametal_config::OG_GameProgress) continue;
         auto it = values.find(opt->path);
         if (it != values.end()) {
             setToml(out, e.first, *it->second.get());
@@ -469,22 +469,22 @@ toml_value extractGameProgress(toml_value &root) {
     return out;
 }
 
-void flame_config::help() {
-    std::cout << "DKII-Flame-*.exe [options]" << std::endl;
+void flametal_config::help() {
+    std::cout << "DKII-Flametal-*.exe [options]" << std::endl;
     std::cout << "options:" << std::endl;
     std::cout << " -h | -help | --help    print this help" << std::endl;
     std::cout << std::endl;
-    std::cout << " -v | -version | --version    print flame version" << std::endl;
+    std::cout << " -v | -version | --version    print flametal version" << std::endl;
     std::cout << std::endl;
-    std::cout << " -c <file> | --config <file>    load file as flame config" << std::endl;
-    std::cout << "    default: flame/config.toml" << std::endl;
+    std::cout << " -c <file> | --config <file>    load file as flametal config" << std::endl;
+    std::cout << "    default: flametal/config.toml" << std::endl;
     std::cout << std::endl;
     for (auto &e : defined_options().dict) {
         auto &opt = e.second;
         std::string arg = opt->path;
         if (!arg.contains(':')) continue;  // disable root args
-        if (arg.starts_with("flame:")) {
-            arg = "[flame:]" + arg.substr(6);
+        if (arg.starts_with("flametal:")) {
+            arg = "[flametal:]" + arg.substr(9);
         } else if (arg.starts_with("dk2:")) {
             arg = "[dk2:]" + arg.substr(4);
         }
@@ -516,7 +516,7 @@ std::string getGameProgressFile() {
     char progressFile[MAX_PATH];
     GetCurrentDirectoryA(MAX_PATH, progressFile);
     // Steam syncs Data/Save/*.txt files to the cloud
-    strcat(progressFile, "\\Data\\Save\\Flame-GameProgress.txt");
+    strcat(progressFile, "\\Data\\Save\\Flametal-GameProgress.txt");
     return {progressFile};
 }
 toml_value loadGameProgress_impl() {
@@ -541,7 +541,7 @@ toml_value loadGameProgress_impl() {
     }
     return out;
 }
-void flame_config::load(std::string &file) {
+void flametal_config::load(std::string &file) {
     toml_config_file = file;
     try {
         toml_config_state = toml::parse<toml_type_config>(file);
@@ -573,14 +573,14 @@ void flame_config::load(std::string &file) {
     toml_changed = false;
 }
 
-flame_config::define_flame_option<bool> o_hide_docs(
-    "hide_docs", flame_config::OG_HiddenState,
+flametal_config::define_flame_option<bool> o_hide_docs(
+    "hide_docs", flametal_config::OG_HiddenState,
     "Dont add documentation to keys in this config\n",
     false
 );
 
-flame_config::define_flame_option<bool> o_hide_defaults(
-    "hide_defaults", flame_config::OG_HiddenState,
+flametal_config::define_flame_option<bool> o_hide_defaults(
+    "hide_defaults", flametal_config::OG_HiddenState,
     "Dont add options with default values in this config\n",
     false
 );
@@ -605,8 +605,8 @@ bool saveGameProgress_impl(toml_value &&root) {
     return false;
 }
 
-void flame_config::save() {
-//    std::cout << "[flame_config] save toml config" << std::endl;
+void flametal_config::save() {
+//    std::cout << "[flametal_config] save toml config" << std::endl;
     toml_value copy = toml_config_state;
     removeUnusedEntries(copy);
     saveGameProgress_impl(extractGameProgress(copy));
@@ -632,12 +632,12 @@ void flame_config::save() {
     }
     toml_changed = false;
 }
-bool flame_config::changed() {
+bool flametal_config::changed() {
     return toml_changed;
 }
 
 
-std::string flame_config::shortDump() {
+std::string flametal_config::shortDump() {
     toml_value copy = toml_config_state;
     mergeOptions(copy, cmdl_state);
     removeUnusedAndDefaultEntries(copy);

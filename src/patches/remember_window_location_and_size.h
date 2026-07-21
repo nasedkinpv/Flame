@@ -2,8 +2,8 @@
 // Created by DiaLight on 10/5/2025.
 //
 
-#ifndef FLAME_REMEMBER_WINDOW_LOCATION_AND_SIZE_H
-#define FLAME_REMEMBER_WINDOW_LOCATION_AND_SIZE_H
+#ifndef FLAMETAL_REMEMBER_WINDOW_LOCATION_AND_SIZE_H
+#define FLAMETAL_REMEMBER_WINDOW_LOCATION_AND_SIZE_H
 
 #include <Windows.h>
 #include <cstdint>
@@ -16,4 +16,4 @@ namespace patch::remember_window_location_and_size {
 }
 
 
-#endif // FLAME_REMEMBER_WINDOW_LOCATION_AND_SIZE_H
+#endif // FLAMETAL_REMEMBER_WINDOW_LOCATION_AND_SIZE_H

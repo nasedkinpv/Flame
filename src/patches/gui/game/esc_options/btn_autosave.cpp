@@ -9,22 +9,22 @@
 #include <dk2_globals.h>
 #include <filesystem>
 #include <patches/logging.h>
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 
 namespace fs = std::filesystem;
 
 bool patch::autosave::enabled = true;
 
-flame_config::define_flame_option<int> o_autosave(
-    "flame:autosave", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_autosave(
+    "flametal:autosave", flametal_config::OG_Config,
     "Autosave map in minutes\n"
     "0 - disable autosave\n"
     "",
     5
 );
 
-flame_config::define_flame_option<int> o_keepLastAutosavesSwitch(
-    "flame:keep-last-autosaves", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_keepLastAutosavesSwitch(
+    "flametal:keep-last-autosaves", flametal_config::OG_Config,
     "Number of last autosaves to keep\n"
     "",
     3

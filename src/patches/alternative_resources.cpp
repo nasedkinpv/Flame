@@ -7,16 +7,16 @@
 #include "dk2_functions.h"
 #include "dk2_globals.h"
 #include "patches/logging.h"
-#include "tools/flame_config.h"
+#include "tools/flametal_config.h"
 
 //#define fs_log(fmt, ...) patch::log::dbg(fmt, __VA_ARGS__)
 #define fs_log(fmt, ...)
 
 
-flame_config::define_flame_option<std::string> o_altResources(
-    "flame:alt-resources", flame_config::OG_Config,
+flametal_config::define_flame_option<std::string> o_altResources(
+    "flametal:alt-resources", flametal_config::OG_Config,
     "Alternative resources list of directory names\n"
-    "in flame/resources/ path separated by ';' char\n"
+    "in flametal/resources/ path separated by ';' char\n"
     "example: dir2;dir2;dir3",
     "Quuz_AudioFix;LevelFixes;Quuz_UniqueBatTex"
 );
@@ -42,7 +42,7 @@ namespace {
     bool _patchDk2DataPath(const char* relPath, char *outPath, int outSize, const char *dataPack) {
         CHAR FileName[MAX_PATH];
         strcpy(FileName, dk2::fs_getExeDir());
-        strcat(FileName, "flame\\resources\\");
+        strcat(FileName, "flametal\\resources\\");
         strcat(FileName, dataPack);
         strcat(FileName, "\\");
         strcat(FileName, relPath);
@@ -64,7 +64,7 @@ void patch::alternative_resources::init() {
     for(auto &res : std::views::reverse(g_resources)) {
         CHAR resDir[MAX_PATH];
         strcpy(resDir, dk2::fs_getExeDir());
-        strcat(resDir, "flame\\resources\\");
+        strcat(resDir, "flametal\\resources\\");
         strcat(resDir, res.c_str());
         strcat(resDir, "\\");
 

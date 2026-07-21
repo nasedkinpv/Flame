@@ -2,8 +2,8 @@
 // Created by DiaLight on 1/10/2026.
 //
 
-#ifndef FLAME_CWINDOWTEST_H
-#define FLAME_CWINDOWTEST_H
+#ifndef FLAMETAL_CWINDOWTEST_H
+#define FLAMETAL_CWINDOWTEST_H
 
 #include "dk2/engine/CWindowTest.h"
 
@@ -37,4 +37,4 @@ namespace dk2 {
 
 }
 
-#endif // FLAME_CWINDOWTEST_H
+#endif // FLAMETAL_CWINDOWTEST_H

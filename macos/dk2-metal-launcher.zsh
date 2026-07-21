@@ -6,10 +6,10 @@ readonly RESOURCES="${CONTENTS}/Resources"
 readonly WINE="${RESOURCES}/wine/bin/wine"
 readonly WINESERVER="${RESOURCES}/wine/bin/wineserver"
 readonly IMPORTER="${RESOURCES}/import-original-game"
-readonly PREFIX="${HOME}/Library/Application Support/Dungeon Keeper II Metal/prefix"
+readonly PREFIX="${HOME}/Library/Application Support/Dungeon Keeper II/prefix"
 readonly GAME_DIR="${PREFIX}/drive_c/GOG Games/Dungeon Keeper 2"
 readonly BRIDGE_FILE="${PREFIX}/drive_c/dk2-metal/frame.bin"
-readonly LOG_DIR="${HOME}/Library/Logs/Dungeon Keeper II Metal"
+readonly LOG_DIR="${HOME}/Library/Logs/Dungeon Keeper II"
 readonly LOG_FILE="${LOG_DIR}/game.log"
 readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-3}"
 
@@ -26,20 +26,20 @@ cleanup() {
   env WINEPREFIX="${PREFIX}" "${WINESERVER}" -k >/dev/null 2>&1 || true
 }
 
-sync_flame_payload() {
-  local payload="${RESOURCES}/Flame"
+sync_flametal_payload() {
+  local payload="${RESOURCES}/Flametal"
   [[ -f "${payload}/PATCH.dll" &&
-     -f "${payload}/flame/Flame.dll" &&
-     -f "${payload}/flame/DKII.dll" ]] || {
-    show_error "The bundled Flame payload is incomplete. Download the app again."
+     -f "${payload}/flametal/Flametal.dll" &&
+     -f "${payload}/flametal/DKII.dll" ]] || {
+    show_error "The bundled Flametal payload is incomplete. Download the app again."
     return 1
   }
-  /bin/mkdir -p "${GAME_DIR}/flame"
+  /bin/mkdir -p "${GAME_DIR}/flametal"
   /bin/cp -p "${payload}/PATCH.dll" "${GAME_DIR}/PATCH.dll"
-  /bin/cp -p "${payload}/flame/Flame.dll" "${GAME_DIR}/Flame.dll"
-  /bin/cp -p "${payload}/flame/DKII.dll" "${GAME_DIR}/DKII.dll"
-  /bin/cp -p "${payload}/flame/Flame.dll" "${GAME_DIR}/flame/Flame.dll"
-  /bin/cp -p "${payload}/flame/DKII.dll" "${GAME_DIR}/flame/DKII.dll"
+  /bin/cp -p "${payload}/flametal/Flametal.dll" "${GAME_DIR}/Flametal.dll"
+  /bin/cp -p "${payload}/flametal/DKII.dll" "${GAME_DIR}/DKII.dll"
+  /bin/cp -p "${payload}/flametal/Flametal.dll" "${GAME_DIR}/flametal/Flametal.dll"
+  /bin/cp -p "${payload}/flametal/DKII.dll" "${GAME_DIR}/flametal/DKII.dll"
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -53,7 +53,7 @@ fi
 if [[ ! -f "${GAME_DIR}/DKII-DX.exe" ]]; then
   DK2_WINE_BIN="${WINE}" \
   DK2_METAL_PREFIX="${PREFIX}" \
-  DK2_FLAME_PAYLOAD="${RESOURCES}/Flame" \
+  DK2_FLAMETAL_PAYLOAD="${RESOURCES}/Flametal" \
   DK2_IMPORT_GUI=1 \
     "${IMPORTER}" >>"${LOG_FILE}" 2>&1
   import_status=$?
@@ -65,7 +65,7 @@ fi
 
 cleanup
 env WINEPREFIX="${PREFIX}" "${WINESERVER}" -w >/dev/null 2>&1 || true
-sync_flame_payload || exit 1
+sync_flametal_payload || exit 1
 /bin/mkdir -p "${BRIDGE_FILE:h}"
 initial_frame="$(bridge_frame)"
 (

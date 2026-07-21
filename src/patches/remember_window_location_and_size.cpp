@@ -3,17 +3,17 @@
 //
 
 #include "remember_window_location_and_size.h"
-#include "tools/flame_config.h"
+#include "tools/flametal_config.h"
 
 
-flame_config::define_flame_option<bool> o_no_initial_size(
-    "flame:no-initial-size", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_no_initial_size(
+    "flametal:no-initial-size", flametal_config::OG_Config,
     "Disable initial automatic window resizing\n"
     "Used only in windowed mode\n",
     false
 );
-flame_config::define_flame_option<bool> o_lock_window_size(
-    "flame:lock-window-size", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_lock_window_size(
+    "flametal:lock-window-size", flametal_config::OG_Config,
     "Keep the first native window size across screen mode changes\n"
     "Used only in windowed mode\n",
     false

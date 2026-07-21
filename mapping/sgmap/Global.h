@@ -2,8 +2,8 @@
 // Created by DiaLight on 23.06.2024.
 //
 
-#ifndef FLAME_GLOBAL_H
-#define FLAME_GLOBAL_H
+#ifndef FLAMETAL_GLOBAL_H
+#define FLAMETAL_GLOBAL_H
 
 #include "ScopeLineIter.h"
 #include "Type.h"
@@ -36,4 +36,4 @@ std::vector<Global *>::iterator find_lt(std::vector<Global *> &relocs, uint32_t 
 std::vector<Global *>::iterator find_le(std::vector<Global *> &relocs, uint32_t offs);
 
 
-#endif //FLAME_GLOBAL_H
+#endif //FLAMETAL_GLOBAL_H

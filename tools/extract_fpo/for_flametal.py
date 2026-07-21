@@ -78,7 +78,7 @@ def pdb_extract_espmap(pdb: my_pdb.MyPdb) -> list[MyFpoFun]:
     # print(f'{uuid.UUID(bytes=bytes(pdb.pdb_info.header.GUID))}')
     # print(f'{pdb.pdb_info.header.cbNames=:08X}')
 
-    # pdb_dir = flame_pdb_file.parent / 'pdb'
+    # pdb_dir = flametal_pdb_file.parent / 'pdb'
     # pdb_dir.mkdir(exist_ok=True)
     # for idx in pdb.root.streams.keys():
     #   suffix = pdb._stream_names.get(idx, '')
@@ -131,7 +131,7 @@ def pdb_extract_espmap(pdb: my_pdb.MyPdb) -> list[MyFpoFun]:
         fpo_fun.add_pdb(fpo_rva, fpo_rva + fpo.code_size, spd, flags, spd_ty, fpo.program)
 
 
-    # with open(flame_pdb_file.parent / f'mod_infos.map', 'w') as f:
+    # with open(flametal_pdb_file.parent / f'mod_infos.map', 'w') as f:
     #   for mi in pdb.debug.ModInfos:
     #     f.write(f'opened={mi.header.opened:<2}'
     #             f' r.offs={mi.header.range.Off:08X} r.sz={mi.header.range.Size:<4X} r.isec={mi.header.range.ISect:<2}'
@@ -142,7 +142,7 @@ def pdb_extract_espmap(pdb: my_pdb.MyPdb) -> list[MyFpoFun]:
     #             f' src_ni={mi.header.niSource:<4} comp_ni={mi.header.niCompiler:<4}'
     #             f' \n')
 
-    # with open(flame_pdb_file.parent / f'contrib.map', 'w') as f:
+    # with open(flametal_pdb_file.parent / f'contrib.map', 'w') as f:
     #   for sec in pdb.debug.SectionContrib.sections:
     #     f.write(f'{sec.ISect:X}+{sec.Off:<4X} sz={sec.Size:<4X}'
     #             f' chars={sec.Characteristics:08X} imod={sec.Imod:<4X}'

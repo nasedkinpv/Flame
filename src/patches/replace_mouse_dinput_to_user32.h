@@ -2,8 +2,8 @@
 // Created by DiaLight on 20.07.2024.
 //
 
-#ifndef FLAME_REPLACE_MOUSE_DINPUT_TO_USER32_H
-#define FLAME_REPLACE_MOUSE_DINPUT_TO_USER32_H
+#ifndef FLAMETAL_REPLACE_MOUSE_DINPUT_TO_USER32_H
+#define FLAMETAL_REPLACE_MOUSE_DINPUT_TO_USER32_H
 
 #include <Windows.h>
 
@@ -20,4 +20,4 @@ namespace patch::replace_mouse_dinput_to_user32 {
 }
 
 
-#endif //FLAME_REPLACE_MOUSE_DINPUT_TO_USER32_H
+#endif //FLAMETAL_REPLACE_MOUSE_DINPUT_TO_USER32_H

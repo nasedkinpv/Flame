@@ -2,7 +2,7 @@
 // Created by DiaLight on 9/8/2025.
 //
 
-#include "flame_main.h"
+#include "flametal_main.h"
 
 #include <algorithm>
 
@@ -12,7 +12,7 @@
 #include <patches/big_resolution_fix/screen_resolution.h>
 #include <stdexcept>
 #include <thread>
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 #include "gog_patch.h"
 #include "patches/inspect_tools.h"
 #include "patches/micro_patches.h"
@@ -39,40 +39,40 @@ namespace dk2 {
 }
 
 
-flame_config::define_flame_option<bool> o_console(
-    "flame:console", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_console(
+    "flametal:console", flametal_config::OG_Config,
     "Show console window to see logs\n",
     false
 );
-flame_config::define_flame_option<bool> o_windowed(
-    "flame:windowed", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_windowed(
+    "flametal:windowed", flametal_config::OG_Config,
     "Open game in windowed mode\n",
     false
 );
-flame_config::define_flame_option<bool> o_single_core(
-    "flame:single-core", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_single_core(
+    "flametal:single-core", flametal_config::OG_Config,
     "Limit game threading to one core\n"
     "This is what gog patches doing by default but in some cases they might be disabled\n"
     "Added this option as duplicate of gog:misc:SingleCore, but it will work in all cases\n"
     "",
     true
 );
-flame_config::define_flame_option<bool> o_skip_launcher(
-    "flame:skip-launcher", flame_config::OG_Config,
-    "Do not show flame launcher. Works only from command line\n"
+flametal_config::define_flame_option<bool> o_skip_launcher(
+    "flametal:skip-launcher", flametal_config::OG_Config,
+    "Do not show flametal launcher. Works only from command line\n"
     "DKII-DX.EXE -skip-launcher",
     false
 );
 
 
-void patch::flameInit(int argc, const char **argv) {
+void patch::flametalInit(int argc, const char **argv) {
     command_line_init(argc, argv);
     initConsole(false);
     bug_hunter::init();
 
     if (cmdl::hasFlag("h") || cmdl::hasFlag("help") || cmdl::hasFlag("-help")) {
         initConsole();
-        flame_config::help();
+        flametal_config::help();
         std::cout << '\n' << "Press a key to continue...";
         std::cin.get();
         return;
@@ -89,29 +89,29 @@ void patch::flameInit(int argc, const char **argv) {
     }
 
     {
-        std::string config = "flame/config.toml";
+        std::string config = "flametal/config.toml";
         auto it = cmdl::dict.find("c");
         if (it == cmdl::dict.end()) it = cmdl::dict.find("-config");
         if (it != cmdl::dict.end()) {
             if (!it->second.empty()) config = it->second;
         }
-        flame_config::load(config);
+        flametal_config::load(config);
     }
 
-    auto skipLauncher = flame_config::get_cmdl_option(o_skip_launcher.path);
-    if(skipLauncher.ty != flame_config::VT_Boolean || !skipLauncher.bool_value) {
+    auto skipLauncher = flametal_config::get_cmdl_option(o_skip_launcher.path);
+    if(skipLauncher.ty != flametal_config::VT_Boolean || !skipLauncher.bool_value) {
         patch::welcome_window::welcome_data_t res;
-        res.win32_class_name = L"Flame_win32";
-        res.win32_title = L"DungeonKeeper 2 Flame";
+        res.win32_class_name = L"Flametal_win32";
+        res.win32_title = L"DungeonKeeper 2 Flametal";
         res.win32_size = {400, 600};
         patch::welcome_window::imgui_main(res);  // long blocking call
         if(!res.play) {
-            flameCleanup();
+            flametalCleanup();
             ExitProcess(0);
         }
     }
 
-    flame_config::save();
+    flametal_config::save();
     // in windowed mode we can attach console with flag
     if(o_console.get()) {
         initConsole();
@@ -124,7 +124,7 @@ void patch::flameInit(int argc, const char **argv) {
     if(o_windowed.get()) {
         // The native Metal host needs GOG's exact D3D3 wrapper even though the
         // compatibility window remains windowed and will eventually be hidden.
-        // Ordinary Flame windowed runs retain the established behavior.
+        // Ordinary Flametal windowed runs retain the established behavior.
         if (GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", nullptr, 0) == 0) {
             o_gog_enabled.set_tmp(false);  // gog is incompatible with windowed mode
         }
@@ -151,17 +151,17 @@ void patch::flameInit(int argc, const char **argv) {
     if(*o_gog_enabled) gog::patch_init();
 }
 
-void patch::flameCleanup() {
+void patch::flametalCleanup() {
 #if __has_include(<dk2_research.h>)
     bug_hunter::stop_keyWatcher();
 #endif
-    if (flame_config::changed()) flame_config::save();
+    if (flametal_config::changed()) flametal_config::save();
 }
 
-void patch::flameStaticCleanup() {
+void patch::flametalStaticCleanup() {
     // all global dk2 objects destructors was called
-    patch::log::dbg("flame static cleanup");
-    if (flame_config::changed()) flame_config::save();
+    patch::log::dbg("flametal static cleanup");
+    if (flametal_config::changed()) flametal_config::save();
 }
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {

@@ -2,8 +2,8 @@
 // Created by DiaLight on 9/17/2025.
 //
 
-#ifndef FLAME_MYFPOFUN_H
-#define FLAME_MYFPOFUN_H
+#ifndef FLAMETAL_MYFPOFUN_H
+#define FLAMETAL_MYFPOFUN_H
 
 #include <Windows.h>
 #include <vector>
@@ -35,4 +35,4 @@ struct MyFpoFun {
     }
 };
 
-#endif // FLAME_MYFPOFUN_H
+#endif // FLAMETAL_MYFPOFUN_H

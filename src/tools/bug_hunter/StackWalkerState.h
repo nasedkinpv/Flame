@@ -2,8 +2,8 @@
 // Created by DiaLight on 9/17/2025.
 //
 
-#ifndef FLAME_STACKWALKERSTATE_H
-#define FLAME_STACKWALKERSTATE_H
+#ifndef FLAMETAL_STACKWALKERSTATE_H
+#define FLAMETAL_STACKWALKERSTATE_H
 
 #include <Windows.h>
 #include <string>
@@ -38,4 +38,4 @@ struct StackWalkerState {
 };
 
 
-#endif // FLAME_STACKWALKERSTATE_H
+#endif // FLAMETAL_STACKWALKERSTATE_H

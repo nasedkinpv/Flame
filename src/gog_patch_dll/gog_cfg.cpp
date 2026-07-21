@@ -5,7 +5,7 @@
 #include <gog_globals.h>
 #include <ShlObj_core.h>
 #include <gog_debug.h>
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 
 using namespace gog;
 
@@ -30,77 +30,77 @@ namespace patch::replace_parse_command_line {
     bool parse();
 }
 
-extern flame_config::define_flame_option<bool> o_dk2_enableBumpMapping;
-extern flame_config::define_flame_option<bool> o_dk2_enableBumpLuminance;
+extern flametal_config::define_flame_option<bool> o_dk2_enableBumpMapping;
+extern flametal_config::define_flame_option<bool> o_dk2_enableBumpLuminance;
 
-flame_config::define_flame_option<int> o_gog_Video_antialias(
-    "gog:video:antialias", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_gog_Video_antialias(
+    "gog:video:antialias", flametal_config::OG_Config,
     "",
     11
 );
 
-flame_config::define_flame_option<bool> o_gog_Video_ExtraAntialias(
-     "gog:video:ExtraAntialias", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_gog_Video_ExtraAntialias(
+     "gog:video:ExtraAntialias", flametal_config::OG_Config,
      "",
      false
 );
-flame_config::define_flame_option<bool> o_gog_Video_HighRes(
-     "gog:video:HighRes", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_gog_Video_HighRes(
+     "gog:video:HighRes", flametal_config::OG_Config,
      "",
      false
 );
-flame_config::define_flame_option<bool> o_gog_Video_Anisotropy(
-     "gog:video:Anisotropy", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_gog_Video_Anisotropy(
+     "gog:video:Anisotropy", flametal_config::OG_Config,
      "",
      false
 );
-flame_config::define_flame_option<int> o_gog_Video_Vwait(
-     "gog:video:Vwait", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_gog_Video_Vwait(
+     "gog:video:Vwait", flametal_config::OG_Config,
      "",
      1
 );
-flame_config::define_flame_option<int> o_gog_Video_ScaleMode(
-     "gog:video:ScaleMode", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_gog_Video_ScaleMode(
+     "gog:video:ScaleMode", flametal_config::OG_Config,
      "",
      1
 );
-flame_config::define_flame_option<bool> o_gog_Video_DisableFourCC(
-     "gog:video:DisableFourCC", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_gog_Video_DisableFourCC(
+     "gog:video:DisableFourCC", flametal_config::OG_Config,
      "",
      false
 );
-flame_config::define_flame_option<bool> o_gog_Video_Bumpmap(
-     "gog:video:Bumpmap", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_gog_Video_Bumpmap(
+     "gog:video:Bumpmap", flametal_config::OG_Config,
      "",
      false
 );
-flame_config::define_flame_option<bool> o_gog_Video_RealFullscreen(
-     "gog:video:RealFullscreen", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_gog_Video_RealFullscreen(
+     "gog:video:RealFullscreen", flametal_config::OG_Config,
      "",
      true
 );
-flame_config::define_flame_option<int> o_gog_Misc_CpuIdle(
-     "gog:misc:CpuIdle", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_gog_Misc_CpuIdle(
+     "gog:misc:CpuIdle", flametal_config::OG_Config,
      "",
      0
 );
-flame_config::define_flame_option<bool> o_gog_Misc_SingleCore(
-     "gog:misc:SingleCore", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_gog_Misc_SingleCore(
+     "gog:misc:SingleCore", flametal_config::OG_Config,
      "",
      true
 );
-flame_config::define_flame_option<bool> o_gog_Misc_DisableDEP(
-     "gog:misc:DisableDEP", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_gog_Misc_DisableDEP(
+     "gog:misc:DisableDEP", flametal_config::OG_Config,
      "",
      true
 );
-flame_config::define_flame_option<int> o_gog_Misc_RestoreMode(
-     "gog:misc:RestoreMode", flame_config::OG_Config,
+flametal_config::define_flame_option<int> o_gog_Misc_RestoreMode(
+     "gog:misc:RestoreMode", flametal_config::OG_Config,
      "",
      0
 );
-flame_config::define_flame_option<bool> o_gog_Misc_NotOnTop(
-     "gog:misc:NotOnTop", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_gog_Misc_NotOnTop(
+     "gog:misc:NotOnTop", flametal_config::OG_Config,
      "",
      false
 );
@@ -109,7 +109,7 @@ flame_config::define_flame_option<bool> o_gog_Misc_NotOnTop(
 namespace patch::replace_gog_config {
     bool enabled = true;
 
-    void cfg_load_flame() {
+    void cfg_load_flametal() {
         cfg::iAntialias = *o_gog_Video_antialias;
         cfg::iExtraAntialias = *o_gog_Video_ExtraAntialias;
         cfg::iHighRes = *o_gog_Video_HighRes;
@@ -149,7 +149,7 @@ void cfg_load_original() {
 
 void cfg::load() {
     if (patch::replace_gog_config::enabled) {
-        patch::replace_gog_config::cfg_load_flame();
+        patch::replace_gog_config::cfg_load_flametal();
     } else {
         cfg_load_original();
     }

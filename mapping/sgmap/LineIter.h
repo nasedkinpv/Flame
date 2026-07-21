@@ -2,8 +2,8 @@
 // Created by DiaLight on 23.06.2024.
 //
 
-#ifndef FLAME_LINEITER_H
-#define FLAME_LINEITER_H
+#ifndef FLAMETAL_LINEITER_H
+#define FLAMETAL_LINEITER_H
 
 #include <fstream>
 
@@ -20,4 +20,4 @@ struct LineIter {
 
 };
 
-#endif //FLAME_LINEITER_H
+#endif //FLAMETAL_LINEITER_H

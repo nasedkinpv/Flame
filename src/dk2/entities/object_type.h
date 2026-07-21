@@ -2,8 +2,8 @@
 // Created by DiaLight on 17.11.2024.
 //
 
-#ifndef FLAME_OBJECT_TYPE_H
-#define FLAME_OBJECT_TYPE_H
+#ifndef FLAMETAL_OBJECT_TYPE_H
+#define FLAMETAL_OBJECT_TYPE_H
 
 // 1: Gold
 // 2: Gold
@@ -136,4 +136,4 @@
 
 
 
-#endif //FLAME_OBJECT_TYPE_H
+#endif //FLAMETAL_OBJECT_TYPE_H

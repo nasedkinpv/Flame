@@ -9,7 +9,7 @@
 #include <dk2_globals.h>
 #include <patches/auto_network.h>
 #include <patches/logging.h>
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 
 #include "scheduler.h"
 
@@ -140,8 +140,8 @@ namespace {
 }
 
 
-flame_config::define_flame_option<std::string> o_auto_network(
-    "flame:auto-network", flame_config::OG_Config,
+flametal_config::define_flame_option<std::string> o_auto_network(
+    "flametal:auto-network", flametal_config::OG_Config,
     "Start game with selected network gui\n"
     "format: <service>[:<srv|cli>[:<map>]]\n"
     "\"mp\" - goto Multiplayer\n"

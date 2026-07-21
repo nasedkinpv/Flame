@@ -40,7 +40,7 @@ ENV/
 env.bak/
 venv.bak/
 
-# Flame
+# Flametal
 /build/
 /tools/obj_research/
 /libs/dkii_exe/api/
@@ -48,9 +48,9 @@ venv.bak/
 /dev/
 /.cache/
 /dist/
-/.DS_Store
+.DS_Store
 /macos/native/build/
-/flame/
+/flametal/
 **/genlib/*.exp
 **/genlib/*.lib
 **/genlib/*.def
@@ -60,3 +60,7 @@ venv.bak/
 **/delinked/*.obj
 **/delinked/*.obj.map
 /tools/PEview.exe
+MESSAGE.LOG
+/scratchpad/
+/.porting/
+/macos/build-on-fs-windows.zsh

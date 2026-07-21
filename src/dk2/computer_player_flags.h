@@ -2,8 +2,8 @@
 // Created by DiaLight on 02.05.2025.
 //
 
-#ifndef FLAME_COMPUTER_PLAYER_FLAGS_H
-#define FLAME_COMPUTER_PLAYER_FLAGS_H
+#ifndef FLAMETAL_COMPUTER_PLAYER_FLAGS_H
+#define FLAMETAL_COMPUTER_PLAYER_FLAGS_H
 
 
 #include <cstdint>
@@ -97,4 +97,4 @@ enum MyComputerPlayer_flags2 {
 
 
 
-#endif //FLAME_COMPUTER_PLAYER_FLAGS_H
+#endif //FLAMETAL_COMPUTER_PLAYER_FLAGS_H

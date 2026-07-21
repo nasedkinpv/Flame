@@ -7,7 +7,7 @@
 #include <patches/limit_tps.h>
 #include <patches/logging.h>
 #include <patches/scheduler.h>
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 
 #include "dk2/gui/CWindow.h"
 #include "dk2/CCamera.h"
@@ -195,8 +195,8 @@ dk2::CComponent *dk2::CGameComponent::mainGuiLoop() {
         research::tick();
 #endif
         patch::scheduler::tick();
-        if (flame_config::changed())
-            flame_config::save();
+        if (flametal_config::changed())
+            flametal_config::save();
         patch::protocol_dump::tick();
         patch::replace_mouse_dinput_to_user32::release_handled_dinput_actions();
         gog::metal_bridge::pollInput();

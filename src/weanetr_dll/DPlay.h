@@ -2,8 +2,8 @@
 // Created by DiaLight on 09.01.2025.
 //
 
-#ifndef FLAME_DPLAY_H
-#define FLAME_DPLAY_H
+#ifndef FLAMETAL_DPLAY_H
+#define FLAMETAL_DPLAY_H
 
 
 #include "NetworkServiceProvider.h"
@@ -89,4 +89,4 @@ static_assert(sizeof(DPlay) == 0x5C5);
 
 }  // namespace net
 
-#endif //FLAME_DPLAY_H
+#endif //FLAMETAL_DPLAY_H

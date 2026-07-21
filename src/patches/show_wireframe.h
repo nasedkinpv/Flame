@@ -2,8 +2,8 @@
 // Created by DiaLight on 10/9/2025.
 //
 
-#ifndef FLAME_SHOW_WIREFRAME_H
-#define FLAME_SHOW_WIREFRAME_H
+#ifndef FLAMETAL_SHOW_WIREFRAME_H
+#define FLAMETAL_SHOW_WIREFRAME_H
 
 #include <Windows.h>
 
@@ -17,4 +17,4 @@ namespace patch::show_wireframe {
 }
 
 
-#endif // FLAME_SHOW_WIREFRAME_H
+#endif // FLAMETAL_SHOW_WIREFRAME_H

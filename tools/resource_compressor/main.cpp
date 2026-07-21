@@ -128,7 +128,7 @@ void show_help() {
     printf("  -symmap_file <path>\n");
     printf("  -refmap_file <path>\n");
     printf("  -dkii_fpobin_file <path>\n");
-    printf("  -flame_fpobin_file <path>\n");
+    printf("  -flametal_fpobin_file <path>\n");
     printf("  -res_file <path>\n");
     printf("  -version <str>\n");
 }
@@ -157,8 +157,8 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    char *flame_fpobin_file = getCmdOption(argv, argv + argc, "-flame_fpobin_file");
-    if (flame_fpobin_file == nullptr) {
+    char *flametal_fpobin_file = getCmdOption(argv, argv + argc, "-flametal_fpobin_file");
+    if (flametal_fpobin_file == nullptr) {
         show_help();
         return EXIT_FAILURE;
     }
@@ -181,14 +181,14 @@ int main(int argc, char** argv) {
     if(refmap.empty()) return EXIT_FAILURE;
     std::vector<std::byte> dkiiFpoBin = get_contents(dkii_fpobin_file);
     if(dkiiFpoBin.empty()) return EXIT_FAILURE;
-    std::vector<std::byte> flameFpoBin = get_contents(flame_fpobin_file);
-    if(flameFpoBin.empty()) return EXIT_FAILURE;
+    std::vector<std::byte> flametalFpoBin = get_contents(flametal_fpobin_file);
+    if(flametalFpoBin.empty()) return EXIT_FAILURE;
 
     InputResource resources[] {
         {"symmap", {(std::byte *) symmap.data(), symmap.size()}},
         {"refmap", {(std::byte *) refmap.data(), refmap.size()}},
         {"dkii_fpo", {(std::byte *) dkiiFpoBin.data(), dkiiFpoBin.size()}},
-        {"flame_fpo", {(std::byte *) flameFpoBin.data(), flameFpoBin.size()}},
+        {"flametal_fpo", {(std::byte *) flametalFpoBin.data(), flametalFpoBin.size()}},
         {"version", {(std::byte *) version, strlen(version)}},
     };
 

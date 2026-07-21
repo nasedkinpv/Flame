@@ -2,8 +2,8 @@
 // Created by DiaLight on 10.01.2025.
 //
 
-#ifndef FLAME_DK2_MEMORY_H
-#define FLAME_DK2_MEMORY_H
+#ifndef FLAMETAL_DK2_MEMORY_H
+#define FLAMETAL_DK2_MEMORY_H
 
 #include <utility>
 
@@ -90,4 +90,4 @@ namespace dk2 {
 
 }
 
-#endif //FLAME_DK2_MEMORY_H
+#endif //FLAMETAL_DK2_MEMORY_H

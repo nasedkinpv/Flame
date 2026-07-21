@@ -2,8 +2,8 @@
 // Created by DiaLight on 19.01.2025.
 //
 
-#ifndef FLAME_INSPECT_TOOLS_H
-#define FLAME_INSPECT_TOOLS_H
+#ifndef FLAMETAL_INSPECT_TOOLS_H
+#define FLAMETAL_INSPECT_TOOLS_H
 
 #include <Windows.h>
 
@@ -33,4 +33,4 @@ namespace patch::inspect_tools {
 }
 
 
-#endif //FLAME_INSPECT_TOOLS_H
+#endif //FLAMETAL_INSPECT_TOOLS_H

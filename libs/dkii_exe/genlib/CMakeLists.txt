@@ -45,7 +45,7 @@ STRING (REGEX REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}
 
 set(RESOURCES_FILE ${CMAKE_CURRENT_BINARY_DIR}/resources.rc)
 set(VER_PRODUCT_NAME "DKII stub")
-set(VER_DESCRIPTION "DKII stub for Flame v${OUTPUT_VERSION}")
+set(VER_DESCRIPTION "DKII stub for Flametal v${OUTPUT_VERSION}")
 configure_file(
         ${CMAKE_CURRENT_LIST_DIR}/resources.rc.in
         ${RESOURCES_FILE}
@@ -64,10 +64,10 @@ set_target_properties(${TARGET} PROPERTIES LINK_FLAGS "/NODEFAULTLIB")
 set(OUTPUT_NAME "DKII")
 set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME "${OUTPUT_NAME}")
 
-install(FILES $<TARGET_FILE:${TARGET}> DESTINATION "flame")
+install(FILES $<TARGET_FILE:${TARGET}> DESTINATION "flametal")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_link_options(${TARGET} PRIVATE /PDBALTPATH:${OUTPUT_NAME}.pdb)
-    install(FILES $<TARGET_PDB_FILE:${TARGET}> DESTINATION "flame")
+    install(FILES $<TARGET_PDB_FILE:${TARGET}> DESTINATION "flametal")
     target_link_options(${TARGET} PRIVATE /ILK:${CMAKE_CURRENT_BINARY_DIR}/${OUTPUT_NAME}.ilk)  # dont put ilk to bin dir
 endif()
-set_target_properties(${TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/flame")
+set_target_properties(${TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/flametal")

@@ -2,8 +2,8 @@
 // Created by DiaLight on 08.08.2024.
 //
 
-#ifndef FLAME_CAST_H
-#define FLAME_CAST_H
+#ifndef FLAMETAL_CAST_H
+#define FLAMETAL_CAST_H
 
 
 template<class T, class V>
@@ -12,4 +12,4 @@ T *dyn_cast(V *cls) {
     return nullptr;
 }
 
-#endif //FLAME_CAST_H
+#endif //FLAMETAL_CAST_H

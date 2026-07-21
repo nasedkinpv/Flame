@@ -2,8 +2,8 @@
 // Created by DiaLight on 22.08.2024.
 //
 
-#ifndef FLAME_BUTTON_TYPES_H
-#define FLAME_BUTTON_TYPES_H
+#ifndef FLAMETAL_BUTTON_TYPES_H
+#define FLAMETAL_BUTTON_TYPES_H
 
 
 #define CButton_types(cb)\
@@ -28,4 +28,4 @@ enum CButtonType {
 };
 const char *CButtonType_toString(int ty);
 
-#endif //FLAME_BUTTON_TYPES_H
+#endif //FLAMETAL_BUTTON_TYPES_H

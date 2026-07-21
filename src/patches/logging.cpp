@@ -5,11 +5,11 @@
 #include "logging.h"
 #include <cstdarg>
 #include <cstdio>
-#include <tools/flame_config.h>
+#include <tools/flametal_config.h>
 
-flame_config::define_flame_option<bool> o_log_debug(
-    "flame:logging:debug", flame_config::OG_Config,
-    "Flame debug logging",
+flametal_config::define_flame_option<bool> o_log_debug(
+    "flametal:logging:debug", flametal_config::OG_Config,
+    "Flametal debug logging",
     true
 );
 void patch::log::dbg(const char *format, ...) {
@@ -23,8 +23,8 @@ void patch::log::dbg(const char *format, ...) {
     va_end(args);
 }
 
-flame_config::define_flame_option<bool> o_log_ReadSPMessage(
-    "flame:logging:readsp", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_log_ReadSPMessage(
+    "flametal:logging:readsp", flametal_config::OG_Config,
     "ReadSPMessage function logging",
     false
 );
@@ -38,8 +38,8 @@ void patch::log::spmsg(const char *format, ...) {
     va_end(args);
 }
 
-flame_config::define_flame_option<bool> o_log_sock(
-    "flame:logging:sock", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_log_sock(
+    "flametal:logging:sock", flametal_config::OG_Config,
     "Network packets logging",
     false
 );
@@ -54,8 +54,8 @@ void patch::log::sock(const char *format, ...) {
     va_end(args);
 }
 
-flame_config::define_flame_option<bool> o_log_data(
-    "flame:logging:data", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_log_data(
+    "flametal:logging:data", flametal_config::OG_Config,
     "Data packets logging",
     false
 );
@@ -69,8 +69,8 @@ void patch::log::data(const char *format, ...) {
     va_end(args);
 }
 
-flame_config::define_flame_option<bool> o_log_gdata(
-    "flame:logging:gdata", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_log_gdata(
+    "flametal:logging:gdata", flametal_config::OG_Config,
     "Guaranteed data packets logging",
     false
 );
@@ -84,8 +84,8 @@ void patch::log::gdata(const char *format, ...) {
     va_end(args);
 }
 
-flame_config::define_flame_option<bool> o_log_weanetr_err(
-    "flame:logging:weanetr_err", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_log_weanetr_err(
+    "flametal:logging:weanetr_err", flametal_config::OG_Config,
     "",
     true
 );
@@ -100,8 +100,8 @@ void patch::log::err(const char *format, ...) {
     va_end(args);
 }
 
-flame_config::define_flame_option<bool> o_log_weanetr(
-    "flame:logging:weanetr", flame_config::OG_Config,
+flametal_config::define_flame_option<bool> o_log_weanetr(
+    "flametal:logging:weanetr", flametal_config::OG_Config,
     "",
     false
 );

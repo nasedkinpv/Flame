@@ -2,8 +2,8 @@
 // Created by DiaLight on 9/17/2025.
 //
 
-#ifndef FLAME_STACKFRAME_H
-#define FLAME_STACKFRAME_H
+#ifndef FLAMETAL_STACKFRAME_H
+#define FLAMETAL_STACKFRAME_H
 
 #include <string>
 #include <Windows.h>
@@ -30,4 +30,4 @@ std::ostream &operator<<(std::ostream &os, const StackFrame &frame);
 std::string StackFrame_getReadableSymName(const std::string &symName);
 
 
-#endif // FLAME_STACKFRAME_H
+#endif // FLAMETAL_STACKFRAME_H

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch-upscale dumped DK2 textures through a ComfyUI server (RealESRGAN x4).
+"""Batch-upscale dumped DK2 textures through an image-upscaling HTTP server (RealESRGAN x4).
 
 Reads <hash>_<WxH>.png files from the dump directory, writes <hash>.png into
 the HD directory (the content hash is the lookup key of the Metal host's
@@ -12,9 +12,9 @@ rejoined (SaveImage writes RGBA when the image carries alpha).
 
 Usage:
   python3 tools/upscale_textures.py \
-      --src "$HOME/Library/Application Support/Dungeon Keeper 2 Flame/texture-dump" \
-      --dst "$HOME/Library/Application Support/Dungeon Keeper 2 Flame/textures-hd" \
-      --server http://10.0.0.250:8188
+      --src "$HOME/Library/Application Support/Dungeon Keeper II/texture-dump" \
+      --dst "$HOME/Library/Application Support/Dungeon Keeper II/textures-hd" \
+      --server http://127.0.0.1:8188
 """
 import argparse
 import json
@@ -75,7 +75,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", required=True, type=pathlib.Path)
     ap.add_argument("--dst", required=True, type=pathlib.Path)
-    ap.add_argument("--server", default="http://10.0.0.250:8188")
+    ap.add_argument("--server", default="http://127.0.0.1:8188")
     args = ap.parse_args()
     args.dst.mkdir(parents=True, exist_ok=True)
 
