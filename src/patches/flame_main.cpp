@@ -34,6 +34,7 @@
 namespace dk2 {
     bool installSpatialSamplerHotCallsite();
     bool installCameraPhaseProfiler();
+    bool installFtolSse3();
     bool installRenderDispatchTargets();
 }
 
@@ -141,6 +142,7 @@ void patch::flameInit(int argc, const char **argv) {
         dk2::installRenderDispatchTargets();
         dk2::installSpatialSamplerHotCallsite();
         dk2::installCameraPhaseProfiler();
+        dk2::installFtolSse3();
     }
 
 #if __has_include(<dk2_research.h>)

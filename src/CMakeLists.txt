@@ -39,6 +39,7 @@ add_library(${TARGET} SHARED
         dk2/CBridge.cpp
         dk2/CCamera.cpp
         dk2/CameraPhaseProfile.cpp
+        dk2/FtolPatch.cpp
         dk2/CWorld.cpp
         dk2/WeaNetR.cpp
         dk2/dk2_memory.cpp
