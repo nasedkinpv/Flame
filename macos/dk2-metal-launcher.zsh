@@ -76,9 +76,10 @@ initial_frame="$(bridge_frame)"
     WINEPREFIX="${PREFIX}" WINEDEBUG='-all' \
     WINEDLLOVERRIDES='ddraw,d3dimm,dinput=b;winedbg.exe=d' \
     DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
+    DK2_GAME_RES="${DK2_GAME_RES:-1600x1200}" \
     MVK_CONFIG_LOG_LEVEL='0' \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
-      -skip-launcher -game-res=1600x1200 \
+      -skip-launcher -game-res="${DK2_GAME_RES:-1600x1200}" \
       -NoMovies -Sound -Shadows "${SHADOW_LEVEL}" \
       -enablebumpmapping -enablebumpluminance -32biteverything -disablegamma \
       -gog:video:HighRes=true -gog:video:RealFullscreen=false -gog:video:Vwait=0 \

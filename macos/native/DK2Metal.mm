@@ -1,6 +1,8 @@
 #import <AppKit/AppKit.h>
 #import <GameController/GameController.h>
 #import <Metal/Metal.h>
+#include <sys/file.h>
+#include <fcntl.h>
 #import <QuartzCore/QuartzCore.h>
 
 #include "metal_bridge/DK2BridgeProtocol.h"
@@ -2837,6 +2839,23 @@ int main(int argc, const char *argv[]) {
                            [pair substringFromIndex:eq.location + 1].UTF8String, 1);
                 }
             }
+        }
+
+        // Single-instance guard: a second launch against the same prefix
+        // kills the first one's wineserver and both hosts fight over the
+        // bridge file - the user just sees a white window. Refuse instead.
+        {
+            NSString *lockPath = [NSString stringWithFormat:@"%@/dk2metal.lock", NSTemporaryDirectory()];
+            const int lockFd = open(lockPath.fileSystemRepresentation, O_CREAT | O_RDWR, 0644);
+            if (lockFd >= 0 && flock(lockFd, LOCK_EX | LOCK_NB) != 0) {
+                NSAlert *alert = [[NSAlert alloc] init];
+                alert.messageText = @"Dungeon Keeper II is already running";
+                alert.informativeText = @"Close the running copy before starting a new one.";
+                [NSApplication.sharedApplication setActivationPolicy:NSApplicationActivationPolicyRegular];
+                [alert runModal];
+                return 1;
+            }
+            // lockFd intentionally stays open for the process lifetime
         }
 
         NSApplication *application = NSApplication.sharedApplication;
