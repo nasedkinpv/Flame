@@ -323,10 +323,12 @@ public:
             size_t pendingCount = 0;
             for (const auto &kv : pendingAtlasRects_) pendingCount += kv.second.size();
             gog_debugf("atlas-map: calls=%u unique=%u mip-canonicalized=%u invalid=%u "
-                       "resolved=%zu pending=%zu acked=%zu emitted=%zu",
+                       "resolved=%u pending=%u acked=%u emitted=%u",
                        atlasReportCalls_, atlasReported_, atlasMipCanonicalized_,
-                       atlasRejectedInvalid_, atlasRects_.size(), pendingCount,
-                       atlasRectsAcked_, atlasRectsEmitted_);
+                       atlasRejectedInvalid_, static_cast<unsigned>(atlasRects_.size()),
+                       static_cast<unsigned>(pendingCount),
+                       static_cast<unsigned>(atlasRectsAcked_),
+                       static_cast<unsigned>(atlasRectsEmitted_));
         }
         const auto found = surfaceTextures_.find(reinterpret_cast<uintptr_t>(pageKey));
         if (found != surfaceTextures_.end()) {
