@@ -142,7 +142,9 @@ uint32_t packBaseColor(const dk2::Vec3f &colour) {
     auto clampByte = [](float v) -> uint32_t {
         return v <= 0.0f ? 0u : (v >= 255.0f ? 255u : static_cast<uint32_t>(v));
     };
-    return (clampByte(colour.x) << 16) | (clampByte(colour.y) << 8) | clampByte(colour.z);
+    // alpha must be opaque: the shader multiplies texture alpha by this, and
+    // a zero here zeroed every mesh draw's alpha (ghost lattices, dead cutouts)
+    return 0xFF000000u | (clampByte(colour.x) << 16) | (clampByte(colour.y) << 8) | clampByte(colour.z);
 }
 
 // viewProj = P * [M|T] assembled from the same globals RenderData_addToArr
