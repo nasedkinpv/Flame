@@ -10,6 +10,11 @@
 
 namespace gog {
 
+    HRESULT createHeadlessClipper(DWORD flags, LPDIRECTDRAWCLIPPER *clipper,
+                                  IUnknown *outer);
+    HRESULT getHeadlessDisplayMode(LPDDSURFACEDESC desc);
+    HRESULT getHeadlessDisplayMode(LPDDSURFACEDESC2 desc);
+
     class FakeDirectDraw1 : public FakeUnknown<IDirectDraw> {
 
     public:

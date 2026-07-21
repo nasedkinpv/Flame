@@ -8,6 +8,7 @@
 #include <fake/FakeD3D3.h>
 #include <gog_globals.h>
 #include <gog_debug.h>
+#include <metal_bridge/MetalBridgeProducer.h>
 
 using namespace gog;
 
@@ -16,15 +17,19 @@ extern "C" HRESULT WINAPI fake_DirectDrawCreate(GUID FAR *lpGUID, LPDIRECTDRAW F
     gog_debug("Creating DX device");
     if (lpGUID != nullptr) gog_assert_failed("FakeDirectDrawCreate:1517");
     if (lplpDD == nullptr) gog_assert_failed("FakeDirectDrawCreate:1518");
-    if (!orig::pIDirectDraw4) {
-        LPDIRECTDRAW lpDD;
-        HRESULT hr = DirectDrawCreate(NULL, &lpDD, NULL);
-        if (FAILED(hr))
-            return hr;
-        hr = lpDD->QueryInterface(IID_IDirectDraw4, (LPVOID *) &orig::pIDirectDraw4);
-        if (FAILED(hr))
-            return hr;
-        lpDD->Release();
+    if (!FakeDirectDraw1::instance) {
+        if (!metal_bridge::headlessDirectDrawEnabled()) {
+            LPDIRECTDRAW lpDD;
+            HRESULT hr = DirectDrawCreate(NULL, &lpDD, NULL);
+            if (FAILED(hr))
+                return hr;
+            hr = lpDD->QueryInterface(IID_IDirectDraw4, (LPVOID *) &orig::pIDirectDraw4);
+            lpDD->Release();
+            if (FAILED(hr))
+                return hr;
+        } else {
+            gog_debug("Metal bridge: using CPU-backed headless DirectDraw");
+        }
         FakeDirectDraw1::instance = new FakeDirectDraw1();
         FakeDirectDraw2::instance = new FakeDirectDraw2();
         FakeDirectDraw4::instance = new FakeDirectDraw4();

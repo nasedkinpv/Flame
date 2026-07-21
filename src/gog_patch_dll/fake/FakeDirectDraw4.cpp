@@ -4,8 +4,10 @@
 #include <fake/FakeDirectDraw4.h>
 #include <fake/FakeD3D3.h>
 #include <fake/FakeSurface4.h>
+#include <fake/FakeDirectDraw1.h>
 #include <gog_debug.h>
 #include <gog_globals.h>
+#include <metal_bridge/MetalBridgeProducer.h>
 
 using namespace gog;
 
@@ -26,6 +28,8 @@ HRESULT FakeDirectDraw4::Compact(void) {
 }
 
 HRESULT FakeDirectDraw4::CreateClipper(DWORD flags, LPDIRECTDRAWCLIPPER *clipper, IUnknown *outer) {
+    if (metal_bridge::headlessDirectDrawEnabled())
+        return createHeadlessClipper(flags, clipper, outer);
     return orig::pIDirectDraw4->CreateClipper(flags, clipper, outer);
 }
 
@@ -117,6 +121,8 @@ HRESULT FakeDirectDraw4::GetCaps(LPDDCAPS hwCaps, LPDDCAPS halCaps) {
 
 HRESULT FakeDirectDraw4::GetDisplayMode(LPDDSURFACEDESC2 desc) {
     if (!desc) return DDERR_INVALIDPARAMS;
+    if (metal_bridge::headlessDirectDrawEnabled())
+        return getHeadlessDisplayMode(desc);
     return orig::pIDirectDraw4->GetDisplayMode(desc);
 }
 

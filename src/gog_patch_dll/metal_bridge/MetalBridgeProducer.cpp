@@ -449,10 +449,15 @@ public:
                                   (static_cast<uint64_t>(captured.displayHeight) << 48);
         std::lock_guard<std::mutex> lock(overlayMutex_);
         if (geometry != lastCursorGeometry_) {
-            gog_debugf("Metal cursor: source %ux%u, logical %ux%u, hotspot %d,%d",
+            size_t transparent = 0;
+            for (size_t offset = 3; offset < captured.pixels.size(); offset += 4)
+                if (captured.pixels[offset] == 0) ++transparent;
+            gog_debugf("Metal cursor: source %ux%u, logical %ux%u, hotspot %d,%d, key=0x%x transparent=%u/%u",
                        captured.width, captured.height,
                        captured.displayWidth, captured.displayHeight,
-                       captured.hotspotX, captured.hotspotY);
+                       captured.hotspotX, captured.hotspotY, colorKey,
+                       static_cast<unsigned>(transparent),
+                       captured.width * captured.height);
             lastCursorGeometry_ = geometry;
         }
         cursor_ = std::move(captured);
@@ -1828,6 +1833,13 @@ Producer producer;
 bool isEnabled() {
     char path[2];
     return GetEnvironmentVariableA("DK2_METAL_BRIDGE_FILE", path, sizeof(path)) != 0;
+}
+
+bool headlessDirectDrawEnabled() {
+    if (!isEnabled()) return false;
+    char value[8] = {};
+    const DWORD length = GetEnvironmentVariableA("DK2_HEADLESS_DDRAW", value, sizeof(value));
+    return length == 0 || strcmp(value, "0") != 0;
 }
 
 void pollInput() {

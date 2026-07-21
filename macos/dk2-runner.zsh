@@ -18,7 +18,7 @@
 # Configuration comes from the environment (passed via --runner-env= from the
 # host, or exported directly in dev):
 #   DK2_LEVEL, DK2_SHADOW_LEVEL, DK2_GAME_RES, DK2_WINE_BIN,
-#   DK2_METAL_PREFIX, DK2_WINEDEBUG
+#   DK2_METAL_PREFIX, DK2_WINEDEBUG, DK2_HEADLESS_DDRAW
 # Stays alive until every wine process exits (wineserver -w), which lets the
 # host quit when the game does.
 set -u
@@ -48,6 +48,7 @@ readonly LOG_DIR="${HOME}/Library/Logs/Dungeon Keeper II"
 readonly LOG_FILE="${LOG_DIR}/game.log"
 readonly SHADOW_LEVEL="${DK2_SHADOW_LEVEL:-3}"
 readonly LEVEL="${DK2_LEVEL:-}"
+readonly HEADLESS_DDRAW="${DK2_HEADLESS_DDRAW:-1}"
 # Widescreen needs the DirectDraw mode list to expose non-4:3 modes first;
 # until then the safe default is the largest mode the bridge enumerates.
 readonly GAME_RES="${DK2_GAME_RES:-1600x1200}"
@@ -117,6 +118,7 @@ if [[ "${DK2_RUNNER_MODE}" == packaged ]]; then
       WINEPREFIX="${PREFIX}" WINEDEBUG="${DK2_WINEDEBUG:--all}" \
       WINEDLLOVERRIDES='ddraw,d3dimm,dinput=b;winedbg.exe=d;mscoree,mshtml=' \
       DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
+      DK2_HEADLESS_DDRAW="${HEADLESS_DDRAW}" \
       MVK_CONFIG_LOG_LEVEL='0' \
       "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
         -skip-launcher -game-res="${GAME_RES}" "${LEVEL_ARGS[@]}" \
@@ -152,6 +154,7 @@ else
     WINEPREFIX="${PREFIX}" WINEDEBUG="${DK2_WINEDEBUG:--all}" \
     WINEDLLOVERRIDES='ddraw,d3dimm,dinput=b;winedbg.exe=d;mscoree,mshtml=' \
     DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
+    DK2_HEADLESS_DDRAW="${HEADLESS_DDRAW}" \
     MVK_CONFIG_LOG_LEVEL='0' \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
       -skip-launcher -game-res="${GAME_RES}" "${LEVEL_ARGS[@]}" \
