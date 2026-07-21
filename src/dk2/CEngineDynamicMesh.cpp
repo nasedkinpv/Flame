@@ -195,7 +195,9 @@ bool drawDynamicOnGpu(
     float world[12];
     for (int row = 0; row < 3; ++row) {
         for (int column = 0; column < 3; ++column) {
-            world[row * 4 + column] = mesh->f10_mat.m[row][column] * scale;
+            // Mat3x3f::multiplyVec combines stored rows by input component,
+            // i.e. the conventional matrix seen by the shader is transposed.
+            world[row * 4 + column] = mesh->f10_mat.m[column][row] * scale;
         }
     }
     world[3] = mesh->field_4.x;

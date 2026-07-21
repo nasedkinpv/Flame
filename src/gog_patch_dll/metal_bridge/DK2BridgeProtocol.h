@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 13u
+#define DK2M_VERSION 14u
 #define DK2M_TIMING_QUANTUM_US 8u
 #define DK2M_SLOT_COUNT 3u
 // A 1600x1200 High-Res frame can introduce 9-12 MiB of 128x128 surfaces while
@@ -78,6 +78,9 @@ enum DK2MDrawMeshFlags {
     DK2M_DRAW_MESH_ALPHA_BLEND = 1u << 1,  // SRCALPHA/INVSRCALPHA blend
     DK2M_DRAW_MESH_ADDITIVE = 1u << 2,     // ONE/ONE additive blend
     DK2M_DRAW_MESH_ALPHA_TEST = 1u << 3,   // discard texels below the ref, rest opaque
+    DK2M_DRAW_MESH_MULTIPLY = 1u << 4,     // ZERO/INVSRCCOLOR blend
+    DK2M_DRAW_MESH_Z_ENABLE = 1u << 5,
+    DK2M_DRAW_MESH_Z_WRITE = 1u << 6,
 };
 
 enum DK2MInputFlags {

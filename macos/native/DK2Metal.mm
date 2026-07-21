@@ -2405,6 +2405,7 @@ bool inputLogEnabled() {
     id<MTLRenderPipelineState> _meshOpaquePipeline;
     id<MTLRenderPipelineState> _meshAlphaPipeline;
     id<MTLRenderPipelineState> _meshAdditivePipeline;
+    id<MTLRenderPipelineState> _meshMultiplyPipeline;
     id<MTLBuffer> _meshVertexBuffers[kFramesInFlight];
     id<MTLBuffer> _meshIndexBuffers[kFramesInFlight];
     id<MTLBuffer> _meshDrawBuffers[kFramesInFlight];
@@ -2544,13 +2545,20 @@ bool inputLogEnabled() {
     pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
     _meshAlphaPipeline = meshVertexFunction && fragmentFunction
         ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error] : nil;
+    pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorZero;
+    pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceColor;
+    pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorZero;
+    pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+    _meshMultiplyPipeline = meshVertexFunction && fragmentFunction
+        ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error] : nil;
     pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
     pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
     pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
     pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
     _meshAdditivePipeline = meshVertexFunction && fragmentFunction
         ? [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error] : nil;
-    if (!_meshOpaquePipeline || !_meshAlphaPipeline || !_meshAdditivePipeline) {
+    if (!_meshOpaquePipeline || !_meshAlphaPipeline || !_meshAdditivePipeline ||
+        !_meshMultiplyPipeline) {
         fail([NSString stringWithFormat:@"Metal mesh pipeline failed: %@", error.localizedDescription ?: @"library missing"]);
         return nil;
     }
@@ -3962,7 +3970,7 @@ static void *renderWorker(void *context) {
                 NSUInteger indexByteOffset = 0;
                 uint32_t indexCount = 0;
                 uint32_t vertexCount = 0;
-                uint32_t pipelineKind = 0;  // 0 opaque, 1 alpha, 2 additive
+                uint32_t pipelineKind = 0;  // 0 opaque, 1 alpha, 2 additive, 3 multiply
                 uint32_t zFunction = 4;
                 uint32_t zWrite = 1;
                 uint32_t cull = 1;
@@ -3977,6 +3985,8 @@ static void *renderWorker(void *context) {
                     pipeline = _meshAlphaPipeline;
                 } else if (pendingMeshInstances.pipelineKind == 2) {
                     pipeline = _meshAdditivePipeline;
+                } else if (pendingMeshInstances.pipelineKind == 3) {
+                    pipeline = _meshMultiplyPipeline;
                 }
                 [encoder setRenderPipelineState:pipeline];
                 [encoder setDepthStencilState:
@@ -4237,11 +4247,18 @@ static void *renderWorker(void *context) {
                             std::memcpy(uniform.lightIndices, meshDraw.light_indices,
                                         uniform.lightCount * sizeof(uint16_t));
                             std::memset(uniform.lightPad, 0, sizeof(uniform.lightPad));
-                            const uint32_t effectiveZFunction = zEnabled ? zFunction : 8;
-                            const uint32_t effectiveZWrite = zEnabled && zWriteEnabled ? 1 : 0;
-                            const uint32_t pipelineKind = (meshDraw.flags & 4u) ? 2u
-                                : (meshDraw.flags & 2u) ? 1u : 0u;
-                            const bool canInstance = pipelineKind == 0;
+                            const bool meshZEnabled =
+                                (meshDraw.flags & DK2M_DRAW_MESH_Z_ENABLE) != 0;
+                            const uint32_t effectiveZFunction = meshZEnabled ? 4u : 8u;
+                            const uint32_t effectiveZWrite = meshZEnabled &&
+                                (meshDraw.flags & DK2M_DRAW_MESH_Z_WRITE) != 0;
+                            const uint32_t pipelineKind =
+                                (meshDraw.flags & DK2M_DRAW_MESH_MULTIPLY) ? 3u
+                                : (meshDraw.flags & DK2M_DRAW_MESH_ADDITIVE) ? 2u
+                                : (meshDraw.flags & DK2M_DRAW_MESH_ALPHA_BLEND) ? 1u
+                                : 0u;
+                            const bool canInstance =
+                                pipelineKind == 0 && effectiveZWrite != 0;
                             const bool compatible = pendingMeshInstances.active &&
                                 canInstance &&
                                 pendingMeshInstances.baseVertex ==
@@ -4388,13 +4405,19 @@ static void *renderWorker(void *context) {
                                         sizeof(uniform.lightPad));
 
                             id<MTLRenderPipelineState> pipeline = _meshOpaquePipeline;
-                            if (meshDraw.flags & 4u) pipeline = _meshAdditivePipeline;
-                            else if (meshDraw.flags & 2u) pipeline = _meshAlphaPipeline;
+                            if (meshDraw.flags & DK2M_DRAW_MESH_MULTIPLY) {
+                                pipeline = _meshMultiplyPipeline;
+                            } else if (meshDraw.flags & DK2M_DRAW_MESH_ADDITIVE) {
+                                pipeline = _meshAdditivePipeline;
+                            } else if (meshDraw.flags & DK2M_DRAW_MESH_ALPHA_BLEND) {
+                                pipeline = _meshAlphaPipeline;
+                            }
                             [encoder setRenderPipelineState:pipeline];
-                            const uint32_t effectiveZFunction =
-                                zEnabled ? zFunction : 8;
-                            const uint32_t effectiveZWrite =
-                                zEnabled && zWriteEnabled ? 1 : 0;
+                            const bool meshZEnabled =
+                                (meshDraw.flags & DK2M_DRAW_MESH_Z_ENABLE) != 0;
+                            const uint32_t effectiveZFunction = meshZEnabled ? 4u : 8u;
+                            const uint32_t effectiveZWrite = meshZEnabled &&
+                                (meshDraw.flags & DK2M_DRAW_MESH_Z_WRITE) != 0;
                             [encoder setDepthStencilState:
                                 _depthStates[effectiveZFunction][effectiveZWrite]];
                             [encoder setCullMode:cullMode == 1
@@ -4510,14 +4533,24 @@ static void *renderWorker(void *context) {
                         // whatever blend state the previous frame replay left on
                         id<MTLRenderPipelineState> pipeline = _meshOpaquePipeline;
                         if (!meshDebug) {
-                            if (inlineDraw.flags & 4u) pipeline = _meshAdditivePipeline;
-                            else if (inlineDraw.flags & 2u) pipeline = _meshAlphaPipeline;
+                            if (inlineDraw.flags & DK2M_DRAW_MESH_MULTIPLY) {
+                                pipeline = _meshMultiplyPipeline;
+                            } else if (inlineDraw.flags & DK2M_DRAW_MESH_ADDITIVE) {
+                                pipeline = _meshAdditivePipeline;
+                            } else if (inlineDraw.flags & DK2M_DRAW_MESH_ALPHA_BLEND) {
+                                pipeline = _meshAlphaPipeline;
+                            }
                             // flag 8 (alpha test) stays on the opaque pipeline:
                             // the shader discards sub-reference texels
                         }
                         [encoder setRenderPipelineState:pipeline];
-                        const uint32_t effectiveZFunction = meshDebug ? 8 : (zEnabled ? zFunction : 8);
-                        const uint32_t effectiveZWrite = meshDebug ? 0 : (zEnabled && zWriteEnabled ? 1 : 0);
+                        const bool meshZEnabled =
+                            (inlineDraw.flags & DK2M_DRAW_MESH_Z_ENABLE) != 0;
+                        const uint32_t effectiveZFunction =
+                            meshDebug ? 8u : (meshZEnabled ? 4u : 8u);
+                        const uint32_t effectiveZWrite = meshDebug ? 0u
+                            : (meshZEnabled &&
+                               (inlineDraw.flags & DK2M_DRAW_MESH_Z_WRITE) != 0);
                         [encoder setDepthStencilState:_depthStates[effectiveZFunction][effectiveZWrite]];
                         [encoder setCullMode:meshDebug ? MTLCullModeNone
                                                        : (cullMode == 1 ? MTLCullModeNone : MTLCullModeBack)];

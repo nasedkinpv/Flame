@@ -141,6 +141,39 @@ bool meshGpuActive() {
     return *o_gog_meshGpuPath && gog::metal_bridge::isEnabled();
 }
 
+// SceneObject2E carries the final flags consumed by DirectDraw_prepareTexture;
+// MyScaledSurface::flags are only the source material bits. A property may own
+// more than one texture stage, so map the handle slot through its sampler count.
+uint32_t meshDrawFlags(dk2::SceneObject2E *scene,
+                       dk2::MyScaledSurface *surface, int stageSlot) {
+    if (scene) {
+        if (scene->propsCount == 1) return scene->drawFlags_x2[0];
+        int firstStage = 0;
+        for (int property = 0; property < scene->propsCount && property < 2;
+             ++property) {
+            const int stageCount = static_cast<uint8_t>(
+                scene->numTextureSamplers_x2[property]);
+            if (stageSlot >= firstStage && stageSlot < firstStage + stageCount) {
+                return scene->drawFlags_x2[property];
+            }
+            firstStage += stageCount;
+        }
+    }
+    return surface ? surface->drawFlags : 0u;
+}
+
+uint32_t metalMeshFlags(uint32_t drawFlags, bool lit) {
+    uint32_t flags = lit ? DK2M_DRAW_MESH_LIT : 0u;
+    if (drawFlags & 0x100u) flags |= DK2M_DRAW_MESH_Z_ENABLE;
+    if (drawFlags & 0x80u) flags |= DK2M_DRAW_MESH_Z_WRITE;
+    // This is the order in DirectDraw_prepareTexture: a later matching mode
+    // wins if malformed flags contain more than one blend selector.
+    if (drawFlags & 0x1000u) flags |= DK2M_DRAW_MESH_MULTIPLY;
+    else if (drawFlags & 0x20u) flags |= DK2M_DRAW_MESH_ALPHA_BLEND;
+    else if (drawFlags & 0x1u) flags |= DK2M_DRAW_MESH_ADDITIVE;
+    return flags;
+}
+
 // The colour floats the engine carries per vertex/ambient are stored in the
 // float-bias encoding (value = bias1 + bias2 + n); the CPU path recovers n
 // via mantissa extraction in colourComponent. Recover it explicitly here.
@@ -451,11 +484,19 @@ uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
             if (!hit.handle) break;
             if (hit.handle != slotHandle) continue;
             if (hit.holder != holder) { hit.handle = nullptr; break; }  // repacked
-            // ensure on every hit: it is just a map lookup, and skipping it
-            // let freshly repainted atlas pages miss their content resend
-            // (black terrain flashes while the camera moves)
-            gog::metal_bridge::ensureTexture(
-                hit.bridgeId, static_cast<IDirectDrawSurface4 *>(hit.bridgeSurface));
+            // DD surfaces report dirtiness through Lock/Blt hooks. Raw engine
+            // atlas pages have no COM surface, so PAGE_ATLAS_RESET marks their
+            // synthetic texture dirty and we re-enter the guarded lock/copy
+            // path exactly once here instead of returning stale black pixels.
+            if (!hit.bridgeSurface &&
+                gog::metal_bridge::bufferTextureNeedsRefresh(hit.bridgeId)) {
+                break;
+            }
+            if (hit.bridgeSurface) {
+                gog::metal_bridge::ensureTexture(
+                    hit.bridgeId,
+                    static_cast<IDirectDrawSurface4 *>(hit.bridgeSurface));
+            }
             return hit.bridgeId;
         }
     }
@@ -787,41 +828,8 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     // both vertex colour and ambient); the "bias" constants in the engine's
     // encoding helpers are themselves negative magic numbers, so nothing here
     // needs debiasing.
-    // Translate the batch draw-flag word exactly as the original per-batch
-    // state applier (0x589300) does: bit 0x20 -> SRCALPHA/INVSRCALPHA blend,
-    // bit 0x1 -> ONE/ONE additive, bit 0x1000 -> modulate blend (approximated
-    // as alpha), default -> opaque with blending disabled.
-    uint32_t meshFlags = DK2M_DRAW_MESH_LIT;
-    // the 0x589300 applier's word is the surface's `flags` field (+0x10):
-    // observed pairs all carry 0x4000 (texture-alpha modulate), with 0x20 =
-    // SRCALPHA blend, 0x1 = additive, 0x1000 = modulate blend, and 0x200 =
-    // alpha-tested cutouts (prison bars, wall-top holes) which binary alpha
-    // makes equivalent to blending.
-    const uint32_t drawFlags = surface ? surface->flags : 0;
-    // one-shot log of each distinct (drawFlags, flags) pair seen, to map the
-    // real bit layout against the 0x589300 applier
-    {
-        static uint64_t seenPairs[16];
-        static int seenCount = 0;
-        const uint64_t pair = (static_cast<uint64_t>(drawFlags) << 32) |
-                              (surface ? surface->flags : 0u);
-        bool known = false;
-        for (int i = 0; i < seenCount; ++i) {
-            if (seenPairs[i] == pair) { known = true; break; }
-        }
-        if (!known && seenCount < 16) {
-            seenPairs[seenCount++] = pair;
-            patch::log::dbg("mesh flags pair: drawFlags=%08X flags=%08X",
-                            drawFlags, surface ? surface->flags : 0u);
-        }
-    }
-    if (drawFlags & 0x200u) meshFlags |= DK2M_DRAW_MESH_ALPHA_TEST;
-    else if (drawFlags & (0x20u | 0x1000u)) meshFlags |= DK2M_DRAW_MESH_ALPHA_BLEND;
-    else if (drawFlags & 0x1u) {
-        // additive surfaces (crystals, glows) draw UNLIT in the original -
-        // their emissive texture already carries the brightness
-        meshFlags = DK2M_DRAW_MESH_ADDITIVE;
-    }
+    const uint32_t meshFlags = metalMeshFlags(
+        meshDrawFlags(scene, surface, stageSlot), true);
     const dk2::meshgpu::InlineTarget target = {
         textureId, uS, vS, uO, vO, meshFlags, tint};
     if (sampler) {
@@ -926,12 +934,8 @@ bool prepareTarget(dk2::SceneObject2E *scene, dk2::MyScaledSurface *surface,
     out->vO = reinterpret_cast<const float *>(0x0077F3D8)[stageSlot];
     const uint32_t alphaTerm = *reinterpret_cast<const uint32_t *>(0x00779380);
     out->tint = (alphaTerm & 0xFF000000u) | 0x00FFFFFFu;
-    uint32_t meshFlags = lit ? DK2M_DRAW_MESH_LIT : 0u;
-    const uint32_t drawFlags = surface ? surface->flags : 0;
-    if (drawFlags & 0x200u) meshFlags |= DK2M_DRAW_MESH_ALPHA_TEST;
-    else if (drawFlags & (0x20u | 0x1000u)) meshFlags |= DK2M_DRAW_MESH_ALPHA_BLEND;
-    else if (drawFlags & 0x1u) meshFlags = DK2M_DRAW_MESH_ADDITIVE;
-    out->meshFlags = meshFlags;
+    out->meshFlags = metalMeshFlags(
+        meshDrawFlags(scene, surface, stageSlot), lit);
     return true;
 }
 

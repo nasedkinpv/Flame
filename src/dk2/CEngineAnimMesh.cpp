@@ -257,7 +257,7 @@ bool drawAnimOnGpu(
     for (int row = 0; row < 3; ++row) {
         for (int column = 0; column < 3; ++column) {
             world[row * 4 + column] =
-                mesh->f10_matrix.m[row][column] * scale;
+                mesh->f10_matrix.m[column][row] * scale;
         }
     }
     world[3] = mesh->field_4.x;

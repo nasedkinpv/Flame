@@ -2,7 +2,7 @@
 
 The current native pipeline keeps the original 32-bit game simulation isolated in Wine and renders it in a separate arm64 AppKit/Metal 4 host:
 
-`DK2 + Flametal (i386/Wine) → shared protocol v13 → AppKit + Metal 4 (arm64)`
+`DK2 + Flametal (i386/Wine) → shared protocol v14 → AppKit + Metal 4 (arm64)`
 
 Flametal (the underlying [DiaLight/Flame](https://github.com/DiaLight/Flame) patch layer this fork is built on) captures the game's Direct3D 3 command stream without asking WineD3D to render it. The native host owns presentation, scaling, focus, keyboard and mouse input. Absolute pointer coordinates use AppKit, raw relative motion and keyboard state use GameController, and scrolling uses AppKit's precise wheel events.
 
@@ -38,6 +38,10 @@ rasterizer. `shadow_cache` is automatically bypassed while the Metal
 rasterizer is active, because caching the deliberately blank CPU scratch mask
 would suppress the projected triangles sent to the GPU.
 
+Protocol v14 carries the final DK2 per-draw blend and depth state with retained
+mesh commands; this is required because those commands are staged independently
+of the legacy render-state stream.
+
 The old inline experiment was slower than the translated SSE2 CPU transform,
 because it recopied every vertex and issued roughly 1300 small draws each
 frame. Protocol v13 removes that feeding cost and is now the default. DK2's
@@ -57,7 +61,7 @@ would not improve texture ownership.
 Texture residency is frame-local. Three residency sets mirror the three
 in-flight frame slots and contain only textures referenced by that slot's
 argument tables; replacing an atlas therefore cannot keep every historical
-version resident. Protocol v13 also retires the host texture, its dynamic ring,
+version resident. Protocol v12 also retires the host texture, its dynamic ring,
 and named-atlas metadata when the owning DirectDraw surface is destroyed.
 Metal I/O remains a future loading optimization, not a lifetime manager;
 sparse textures are intentionally not used for DK2's small 256→1024 atlas

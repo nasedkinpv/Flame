@@ -16,7 +16,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <map>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -205,14 +204,7 @@ public:
                 emitTexture(stage, boundTextures_[stage], boundSurfaces_[stage]);
             }
         }
-        // Inline buckets accumulated during prepare flush into the fresh
-        // frame directly (active_ is already set at this point).
         flushPendingLights();
-        flushInlineBuckets();
-        // Retained opaque instances are grouped by mesh id during prepare so
-        // the host can issue one indexed instanced draw per topology. Append
-        // them to stagedMesh_ (after their registrations) before publishing.
-        flushRetainedBuckets(true);
         // Mesh commands staged during the game's prepare phase (sceneEmit runs
         // before BeginScene, i.e. between frames) flush into the frame head:
         // they draw first, and z-testing orders them against later draws.
@@ -336,6 +328,11 @@ public:
             textures_.emplace(textureId, std::move(cache));
         }
         return textureId;
+    }
+
+    bool bufferTextureNeedsRefresh(uint32_t textureId) const {
+        const auto found = textures_.find(textureId);
+        return found == textures_.end() || found->second.dirty;
     }
 
     void surfaceReleased(const void *key) {
@@ -525,6 +522,10 @@ public:
         const auto found = surfaceTextures_.find(key);
         if (found == surfaceTextures_.end()) return;
         const uint32_t textureId = found->second;
+        if (const auto texture = textures_.find(textureId);
+            texture != textures_.end()) {
+            texture->second.dirty = true;
+        }
         const size_t oldSize = atlasRects_.size();
         atlasRects_.erase(
             std::remove_if(atlasRects_.begin(), atlasRects_.end(),
@@ -669,8 +670,6 @@ public:
     void finish() {
         if (!active_) return;
         flushPendingLights();
-        flushInlineBuckets();
-        flushRetainedBuckets(false);
         const auto overlayStarted = PhaseClock::now();
         emitOverlay();
         emitCursor();
@@ -2048,40 +2047,6 @@ public:
 
     uint32_t frameCounter() const { return frame_; }
 
-    // Opaque z-tested inline draws sharing (texture, tint, flags, ambient)
-    // merge into per-state buckets and flush as ONE command each: terrain
-    // goes through this path one tile at a time (~4-5K calls/frame), and
-    // unmerged that exploded bridge draw count ~5x over the legacy batcher.
-    struct InlineBucket {
-        std::vector<uint8_t> vertices;
-        std::vector<uint16_t> indices;
-        uint32_t vertexCount = 0;
-        uint32_t textureId = 0;
-        uint32_t tint = 0;
-        uint32_t flags = 0;
-        float ambient[3] = {};
-        uint16_t lightIndices[DK2M_MAX_LIGHTS_PER_DRAW] = {};
-        uint32_t lightCount = 0;
-    };
-    using InlineKey = std::array<uint32_t, 7 + DK2M_MAX_LIGHTS_PER_DRAW>;
-    std::map<InlineKey, InlineBucket> inlineBuckets_;
-
-    void flushInlineBucket(InlineBucket &bucket) {
-        if (!bucket.vertexCount) return;
-        emitInlineCommand(bucket.textureId, bucket.vertices.data(), bucket.vertexCount,
-                          bucket.indices.data(), static_cast<uint32_t>(bucket.indices.size()),
-                          bucket.tint, bucket.flags, bucket.lightIndices,
-                          bucket.lightCount,
-                          bucket.ambient[0], bucket.ambient[1], bucket.ambient[2]);
-        bucket.vertices.clear();
-        bucket.indices.clear();
-        bucket.vertexCount = 0;
-    }
-
-    void flushInlineBuckets() {
-        for (auto &entry : inlineBuckets_) flushInlineBucket(entry.second);
-    }
-
     void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCount,
                         const uint16_t *indices, uint32_t indexCount, uint32_t tint,
                         uint32_t flags, const uint16_t *lightIndices,
@@ -2089,48 +2054,6 @@ public:
                         float ambientB) {
         if (!vertices || !vertexCount || !indices || !indexCount) return;
         lightCount = std::min<uint32_t>(lightCount, DK2M_MAX_LIGHTS_PER_DRAW);
-        if ((flags & (DK2M_DRAW_MESH_ALPHA_BLEND | DK2M_DRAW_MESH_ADDITIVE)) == 0) {
-            uint32_t ambientBits[3];
-            std::memcpy(ambientBits, &ambientR, 4);
-            std::memcpy(ambientBits + 1, &ambientG, 4);
-            std::memcpy(ambientBits + 2, &ambientB, 4);
-            InlineKey key = {};
-            key[0] = textureId;
-            key[1] = tint;
-            key[2] = flags;
-            key[3] = ambientBits[0];
-            key[4] = ambientBits[1];
-            key[5] = ambientBits[2];
-            key[6] = lightCount;
-            for (uint32_t i = 0; i < lightCount; ++i) key[7 + i] = lightIndices[i];
-            InlineBucket &bucket = inlineBuckets_[key];
-            if (bucket.vertexCount + vertexCount > 60000u) flushInlineBucket(bucket);
-            if (!bucket.vertexCount) {
-                bucket.textureId = textureId;
-                bucket.tint = tint;
-                bucket.flags = flags;
-                bucket.ambient[0] = ambientR;
-                bucket.ambient[1] = ambientG;
-                bucket.ambient[2] = ambientB;
-                bucket.lightCount = lightCount;
-                if (lightCount) {
-                    std::memcpy(bucket.lightIndices, lightIndices,
-                                lightCount * sizeof(uint16_t));
-                }
-            }
-            const auto *vertexBytes = static_cast<const uint8_t *>(vertices);
-            bucket.vertices.insert(bucket.vertices.end(), vertexBytes,
-                                   vertexBytes + static_cast<size_t>(vertexCount) * sizeof(DK2MMeshVertex));
-            const uint16_t rebase = static_cast<uint16_t>(bucket.vertexCount);
-            const size_t indexBase = bucket.indices.size();
-            bucket.indices.resize(indexBase + indexCount);
-            uint16_t *outIndices = bucket.indices.data() + indexBase;
-            for (uint32_t i = 0; i < indexCount; ++i) {
-                outIndices[i] = static_cast<uint16_t>(indices[i] + rebase);
-            }
-            bucket.vertexCount += vertexCount;
-            return;
-        }
         emitInlineCommand(textureId, vertices, vertexCount, indices, indexCount,
                           tint, flags, lightIndices, lightCount,
                           ambientR, ambientG, ambientB);
@@ -2223,8 +2146,6 @@ public:
         return true;
     }
 
-    std::map<uint32_t, std::vector<DK2MDrawMeshCommand>> retainedBuckets_;
-
     void emitRetainedCommand(const DK2MDrawMeshCommand &command, bool stage) {
         if (stage || !active_) {
             stageBytes(&command, sizeof(command));
@@ -2238,15 +2159,6 @@ public:
         if (used_ + sizeof(command) > DK2M_SLOT_CAPACITY) return;
         append(&command, sizeof(command));
         ++commandCount_;
-    }
-
-    void flushRetainedBuckets(bool stage) {
-        for (auto &entry : retainedBuckets_) {
-            for (const DK2MDrawMeshCommand &command : entry.second) {
-                emitRetainedCommand(command, stage);
-            }
-            entry.second.clear();
-        }
     }
 
     void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12],
@@ -2274,11 +2186,6 @@ public:
         if (command.light_count) {
             std::memcpy(command.light_indices, lightIndices,
                         command.light_count * sizeof(uint16_t));
-        }
-        if ((flags & (DK2M_DRAW_MESH_ALPHA_BLEND |
-                      DK2M_DRAW_MESH_ADDITIVE)) == 0) {
-            retainedBuckets_[meshId].push_back(command);
-            return;
         }
         emitRetainedCommand(command, !active_);
     }
@@ -2615,6 +2522,10 @@ uint32_t ensureSurfaceTexture(IDirectDrawSurface4 *surface) {
 uint32_t ensureBufferTexture(const void *key, const void *pixels, uint32_t width,
                              uint32_t height, uint32_t pitchBytes) {
     return producer.ensureBufferTexture(key, pixels, width, height, pitchBytes);
+}
+
+bool bufferTextureNeedsRefresh(uint32_t textureId) {
+    return producer.bufferTextureNeedsRefresh(textureId);
 }
 
 void surfaceReleased(const void *key) {

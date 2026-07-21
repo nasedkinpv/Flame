@@ -61,8 +61,9 @@ void cameraSet(const float viewProj[16], const float depthParams[6]);
 void lightsSet(const void *lights, uint32_t lightCount,
                float ambientR, float ambientG, float ambientB,
                const float falloffLut[256]);
-// One mesh instance; world = row-major 3x4. Depth/blend context comes from
-// the surrounding setRenderState stream, same as drawIndexed.
+// One mesh instance; world = row-major 3x4. Mesh flags carry the original
+// per-draw blend and depth contract because retained commands may be staged
+// outside the surrounding legacy state stream.
 void drawMesh(uint32_t meshId, uint32_t textureId, const float world[12],
               const float uvTransform[4],
               uint32_t tint, uint32_t flags,
@@ -94,6 +95,7 @@ uint32_t ensureSurfaceTexture(IDirectDrawSurface4 *surface);
 // Bridge id for a raw BGRA32 CPU buffer (engine surface page).
 uint32_t ensureBufferTexture(const void *key, const void *pixels, uint32_t width,
                              uint32_t height, uint32_t pitchBytes);
+bool bufferTextureNeedsRefresh(uint32_t textureId);
 // Ends producer and host ownership for a texture. `surfaceReleased` resolves
 // synthetic ids by their surface/buffer key; `textureReleased` is used by a
 // FakeTexture whose bridge id is already known.
