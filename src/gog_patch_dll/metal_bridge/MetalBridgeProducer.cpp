@@ -12,10 +12,13 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -89,6 +92,8 @@ public:
             InterlockedCompareExchange(asLong(&header_->consumer_session), 0, 0);
         if (consumerSession != lastConsumerSession_ || consumer < lastConsumerFrame_) {
             for (auto &entry : textures_) entry.second.pending = true;
+            // a fresh consumer needs the full atlas map again
+            atlasRectsEmitted_ = 0;
         }
         lastConsumerSession_ = consumerSession;
         lastConsumerFrame_ = consumer;
@@ -153,6 +158,7 @@ public:
             emitTextureStageState(static_cast<DWORD>(entry.first >> 32),
                                   static_cast<DWORD>(entry.first), entry.second);
         }
+        emitAtlasRects();
     }
 
     void draw(DWORD fvf, const void *vertices, DWORD vertexCount,
@@ -195,7 +201,10 @@ public:
                     updateTexture(found->second, std::move(updated));
                 }
             }
-            if (surface) surfaceTextures_[reinterpret_cast<uintptr_t>(surface)] = textureId;
+            if (surface) {
+                surfaceTextures_[reinterpret_cast<uintptr_t>(surface)] = textureId;
+                flushPendingAtlasRects(reinterpret_cast<uintptr_t>(surface), textureId);
+            }
         }
         if (active_) emitTexture(stage, textureId);
     }
@@ -231,6 +240,7 @@ public:
         } else {
             textureId = nextSyntheticTextureId_++;
             surfaceTextures_[reinterpret_cast<uintptr_t>(key)] = textureId;
+            flushPendingAtlasRects(reinterpret_cast<uintptr_t>(key), textureId);
         }
         auto existing = textures_.find(textureId);
         if (existing != textures_.end() && !existing->second.dirty) return textureId;
@@ -251,6 +261,85 @@ public:
             textures_.emplace(textureId, std::move(cache));
         }
         return textureId;
+    }
+
+    // --- named-atlas map (HD resource pack) ---
+    // Composition points report (page surface, resource name, rect). The
+    // page's bridge texture id may not exist yet (compositing precedes the
+    // first upload), so unresolved reports wait in pendingAtlasRects_ keyed
+    // by the page pointer and flush when any of the id-assignment sites
+    // below first associates that pointer with an id. Resolved rects live
+    // in atlasRects_ forever and are (re)emitted from a watermark, so a
+    // restarted consumer receives the full map again.
+    void reportAtlasRect(const void *pageKey, const char *rawName,
+                         uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+        if (!pageKey || !rawName || !*rawName || !w || !h) return;
+        if (x > 0xFFFF || y > 0xFFFF || w > 0xFFFF || h > 0xFFFF) return;
+        // Only base-level mips carry rects: "…MM0" is stripped, deeper mip
+        // pages fall back to scaled originals on the host.
+        std::string name(rawName);
+        const size_t n = name.size();
+        if (n >= 3 && name[n - 3] == 'M' && name[n - 2] == 'M' &&
+            name[n - 1] >= '0' && name[n - 1] <= '9') {
+            if (name[n - 1] != '0') return;
+            name.resize(n - 3);
+            if (name.empty()) return;
+        }
+        char dedupe[96];
+        std::snprintf(dedupe, sizeof(dedupe), "%p|%u|%u|%s",
+                      pageKey, x, y, name.c_str());
+        if (!atlasRectSeen_.insert(dedupe).second) return;
+        const auto found = surfaceTextures_.find(reinterpret_cast<uintptr_t>(pageKey));
+        if (found != surfaceTextures_.end()) {
+            pushAtlasRect(found->second, name.c_str(), x, y, w, h);
+        } else {
+            PendingAtlasRect pending{};
+            pending.x = static_cast<uint16_t>(x);
+            pending.y = static_cast<uint16_t>(y);
+            pending.w = static_cast<uint16_t>(w);
+            pending.h = static_cast<uint16_t>(h);
+            std::strncpy(pending.name, name.c_str(), sizeof(pending.name) - 1);
+            pendingAtlasRects_[reinterpret_cast<uintptr_t>(pageKey)].push_back(pending);
+        }
+    }
+
+    void flushPendingAtlasRects(uintptr_t pageKey, uint32_t textureId) {
+        const auto found = pendingAtlasRects_.find(pageKey);
+        if (found == pendingAtlasRects_.end()) return;
+        for (const PendingAtlasRect &p : found->second) {
+            pushAtlasRect(textureId, p.name, p.x, p.y, p.w, p.h);
+        }
+        pendingAtlasRects_.erase(found);
+    }
+
+    void pushAtlasRect(uint32_t textureId, const char *name,
+                       uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+        DK2MPageAtlasMapCommand cmd = {};
+        cmd.textureId = textureId;
+        cmd.x = static_cast<uint16_t>(x);
+        cmd.y = static_cast<uint16_t>(y);
+        cmd.w = static_cast<uint16_t>(w);
+        cmd.h = static_cast<uint16_t>(h);
+        std::strncpy(cmd.name, name, sizeof(cmd.name) - 1);
+        atlasRects_.push_back(cmd);
+        // mid-frame reports still reach the consumer this frame
+        if (active_) emitAtlasRects();
+    }
+
+    void emitAtlasRects() {
+        while (atlasRectsEmitted_ < atlasRects_.size()) {
+            struct {
+                DK2MCommandHeader header;
+                DK2MPageAtlasMapCommand body;
+            } cmd = {};
+            cmd.header.type = DK2M_COMMAND_PAGE_ATLAS_MAP;
+            cmd.header.size = sizeof(cmd);
+            cmd.body = atlasRects_[atlasRectsEmitted_];
+            if (used_ + sizeof(cmd) > DK2M_SLOT_CAPACITY) break;
+            append(&cmd, sizeof(cmd));
+            ++commandCount_;
+            ++atlasRectsEmitted_;
+        }
     }
 
     // Capture-only registration for the GPU mesh path: same cache upkeep as
@@ -277,7 +366,10 @@ public:
                 updateTexture(found->second, std::move(updated));
             }
         }
-        if (surface) surfaceTextures_[reinterpret_cast<uintptr_t>(surface)] = textureId;
+        if (surface) {
+            surfaceTextures_[reinterpret_cast<uintptr_t>(surface)] = textureId;
+            flushPendingAtlasRects(reinterpret_cast<uintptr_t>(surface), textureId);
+        }
     }
 
     void textureDirty(IDirectDrawSurface4 *surface, const DDSURFACEDESC2 *lockedDesc) {
@@ -1747,6 +1839,15 @@ private:
         used_ += size;
     }
 
+    struct PendingAtlasRect {
+        uint16_t x, y, w, h;
+        char name[64];
+    };
+    std::vector<DK2MPageAtlasMapCommand> atlasRects_;
+    size_t atlasRectsEmitted_ = 0;
+    std::unordered_map<uintptr_t, std::vector<PendingAtlasRect>> pendingAtlasRects_;
+    std::unordered_set<std::string> atlasRectSeen_;
+
     HANDLE file_ = INVALID_HANDLE_VALUE;
     HANDLE mapping_ = nullptr;
     void *view_ = nullptr;
@@ -1963,6 +2064,12 @@ uint32_t ensureSurfaceTexture(IDirectDrawSurface4 *surface) {
 uint32_t ensureBufferTexture(const void *key, const void *pixels, uint32_t width,
                              uint32_t height, uint32_t pitchBytes) {
     return producer.ensureBufferTexture(key, pixels, width, height, pitchBytes);
+}
+
+void reportAtlasRect(const void *pageKey, const char *name, uint32_t x, uint32_t y,
+                     uint32_t w, uint32_t h) {
+    if (!isEnabled()) return;
+    producer.reportAtlasRect(pageKey, name, x, y, w, h);
 }
 
 void setGameTickTiming(uint32_t tickMicroseconds) {

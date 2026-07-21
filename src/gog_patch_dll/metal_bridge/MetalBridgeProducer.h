@@ -82,6 +82,14 @@ uint32_t ensureSurfaceTexture(IDirectDrawSurface4 *surface);
 // Bridge id for a raw BGRA32 CPU buffer (engine surface page).
 uint32_t ensureBufferTexture(const void *key, const void *pixels, uint32_t width,
                              uint32_t height, uint32_t pitchBytes);
+// Named-atlas map (HD resource pack): the rect [x,y,w,h] of the page surface
+// identified by `pageKey` (the CEngineSurfaceBase*/IDirectDrawSurface4* the
+// producer keys its texture ids by) was composited from resource `name`.
+// Mip-suffixed names are filtered producer-side: "…MM0" is stripped, deeper
+// mips are dropped. Reports made before the page has a texture id are queued
+// and flushed when the id first appears.
+void reportAtlasRect(const void *pageKey, const char *name, uint32_t x, uint32_t y,
+                     uint32_t w, uint32_t h);
 
 }
 

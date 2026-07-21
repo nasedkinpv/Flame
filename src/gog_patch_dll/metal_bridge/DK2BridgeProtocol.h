@@ -38,6 +38,20 @@ enum DK2MCommandType {
     // travel with the command every frame (no registry), the GPU still does
     // projection + lighting. World transform is implicitly identity.
     DK2M_COMMAND_DRAW_MESH_INLINE = 12,
+    // Named-atlas map (HD resource pack): reports that the rect [x,y,w,h]
+    // of bridge texture `textureId` was composited from the resource named
+    // `name` (asciiz, WAD-style, mip suffix stripped). The host uses these
+    // to assemble a scaled HD replacement page from loose PNGs in the
+    // user's resource pack; rects for ids it has no HD art for fall back
+    // to scaling the original pixels. Sent once per composited rect, may
+    // repeat when a page is re-composited.
+    DK2M_COMMAND_PAGE_ATLAS_MAP = 13,
+};
+
+struct DK2MPageAtlasMapCommand {
+    uint32_t textureId;
+    uint16_t x, y, w, h;
+    char name[64];  // NUL-terminated, truncated if longer
 };
 
 enum DK2MDrawMeshFlags {

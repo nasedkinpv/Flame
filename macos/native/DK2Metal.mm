@@ -945,6 +945,315 @@ id<MTLTexture> lookup(id<MTLDevice> device, const uint8_t *pixels,
 
 }  // namespace texhd
 
+// Named HD resource pack (protocol PAGE_ATLAS_MAP): the game reports which
+// resource name was composited into which rect of which bridge texture
+// ("page"). When a loose PNG named after that resource exists in the user's
+// pack directory, the page is rebuilt at 4x with each mapped rect drawn from
+// its pack PNG; unmapped rects fall back to bilinear-upscaled original
+// pixels, so the page stays uniform. The hash-based texhd lookup above stays
+// as the fallback for textures with no atlas map. All state is touched from
+// the render thread only, same as texhd.
+namespace respack {
+
+constexpr uint32_t kScale = 4;
+constexpr uint32_t kMaxPageDim = 1024;      // atlas pages only, not framebuffers
+constexpr size_t kMaxRectsPerPage = 512;
+constexpr uint32_t kMaxRebuildsPerFrame = 4;
+constexpr uint32_t kDemoteRebuilds = 32;    // rect-updated too often => not pack material
+
+struct PageState {
+    std::vector<DK2MPageAtlasMapCommand> rects;  // textureId field unused here
+    std::vector<uint8_t> pixels1x;               // last full upload, tight w*4 pitch
+    uint32_t w = 0, h = 0;
+    id<MTLTexture> hdTexture = nil;              // currently bound 4x page, nil if none
+    uint32_t rebuilds = 0;                       // reset by every full upload
+    bool dirty = false;
+    bool demoted = false;
+};
+
+std::unordered_map<uint32_t, PageState> &pages() {
+    static std::unordered_map<uint32_t, PageState> map;
+    return map;
+}
+
+NSString *candidatePath() {
+    static NSString *path = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        path = [NSHomeDirectory() stringByAppendingPathComponent:
+                @"Library/Application Support/Dungeon Keeper II/resource-pack/textures"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:path
+                                  withIntermediateDirectories:YES attributes:nil error:nil];
+    });
+    return path;
+}
+
+// Existence is re-checked per call (never dispatch_once'd) so a pack the
+// user drops in mid-session is picked up -- same rule as texhd::directory().
+NSString *directory() {
+    if (!dk2cfg::gHdTexturesLive.load(std::memory_order_relaxed)) return nil;
+    NSString *path = candidatePath();
+    BOOL isDir = NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDir] || !isDir) {
+        return nil;
+    }
+    return path;
+}
+
+// Byte-for-byte mirror of the game-side TextureDump sanitizer, so pack file
+// names match dumped names exactly.
+NSString *sanitizedFileName(const char *name) {
+    std::string out;
+    for (const char *p = name; *p; ++p) {
+        unsigned char c = (unsigned char)*p;
+        if (c < 0x20 || c == '\\' || c == '/' || c == ':' || c == '*' ||
+            c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+            out += '_';
+        } else {
+            out += (char)c;
+        }
+    }
+    if (out.empty()) out = "unnamed";
+    return [@(out.c_str()) stringByAppendingString:@".png"];
+}
+
+// PNG -> straight-alpha BGRA, same decode path as texhd::loadFile but into a
+// CPU buffer for compositing instead of a texture.
+bool loadPngBgra(NSString *path, std::vector<uint8_t> &bgra, uint32_t &w, uint32_t &h) {
+    if (access(path.fileSystemRepresentation, R_OK) != 0) return false;
+    CGImageSourceRef source = CGImageSourceCreateWithURL(
+            (__bridge CFURLRef)[NSURL fileURLWithPath:path], NULL);
+    if (!source) return false;
+    CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, NULL);
+    CFRelease(source);
+    if (!image) return false;
+    const size_t width = CGImageGetWidth(image), height = CGImageGetHeight(image);
+    bool ok = false;
+    if (width && height && width <= 16384 && height <= 16384) {
+        bgra.assign(width * height * 4, 0);
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGContextRef context = CGBitmapContextCreate(
+                bgra.data(), width, height, 8, width * 4, space,
+                (CGBitmapInfo)kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+        if (context) {
+            CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+            CGContextRelease(context);
+            for (size_t i = 0; i < bgra.size(); i += 4) {
+                const uint8_t a = bgra[i + 3];
+                if (a == 0 || a == 255) continue;
+                bgra[i] = (uint8_t)std::min(255u, bgra[i] * 255u / a);
+                bgra[i + 1] = (uint8_t)std::min(255u, bgra[i + 1] * 255u / a);
+                bgra[i + 2] = (uint8_t)std::min(255u, bgra[i + 2] * 255u / a);
+            }
+            w = (uint32_t)width;
+            h = (uint32_t)height;
+            ok = true;
+        }
+        CGColorSpaceRelease(space);
+    }
+    CGImageRelease(image);
+    return ok;
+}
+
+void scaleBilinearBgra(const uint8_t *src, uint32_t sw, uint32_t sh, uint32_t spitch,
+                       uint8_t *dst, uint32_t dw, uint32_t dh, uint32_t dpitch) {
+    if (sw == dw && sh == dh) {
+        for (uint32_t y = 0; y < dh; ++y) {
+            std::memcpy(dst + (size_t)y * dpitch, src + (size_t)y * spitch, (size_t)dw * 4);
+        }
+        return;
+    }
+    for (uint32_t y = 0; y < dh; ++y) {
+        const float fy = dh > 1 ? (float)y * (sh - 1) / (dh - 1) : 0.f;
+        const uint32_t y0 = (uint32_t)fy;
+        const uint32_t y1 = std::min(y0 + 1, sh - 1);
+        const float ty = fy - y0;
+        const uint8_t *row0 = src + (size_t)y0 * spitch;
+        const uint8_t *row1 = src + (size_t)y1 * spitch;
+        uint8_t *out = dst + (size_t)y * dpitch;
+        for (uint32_t x = 0; x < dw; ++x) {
+            const float fx = dw > 1 ? (float)x * (sw - 1) / (dw - 1) : 0.f;
+            const uint32_t x0 = (uint32_t)fx;
+            const uint32_t x1 = std::min(x0 + 1, sw - 1);
+            const float tx = fx - x0;
+            for (int c = 0; c < 4; ++c) {
+                const float top = row0[x0 * 4 + c] + (row0[x1 * 4 + c] - row0[x0 * 4 + c]) * tx;
+                const float bot = row1[x0 * 4 + c] + (row1[x1 * 4 + c] - row1[x0 * 4 + c]) * tx;
+                out[x * 4 + c] = (uint8_t)std::min(255.f, std::max(0.f, top + (bot - top) * ty + 0.5f));
+            }
+        }
+    }
+}
+
+// Small decoded-PNG cache: rebuilds re-read the same handful of pack files.
+struct CachedPng {
+    std::vector<uint8_t> bgra;
+    uint32_t w = 0, h = 0;
+    uint64_t tick = 0;
+};
+
+const CachedPng *packPng(NSString *dir, const char *name) {
+    static std::unordered_map<std::string, CachedPng> cache;
+    static uint64_t tick = 0;
+    ++tick;
+    std::string key(name);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+        it->second.tick = tick;
+        return &it->second;
+    }
+    // No negative cache on purpose: the user drops files in live, and this
+    // only runs on page (re)builds, so the stat cost is negligible.
+    NSString *path = [dir stringByAppendingPathComponent:sanitizedFileName(name)];
+    CachedPng png;
+    if (!loadPngBgra(path, png.bgra, png.w, png.h)) return nullptr;
+    if (cache.size() >= 64) {
+        auto oldest = cache.begin();
+        for (auto c = cache.begin(); c != cache.end(); ++c) {
+            if (c->second.tick < oldest->second.tick) oldest = c;
+        }
+        cache.erase(oldest);
+    }
+    png.tick = tick;
+    return &cache.emplace(std::move(key), std::move(png)).first->second;
+}
+
+void noteRect(const DK2MPageAtlasMapCommand &map) {
+    PageState &st = pages()[map.textureId];
+    for (auto &r : st.rects) {
+        if (r.x == map.x && r.y == map.y) {  // slot re-composited
+            if (r.w != map.w || r.h != map.h || std::strncmp(r.name, map.name, sizeof(r.name)) != 0) {
+                r = map;
+                st.dirty = true;
+            }
+            return;
+        }
+    }
+    if (st.rects.size() >= kMaxRectsPerPage) return;
+    st.rects.push_back(map);
+    st.dirty = true;
+}
+
+// Composes the 4x page from stored 1x pixels + pack PNGs. nil when no pack
+// file applied (caller falls through to the original/hash path).
+id<MTLTexture> composePage(id<MTLDevice> device, uint32_t textureId, PageState &st,
+                           uint32_t *packHits) {
+    NSString *dir = directory();
+    if (!dir || st.pixels1x.empty() || st.rects.empty()) return nil;
+    const uint32_t hdW = st.w * kScale, hdH = st.h * kScale;
+    std::vector<uint8_t> hd((size_t)hdW * hdH * 4);
+    scaleBilinearBgra(st.pixels1x.data(), st.w, st.h, st.w * 4,
+                      hd.data(), hdW, hdH, hdW * 4);
+    uint32_t applied = 0;
+    for (const auto &r : st.rects) {
+        if (r.x >= st.w || r.y >= st.h) continue;
+        const uint32_t rw = std::min<uint32_t>(r.w, st.w - r.x);
+        const uint32_t rh = std::min<uint32_t>(r.h, st.h - r.y);
+        if (!rw || !rh) continue;
+        const CachedPng *png = packPng(dir, r.name);
+        if (!png) continue;
+        scaleBilinearBgra(png->bgra.data(), png->w, png->h, png->w * 4,
+                          hd.data() + ((size_t)r.y * kScale * hdW + (size_t)r.x * kScale) * 4,
+                          rw * kScale, rh * kScale, hdW * 4);
+        ++applied;
+    }
+    if (!applied) return nil;
+    if (packHits) *packHits += applied;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSLog(@"DK2 resource pack: active, first page composed from %@", dir);
+    });
+    id<MTLTexture> tex = texhd::createMipmapped(
+            device, hd.data(), hdW, hdH, 0x5245'5041'434Bull ^ textureId);
+    if (tex) tex.label = [NSString stringWithFormat:@"DK2 pack page %u", textureId];
+    return tex;
+}
+
+// Full-upload entry point: stores the 1x pixels and builds the HD page if
+// the id has mapped rects with pack art. Called on the TEXTURE_UPDATE path.
+id<MTLTexture> buildFromUpload(id<MTLDevice> device, uint32_t textureId,
+                               const uint8_t *pixels, uint32_t width, uint32_t height,
+                               uint32_t pitch, uint32_t *packHits) {
+    auto it = pages().find(textureId);
+    if (it == pages().end() || it->second.rects.empty()) return nil;
+    if (width > kMaxPageDim || height > kMaxPageDim || !width || !height) return nil;
+    PageState &st = it->second;
+    st.w = width;
+    st.h = height;
+    st.pixels1x.resize((size_t)width * height * 4);
+    for (uint32_t y = 0; y < height; ++y) {
+        std::memcpy(st.pixels1x.data() + (size_t)y * width * 4,
+                    pixels + (size_t)y * pitch, (size_t)width * 4);
+    }
+    st.dirty = false;
+    st.rebuilds = 0;
+    st.demoted = false;
+    st.hdTexture = composePage(device, textureId, st, packHits);
+    return st.hdTexture;
+}
+
+// Rect update against a page whose HD version is currently bound: patch the
+// stored 1x pixels and schedule a rebuild. Returns false when the caller
+// should apply the rect to the bound texture normally.
+bool applyRectToStored(uint32_t textureId, uint32_t x, uint32_t y,
+                       uint32_t width, uint32_t height,
+                       const uint8_t *pixels, uint32_t pitch) {
+    auto it = pages().find(textureId);
+    if (it == pages().end()) return false;
+    PageState &st = it->second;
+    if (!st.hdTexture || st.pixels1x.empty()) return false;
+    if (x >= st.w || y >= st.h || width > st.w - x || height > st.h - y) return false;
+    for (uint32_t row = 0; row < height; ++row) {
+        std::memcpy(st.pixels1x.data() + ((size_t)(y + row) * st.w + x) * 4,
+                    pixels + (size_t)row * pitch, (size_t)width * 4);
+    }
+    st.dirty = true;
+    return true;
+}
+
+// End-of-commands pass: rebuild pages whose atlas map or stored content
+// changed this frame. Pages rect-updated too often demote back to a plain
+// 1x texture until their next full upload.
+void rebuildDirty(id<MTLDevice> device, uint32_t *packHits,
+                  void (^bind)(uint32_t textureId, id<MTLTexture> texture)) {
+    uint32_t budget = kMaxRebuildsPerFrame;
+    for (auto &kv : pages()) {
+        if (!budget) break;
+        PageState &st = kv.second;
+        if (!st.dirty || st.pixels1x.empty() || st.demoted) continue;
+        st.dirty = false;
+        --budget;
+        if (++st.rebuilds > kDemoteRebuilds) {
+            st.demoted = true;
+            id<MTLTexture> plain = texhd::createMipmapped(
+                    device, st.pixels1x.data(), st.w, st.h, kv.first);
+            if (plain) {
+                plain.label = [NSString stringWithFormat:@"DK2 pack demoted %u", kv.first];
+                st.hdTexture = nil;
+                bind(kv.first, plain);
+                NSLog(@"DK2 resource pack: page %u demoted (rect-updated too often)", kv.first);
+            }
+            continue;
+        }
+        id<MTLTexture> tex = composePage(device, kv.first, st, packHits);
+        if (tex) {
+            st.hdTexture = tex;
+            bind(kv.first, tex);
+        } else if (st.hdTexture) {
+            // Map/pack no longer applies (file deleted, pack disabled):
+            // restore a plain page so stale HD content doesn't linger.
+            id<MTLTexture> plain = texhd::createMipmapped(
+                    device, st.pixels1x.data(), st.w, st.h, kv.first);
+            if (plain) {
+                st.hdTexture = nil;
+                bind(kv.first, plain);
+            }
+        }
+    }
+}
+
+}  // namespace respack
+
 namespace {
 
 constexpr NSUInteger kFramesInFlight = 3;
@@ -1146,6 +1455,7 @@ struct FrameMetrics {
     uint32_t missingTextures = 0;
     uint32_t bindingOverflows = 0;
     uint32_t invalidDraws = 0;
+    uint32_t packHits = 0;
 };
 
 class TelemetryWindow {
@@ -1177,7 +1487,8 @@ public:
               p(&FrameMetrics::textureBytes, 95), p(&FrameMetrics::textureBytes, 99));
         NSLog(@"PERF host us p50/p95/p99: encode=%u/%u/%u drawable-wait=%u/%u/%u "
                "gpu-wait=%u/%u/%u gpu-complete=%u/%u/%u; diagnostics totals: "
-               "fvf1=%llu fvf2=%llu missing-texture=%llu binding-overflow=%llu invalid-draw=%llu",
+               "fvf1=%llu fvf2=%llu missing-texture=%llu binding-overflow=%llu invalid-draw=%llu "
+               "pack-hits=%llu",
               p(&FrameMetrics::encodeUs, 50), p(&FrameMetrics::encodeUs, 95),
               p(&FrameMetrics::encodeUs, 99), p(&FrameMetrics::drawableWaitUs, 50),
               p(&FrameMetrics::drawableWaitUs, 95), p(&FrameMetrics::drawableWaitUs, 99),
@@ -1186,7 +1497,7 @@ public:
               p(&FrameMetrics::gpuCompleteUs, 95), p(&FrameMetrics::gpuCompleteUs, 99),
               total(&FrameMetrics::fvf1Draws), total(&FrameMetrics::fvf2Draws),
               total(&FrameMetrics::missingTextures), total(&FrameMetrics::bindingOverflows),
-              total(&FrameMetrics::invalidDraws));
+              total(&FrameMetrics::invalidDraws), total(&FrameMetrics::packHits));
         NSLog(@"PERF producer us p50/p95/p99: draw-copy=%u/%u/%u texture=%u/%u/%u "
                "overlay=%u/%u/%u",
               p(&FrameMetrics::producerDrawCopyUs, 50), p(&FrameMetrics::producerDrawCopyUs, 95),
@@ -2018,6 +2329,7 @@ bool inputLogEnabled() {
     // still reads.
     struct DynamicTexture {
         uint32_t misses = 0;
+        uint32_t retry = 0;   // periodic HD re-probe while classified dynamic
         uint8_t ringIndex = 0;
         bool dynamic = false;
         id<MTLTexture> ring[kFramesInFlight] = {};
@@ -2154,6 +2466,9 @@ bool inputLogEnabled() {
                   kShadowDarkenStrength, dk2ShadowUpSign());
         }
     }
+    // Creates the user-replaceable pack directory on first launch and logs
+    // where to drop named PNGs (see the respack namespace).
+    NSLog(@"DK2 resource pack: named HD textures read from %@", respack::candidatePath());
 
     for (uint32_t function = 1; function <= 8; ++function) {
         for (uint32_t write = 0; write <= 1; ++write) {
@@ -2763,7 +3078,7 @@ static void *renderWorker(void *context) {
         const double t = update.targetPresentationTimestamp;
         const double pulse = 0.5 + 0.5 * std::sin(t * 1.8);
         MTLClearColor clearColor = MTLClearColorMake(0.025 + pulse * 0.035, 0.07, 0.10 + pulse * 0.08, 1.0);
-        BOOL residencyChanged = NO;
+        __block BOOL residencyChanged = NO;
         if (snapshot) {
             for (const CommandView &view : _commandViews) {
                 const size_t offset = view.offset;
@@ -2802,13 +3117,31 @@ static void *renderWorker(void *context) {
                         id<MTLTexture> hd = nil;
                         const bool cursorTexture =
                             textureUpdate.texture_id == DK2M_CURSOR_TEXTURE_ID;
-                        if ((!dyn.dynamic || cursorTexture) &&
+                        // Dynamic ids periodically retry the HD paths so the
+                        // classification can recover (it used to be permanent,
+                        // which locked pages out of HD forever when the HD dir
+                        // was empty/off while the misses accumulated).
+                        if ((!dyn.dynamic || cursorTexture || (++dyn.retry & 127) == 0) &&
                             textureUpdate.texture_id != DK2M_OVERLAY_TEXTURE_ID) {
-                            hd = texhd::lookup(_device, pixels, textureUpdate.width,
-                                               textureUpdate.height, textureUpdate.row_pitch);
+                            hd = respack::buildFromUpload(_device, key, pixels,
+                                                          textureUpdate.width,
+                                                          textureUpdate.height,
+                                                          textureUpdate.row_pitch,
+                                                          &metrics.packHits);
+                            if (!hd) {
+                                hd = texhd::lookup(_device, pixels, textureUpdate.width,
+                                                   textureUpdate.height, textureUpdate.row_pitch);
+                            }
                             if (hd) {
                                 dyn.misses = 0;
-                            } else if (++dyn.misses > 8 && !cursorTexture) {
+                                if (dyn.dynamic) {
+                                    dyn.dynamic = false;
+                                    NSLog(@"texture id %u recovered from dynamic: HD lookup back on",
+                                          textureUpdate.texture_id);
+                                }
+                            } else if (!dyn.dynamic &&
+                                       (texhd::directory() != nil || respack::directory() != nil) &&
+                                       ++dyn.misses > 8 && !cursorTexture) {
                                 dyn.dynamic = true;
                                 NSLog(@"texture id %u flagged dynamic: hashing and HD lookup off",
                                       textureUpdate.texture_id);
@@ -2908,16 +3241,58 @@ static void *renderWorker(void *context) {
                         ++metrics.textureUpdates;
                         metrics.textureBytes += textureUpdate.data_size;
                         const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
-                        [texture replaceRegion:MTLRegionMake2D(
-                                                   textureUpdate.x, textureUpdate.y,
-                                                   textureUpdate.width, textureUpdate.height)
-                                   mipmapLevel:0
-                                     withBytes:pixels
-                                   bytesPerRow:textureUpdate.row_pitch];
+                        if (respack::applyRectToStored(textureUpdate.texture_id,
+                                                       textureUpdate.x, textureUpdate.y,
+                                                       textureUpdate.width, textureUpdate.height,
+                                                       pixels, textureUpdate.row_pitch)) {
+                            // The bound texture is a 4x resource-pack page; a
+                            // 1x replaceRegion would land at the wrong scale.
+                            // Stored pixels were patched; the page rebuilds in
+                            // the pass below.
+                        } else {
+                            [texture replaceRegion:MTLRegionMake2D(
+                                                       textureUpdate.x, textureUpdate.y,
+                                                       textureUpdate.width, textureUpdate.height)
+                                       mipmapLevel:0
+                                         withBytes:pixels
+                                       bytesPerRow:textureUpdate.row_pitch];
+                        }
+                    }
+                } else if (view.type == DK2M_COMMAND_PAGE_ATLAS_MAP) {
+                    // DK2MPageAtlasMapCommand does not embed DK2MCommandHeader
+                    // (unlike the older commands), so the payload follows the
+                    // 8-byte stream header; accept the headerless layout too.
+                    DK2MPageAtlasMapCommand map;
+                    bool haveMap = false;
+                    if (view.size >= sizeof(DK2MCommandHeader) + sizeof(map)) {
+                        std::memcpy(&map, snapshot->bytes.data() + offset + sizeof(DK2MCommandHeader),
+                                    sizeof(map));
+                        haveMap = true;
+                    } else if (view.size >= sizeof(map)) {
+                        std::memcpy(&map, snapshot->bytes.data() + offset, sizeof(map));
+                        haveMap = true;
+                    }
+                    if (haveMap) {
+                        map.name[sizeof(map.name) - 1] = 0;
+                        if (map.textureId && map.w && map.h && map.name[0]) {
+                            respack::noteRect(map);
+                        }
                     }
                 }
             }
         }
+        // Resource-pack pages whose atlas map or content changed this frame
+        // (PAGE_ATLAS_MAP after the upload, or a rect update into a mapped
+        // page) are rebuilt here from the stored 1x pixels.
+        respack::rebuildDirty(_device, &metrics.packHits,
+                              ^(uint32_t textureId, id<MTLTexture> texture) {
+            if (!texture) return;
+            if (_textures[textureId] != texture) {
+                _textures[textureId] = texture;
+                [_resources addAllocation:texture];
+                residencyChanged = YES;
+            }
+        });
         if (residencyChanged) [_resources commit];
 
         // --- Metal shadows: gather this frame's casters, render the

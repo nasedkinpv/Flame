@@ -5,6 +5,20 @@
 #include "dk2/MyCESurfHandle.h"
 #include "dk2/MyStringHashMap_MyCESurfHandle_entry.h"
 #include "dk2/MyStringHashMap_entry.h"
+#include <metal_bridge/MetalBridgeProducer.h>
+#include "dk2/CEngineDDSurface.h"
+
+// The producer keys texture ids by IDirectDrawSurface4* for legacy pages
+// (SetTexture path) but by the engine surface pointer for GPU-mesh pages
+// (ensureBufferTexture) - report atlas rects under whichever key the page
+// will upload with.
+static const void *atlasPageKey(dk2::CEngineSurfaceBase *page) {
+    if (page && *(void **) page == (void *) 0x6703C4) {
+        IDirectDrawSurface4 *dd = static_cast<dk2::CEngineDDSurface *>(page)->ddSurf;
+        if (dd) return dd;
+    }
+    return page;
+}
 #include "dk2/CEngineSurface.h"
 #include "dk2/CEngineSurfaceScaler.h"
 #include "dk2/MySurface.h"
@@ -252,6 +266,14 @@ dk2::MyCESurfHandle *dk2::MyCESurfHandle::paint(MySurface *surf, char computeCrc
             patch::texture_dump::setCompositeSourceName(name);
             holder->surf->paintSurf(this->cesurf, this->x8, this->y8);
             patch::texture_dump::setCompositeSourceName(nullptr);
+            // named-atlas map for the host's HD resource pack (see
+            // reportAtlasRect: no-op when the bridge is disabled)
+            if (this->cesurf) {
+                gog::metal_bridge::reportAtlasRect(
+                        atlasPageKey(holder->surf), name, this->x8, this->y8,
+                        static_cast<uint32_t>(this->cesurf->width),
+                        static_cast<uint32_t>(this->cesurf->height));
+            }
         } else {
             // unlink this handle from the holder's list
             MyCESurfHandle *prev = nullptr;

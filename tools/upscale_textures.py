@@ -79,10 +79,14 @@ def main():
     args = ap.parse_args()
     args.dst.mkdir(parents=True, exist_ok=True)
 
-    name_re = re.compile(r"^([0-9a-f]{16})_\d+x\d+\.png$")
+    # Two input layouts: legacy host dumps (<hash>_<WxH>.png -> <hash>.png)
+    # and named full-library dumps (<name>MM0.png -> <name>.png; only the
+    # MM0 base mip is upscaled, lower mips are the host's job).
+    hash_re = re.compile(r"^([0-9a-f]{16})_\d+x\d+\.png$")
+    mm0_re = re.compile(r"^(.+)MM0\.png$")
     todo = []
     for path in sorted(args.src.iterdir()):
-        m = name_re.match(path.name)
+        m = hash_re.match(path.name) or mm0_re.match(path.name)
         if not m:
             continue
         out = args.dst / f"{m.group(1)}.png"
