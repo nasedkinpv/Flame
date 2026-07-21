@@ -11,6 +11,8 @@
 #include "dk2/CEngineSurfaceBase.h"
 #include "dk2/CEngineSurface.h"
 #include "dk2/TextureDump.h"
+#include "dk2/MyStringHashMap_MyCESurfHandle_entry.h"
+#include "dk2/MyStringHashMap_entry.h"
 #include "patches/big_resolution_fix/big_resolution_fix.h"
 #include "patches/logging.h"
 
