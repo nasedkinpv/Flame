@@ -305,6 +305,14 @@ vertex DK2RasterVertex dk2_vertex_mesh(device const DK2MeshVertexIn *vertices [[
             : camera.zMul2 * viewZ + camera.zAdd2;
         depth = min(depth, camera.depthCap);
         result.position.z = depth * viewZ;
+        // Behind-camera guard: with viewZ < 0 both z and w go negative and
+        // z/w re-enters [0,1], so triangles crossing the camera plane smear
+        // into giant screen-covering shapes (the legacy CPU path clipped by
+        // frustum outcode before projecting). Push such vertices far outside
+        // the z clip volume so the hardware clips the crossing triangles.
+        if (viewZ < 1e-3f) {
+            result.position.z = -2.0f * abs(result.position.w) - 1.0f;
+        }
     }
     result.color = float4(saturate(lit) * tint.rgb, base.a * tint.a);
     result.texCoord = float2(inputVertex.u, inputVertex.v);
