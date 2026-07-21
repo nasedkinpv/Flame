@@ -1391,29 +1391,47 @@ private:
             }
         }
         source->Unlock(&rect);
-        // One-pass edge feather: an opaque pixel bordering transparency drops
-        // to ~60% coverage, so the host's linear sampling draws a soft edge
-        // instead of a hard-keyed staircase.
+        // Coverage antialiasing for the keyed silhouette: alpha becomes the
+        // 3x3 neighbourhood coverage of the binary mask, so the contour gets
+        // fractional edge pixels instead of a hard staircase. Transparent
+        // pixels that gain partial coverage inherit the average colour of
+        // their opaque neighbours - without that the key colour would fringe
+        // right back in through linear sampling.
         std::vector<uint8_t> &px = cursor.pixels;
-        auto alphaAt = [&px, width](uint32_t x, uint32_t y) {
-            return px[(static_cast<size_t>(y) * width + x) * 4 + 3];
-        };
-        std::vector<uint8_t> feathered(static_cast<size_t>(width) * height);
+        const size_t pixelCount = static_cast<size_t>(width) * height;
+        std::vector<uint8_t> mask(pixelCount);
+        for (size_t i = 0; i < pixelCount; ++i) mask[i] = px[i * 4 + 3] ? 1 : 0;
+        std::vector<uint8_t> alphaOut(pixelCount);
         for (uint32_t y = 0; y < height; ++y) {
             for (uint32_t x = 0; x < width; ++x) {
-                uint8_t a = alphaAt(x, y);
-                if (a == 0xFF) {
-                    const bool edge =
-                        (x > 0 && !alphaAt(x - 1, y)) ||
-                        (x + 1 < width && !alphaAt(x + 1, y)) ||
-                        (y > 0 && !alphaAt(x, y - 1)) ||
-                        (y + 1 < height && !alphaAt(x, y + 1));
-                    if (edge) a = 0x99;
+                const size_t idx = static_cast<size_t>(y) * width + x;
+                uint32_t covered = 0, total = 0;
+                uint32_t r = 0, g = 0, b = 0;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    const int ny = static_cast<int>(y) + dy;
+                    if (ny < 0 || ny >= static_cast<int>(height)) continue;
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int nx = static_cast<int>(x) + dx;
+                        if (nx < 0 || nx >= static_cast<int>(width)) continue;
+                        ++total;
+                        const size_t nidx = static_cast<size_t>(ny) * width + nx;
+                        if (!mask[nidx]) continue;
+                        ++covered;
+                        r += px[nidx * 4 + 2];
+                        g += px[nidx * 4 + 1];
+                        b += px[nidx * 4 + 0];
+                    }
                 }
-                feathered[static_cast<size_t>(y) * width + x] = a;
+                if (!covered) { alphaOut[idx] = 0; continue; }
+                alphaOut[idx] = static_cast<uint8_t>(covered * 255u / total);
+                if (!mask[idx]) {
+                    px[idx * 4 + 2] = static_cast<uint8_t>(r / covered);
+                    px[idx * 4 + 1] = static_cast<uint8_t>(g / covered);
+                    px[idx * 4 + 0] = static_cast<uint8_t>(b / covered);
+                }
             }
         }
-        for (uint32_t i = 0; i < width * height; ++i) px[i * 4 + 3] = feathered[i];
+        for (size_t i = 0; i < pixelCount; ++i) px[i * 4 + 3] = alphaOut[i];
         return true;
     }
 
@@ -1935,7 +1953,7 @@ private:
     }
 
 public:
-    // --- world-space mesh pipeline (protocol v9) ---
+    // --- world-space mesh pipeline (introduced in v9; retained/deformed v13) ---
     bool meshRegister(uint32_t meshId, const void *vertices, uint32_t vertexCount,
                       const uint16_t *indices, uint32_t indexCount) {
         if (!meshId || !vertices || !vertexCount || !indices || !indexCount ||
