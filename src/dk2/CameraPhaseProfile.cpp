@@ -105,6 +105,10 @@ uint64_t profileTicks() {
 template <uintptr_t Target, PrimitiveKind Kind>
 int __fastcall profilePrimitive(void *self, void *, void *context) {
     using Function = int (__thiscall *)(void *, void *);
+    // QPC costs ~1.3us through Wine-on-Rosetta; two per call across ~6000
+    // objects burned ~16ms/frame. Sample the same 30-of-300 window draw3d uses.
+    if (g_profile.frames >= 30)
+        return reinterpret_cast<Function>(Target)(self, context);
     const uint64_t started = profileTicks();
     const int result = reinterpret_cast<Function>(Target)(self, context);
     g_primitiveProfile.add(Kind, profileTicks() - started);
@@ -178,7 +182,7 @@ int __cdecl profileFinishLists() {
 void __stdcall profileSceneEmission() {
     using Function = void (__stdcall *)();
     measureVoid(EmitSceneCells, reinterpret_cast<Function>(0x00572CF0));
-    if (g_profile.frames == 299) g_primitiveProfile.finish(300);
+    if (g_profile.frames == 29) g_primitiveProfile.finish(30);
     g_profile.finishFrame();
 }
 
