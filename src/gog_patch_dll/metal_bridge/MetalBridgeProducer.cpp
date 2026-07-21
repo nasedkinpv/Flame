@@ -289,6 +289,14 @@ public:
         std::snprintf(dedupe, sizeof(dedupe), "%p|%u|%u|%s",
                       pageKey, x, y, name.c_str());
         if (!atlasRectSeen_.insert(dedupe).second) return;
+        // temporary bring-up telemetry: where do reports stall?
+        if ((++atlasReported_ % 100) == 1) {
+            size_t pendingCount = 0;
+            for (const auto &kv : pendingAtlasRects_) pendingCount += kv.second.size();
+            gog_debugf("atlas-map: reported=%u resolved=%zu pending=%zu emitted=%zu",
+                       atlasReported_, atlasRects_.size(), pendingCount,
+                       atlasRectsEmitted_);
+        }
         const auto found = surfaceTextures_.find(reinterpret_cast<uintptr_t>(pageKey));
         if (found != surfaceTextures_.end()) {
             pushAtlasRect(found->second, name.c_str(), x, y, w, h);
@@ -1845,6 +1853,7 @@ private:
     };
     std::vector<DK2MPageAtlasMapCommand> atlasRects_;
     size_t atlasRectsEmitted_ = 0;
+    uint32_t atlasReported_ = 0;
     std::unordered_map<uintptr_t, std::vector<PendingAtlasRect>> pendingAtlasRects_;
     std::unordered_set<std::string> atlasRectSeen_;
 
