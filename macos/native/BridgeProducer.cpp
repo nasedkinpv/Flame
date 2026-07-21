@@ -80,6 +80,19 @@ int main(int argc, const char *argv[]) {
     append(commands, texture);
     appendBytes(commands, pixels, sizeof(pixels));
 
+    // Intentionally follows the full upload: the host's metadata pre-pass
+    // must make atlas composition independent of command order.
+    struct {
+        DK2MCommandHeader header;
+        DK2MPageAtlasMapCommand body;
+    } atlasMap = {};
+    atlasMap.header = {DK2M_COMMAND_PAGE_ATLAS_MAP, 0, sizeof(atlasMap)};
+    atlasMap.body.textureId = textureId;
+    atlasMap.body.w = 4;
+    atlasMap.body.h = 4;
+    std::strncpy(atlasMap.body.name, "SelfTestAtlas", sizeof(atlasMap.body.name) - 1);
+    append(commands, atlasMap);
+
     const uint32_t rectPixels[] = {
         0xFFFFFFFFu, 0xFF202020u,
         0xFF202020u, 0xFFFFFFFFu,
@@ -175,7 +188,7 @@ int main(int argc, const char *argv[]) {
     std::memcpy(static_cast<uint8_t *>(mapping) + DK2M_SLOT_OFFSET(slotIndex), commands.data(), commands.size());
     slot->frame_number = 1;
     slot->byte_count = static_cast<uint32_t>(commands.size());
-    slot->command_count = 8;
+    slot->command_count = 9;
     slot->width = width;
     slot->height = height;
     header->width = width;

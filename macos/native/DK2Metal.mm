@@ -973,11 +973,29 @@ std::unordered_map<uint32_t, PageState> &pages() {
     return map;
 }
 
+uint64_t &pngCacheEpoch() {
+    static uint64_t epoch = 1;
+    return epoch;
+}
+
+void liveStateChanged() {
+    if (++pngCacheEpoch() == 0) pngCacheEpoch() = 1;
+    for (auto &entry : pages()) {
+        PageState &st = entry.second;
+        st.dirty = true;
+        st.demoted = false;
+        st.rebuilds = 0;
+    }
+}
+
 NSString *candidatePath() {
     static NSString *path = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        path = [NSHomeDirectory() stringByAppendingPathComponent:
+        const char *overridePath = std::getenv("DK2_RESOURCE_PACK_DIR");
+        path = overridePath && *overridePath
+            ? [NSString stringWithUTF8String:overridePath]
+            : [NSHomeDirectory() stringByAppendingPathComponent:
                 @"Library/Application Support/Dungeon Keeper II/resource-pack/textures"];
         [[NSFileManager defaultManager] createDirectoryAtPath:path
                                   withIntermediateDirectories:YES attributes:nil error:nil];
@@ -1092,6 +1110,11 @@ struct CachedPng {
 const CachedPng *packPng(NSString *dir, const char *name) {
     static std::unordered_map<std::string, CachedPng> cache;
     static uint64_t tick = 0;
+    static uint64_t cachedEpoch = 0;
+    if (cachedEpoch != pngCacheEpoch()) {
+        cache.clear();
+        cachedEpoch = pngCacheEpoch();
+    }
     ++tick;
     std::string key(name);
     auto it = cache.find(key);
@@ -1115,7 +1138,7 @@ const CachedPng *packPng(NSString *dir, const char *name) {
     return &cache.emplace(std::move(key), std::move(png)).first->second;
 }
 
-void noteRect(const DK2MPageAtlasMapCommand &map) {
+bool noteRect(const DK2MPageAtlasMapCommand &map) {
     PageState &st = pages()[map.textureId];
     for (auto &r : st.rects) {
         if (r.x == map.x && r.y == map.y) {  // slot re-composited
@@ -1123,12 +1146,13 @@ void noteRect(const DK2MPageAtlasMapCommand &map) {
                 r = map;
                 st.dirty = true;
             }
-            return;
+            return true;
         }
     }
-    if (st.rects.size() >= kMaxRectsPerPage) return;
+    if (st.rects.size() >= kMaxRectsPerPage) return false;
     st.rects.push_back(map);
     st.dirty = true;
+    return true;
 }
 
 // Composes the 4x page from stored 1x pixels + pack PNGs. nil when no pack
@@ -1490,6 +1514,8 @@ struct FrameMetrics {
     uint32_t missingTextures = 0;
     uint32_t bindingOverflows = 0;
     uint32_t invalidDraws = 0;
+    uint32_t packMapCommands = 0;
+    uint32_t packMappedRects = 0;
     uint32_t packHits = 0;
     uint32_t shadowLive = 0;
     uint32_t shadowMasksReceived = 0;
@@ -1531,7 +1557,7 @@ public:
         NSLog(@"PERF host us p50/p95/p99: encode=%u/%u/%u drawable-wait=%u/%u/%u "
                "gpu-wait=%u/%u/%u gpu-complete=%u/%u/%u; diagnostics totals: "
                "fvf1=%llu fvf2=%llu missing-texture=%llu binding-overflow=%llu invalid-draw=%llu "
-               "pack-hits=%llu",
+               "pack-maps(accepted/received)=%llu/%llu pack-hits=%llu",
               p(&FrameMetrics::encodeUs, 50), p(&FrameMetrics::encodeUs, 95),
               p(&FrameMetrics::encodeUs, 99), p(&FrameMetrics::drawableWaitUs, 50),
               p(&FrameMetrics::drawableWaitUs, 95), p(&FrameMetrics::drawableWaitUs, 99),
@@ -1540,7 +1566,8 @@ public:
               p(&FrameMetrics::gpuCompleteUs, 95), p(&FrameMetrics::gpuCompleteUs, 99),
               total(&FrameMetrics::fvf1Draws), total(&FrameMetrics::fvf2Draws),
               total(&FrameMetrics::missingTextures), total(&FrameMetrics::bindingOverflows),
-              total(&FrameMetrics::invalidDraws), total(&FrameMetrics::packHits));
+              total(&FrameMetrics::invalidDraws), total(&FrameMetrics::packMappedRects),
+              total(&FrameMetrics::packMapCommands), total(&FrameMetrics::packHits));
         NSLog(@"PERF producer us p50/p95/p99: draw-copy=%u/%u/%u texture=%u/%u/%u "
                "overlay=%u/%u/%u",
               p(&FrameMetrics::producerDrawCopyUs, 50), p(&FrameMetrics::producerDrawCopyUs, 95),
@@ -1587,6 +1614,21 @@ struct CommandView {
     uint32_t offset;
     uint32_t size;
 };
+
+bool decodeAtlasMap(const FrameSnapshot *snapshot, const CommandView &view,
+                    DK2MPageAtlasMapCommand &map) {
+    if (!snapshot || view.type != DK2M_COMMAND_PAGE_ATLAS_MAP) return false;
+    if (view.size >= sizeof(DK2MCommandHeader) + sizeof(map)) {
+        std::memcpy(&map, snapshot->bytes.data() + view.offset + sizeof(DK2MCommandHeader),
+                    sizeof(map));
+    } else if (view.size >= sizeof(map)) {
+        std::memcpy(&map, snapshot->bytes.data() + view.offset, sizeof(map));
+    } else {
+        return false;
+    }
+    map.name[sizeof(map.name) - 1] = 0;
+    return map.textureId && map.w && map.h && map.name[0];
+}
 
 struct TextureBinding {
     uint16_t bank;
@@ -2321,6 +2363,7 @@ bool inputLogEnabled() {
     uint64_t _frame;
     uint64_t _appliedDrawableSize;
     uint32_t _lastBridgeFrame;
+    BOOL _hdTexturesLive;
 }
 
 - (instancetype)initWithLayer:(CAMetalLayer *)layer {
@@ -2461,6 +2504,7 @@ bool inputLogEnabled() {
     // Creates the user-replaceable pack directory on first launch and logs
     // where to drop named PNGs (see the respack namespace).
     NSLog(@"DK2 resource pack: named HD textures read from %@", respack::candidatePath());
+    _hdTexturesLive = dk2cfg::gHdTexturesLive.load(std::memory_order_relaxed);
 
     for (uint32_t function = 1; function <= 8; ++function) {
         for (uint32_t write = 0; write <= 1; ++write) {
@@ -2985,6 +3029,14 @@ static void *renderWorker(void *context) {
             }
         }
         const FrameSnapshot *snapshot = _bridge ? _bridge->poll() : nullptr;
+        const BOOL hdTexturesLive =
+            dk2cfg::gHdTexturesLive.load(std::memory_order_relaxed) ? YES : NO;
+        if (hdTexturesLive != _hdTexturesLive) {
+            _hdTexturesLive = hdTexturesLive;
+            respack::liveStateChanged();
+            NSLog(@"DK2 resource pack: live %@; %zu mapped pages scheduled for refresh",
+                  hdTexturesLive ? @"on" : @"off", respack::pages().size());
+        }
         const bool newBridgeFrame = snapshot && snapshot->frame != _lastBridgeFrame;
         if (gSelfTestFrames == 0 && _bridge && snapshot && snapshot->frame == _lastBridgeFrame) return;
 
@@ -3011,6 +3063,20 @@ static void *renderWorker(void *context) {
                 _commandViews.push_back({header.type, static_cast<uint32_t>(commandOffset),
                                          header.size});
                 commandOffset += header.size;
+            }
+        }
+
+        // PAGE_ATLAS_MAP is persistent metadata, not a draw command. Read all
+        // maps before processing uploads so map+upload works regardless of
+        // their order in a captured frame.
+        if (snapshot) {
+            for (const CommandView &view : _commandViews) {
+                if (view.type != DK2M_COMMAND_PAGE_ATLAS_MAP) continue;
+                ++metrics.packMapCommands;
+                DK2MPageAtlasMapCommand map = {};
+                if (decodeAtlasMap(snapshot, view, map) && respack::noteRect(map)) {
+                    ++metrics.packMappedRects;
+                }
             }
         }
 
@@ -3314,25 +3380,7 @@ static void *renderWorker(void *context) {
                         }
                     }
                 } else if (view.type == DK2M_COMMAND_PAGE_ATLAS_MAP) {
-                    // DK2MPageAtlasMapCommand does not embed DK2MCommandHeader
-                    // (unlike the older commands), so the payload follows the
-                    // 8-byte stream header; accept the headerless layout too.
-                    DK2MPageAtlasMapCommand map;
-                    bool haveMap = false;
-                    if (view.size >= sizeof(DK2MCommandHeader) + sizeof(map)) {
-                        std::memcpy(&map, snapshot->bytes.data() + offset + sizeof(DK2MCommandHeader),
-                                    sizeof(map));
-                        haveMap = true;
-                    } else if (view.size >= sizeof(map)) {
-                        std::memcpy(&map, snapshot->bytes.data() + offset, sizeof(map));
-                        haveMap = true;
-                    }
-                    if (haveMap) {
-                        map.name[sizeof(map.name) - 1] = 0;
-                        if (map.textureId && map.w && map.h && map.name[0]) {
-                            respack::noteRect(map);
-                        }
-                    }
+                    // Persistent metadata was consumed by the pre-pass above.
                 }
             }
         }
@@ -4797,7 +4845,7 @@ int main(int argc, const char *argv[]) {
         // Single-instance guard: a second launch against the same prefix
         // kills the first one's wineserver and both hosts fight over the
         // bridge file - the user just sees a white window. Refuse instead.
-        {
+        if (gSelfTestFrames == 0) {
             NSString *lockPath = [NSString stringWithFormat:@"%@/dk2metal.lock", NSTemporaryDirectory()];
             const int lockFd = open(lockPath.fileSystemRepresentation, O_CREAT | O_RDWR, 0644);
             if (lockFd >= 0 && flock(lockFd, LOCK_EX | LOCK_NB) != 0) {

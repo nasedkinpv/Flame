@@ -94,11 +94,24 @@ public:
             InterlockedCompareExchange(asLong(&header_->consumer_session), 0, 0);
         if (consumerSession != lastConsumerSession_ || consumer < lastConsumerFrame_) {
             for (auto &entry : textures_) entry.second.pending = true;
-            // a fresh consumer needs the full atlas map again
+            // A fresh consumer needs the full atlas map again. Unlike draw
+            // state, maps are persistent host state and must not depend on a
+            // one-shot frame surviving the three-slot mailbox.
+            atlasRectsAcked_ = 0;
             atlasRectsEmitted_ = 0;
+            atlasLastSentFrame_ = 0;
             for (auto &entry : shadowMasks_) {
                 entry.second.lastSentGeneration = entry.second.generation;
             }
+        } else if (atlasLastSentFrame_) {
+            if (consumer == atlasLastSentFrame_) {
+                atlasRectsAcked_ = atlasRectsEmitted_;
+            } else {
+                // The consumer skipped (or has not yet accepted) the frame
+                // carrying these maps. Retry from the last acknowledged map.
+                atlasRectsEmitted_ = atlasRectsAcked_;
+            }
+            atlasLastSentFrame_ = 0;
         }
         lastConsumerSession_ = consumerSession;
         lastConsumerFrame_ = consumer;
@@ -136,6 +149,11 @@ public:
         append(&clear, sizeof(clear));
         ++commandCount_;
 
+        // Maps precede full texture uploads. The host also pre-scans maps,
+        // but keeping the stream ordered makes captures and other consumers
+        // self-contained without relying on a second pass.
+        emitAtlasRects();
+
         for (DWORD stage = 0; stage < 3; ++stage) {
             if (boundTextures_[stage]) {
                 emitTexture(stage, boundTextures_[stage], boundSurfaces_[stage]);
@@ -165,7 +183,6 @@ public:
             emitTextureStageState(static_cast<DWORD>(entry.first >> 32),
                                   static_cast<DWORD>(entry.first), entry.second);
         }
-        emitAtlasRects();
     }
 
     void draw(DWORD fvf, const void *vertices, DWORD vertexCount,
@@ -281,29 +298,35 @@ public:
     // restarted consumer receives the full map again.
     void reportAtlasRect(const void *pageKey, const char *rawName,
                          uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
-        if (!pageKey || !rawName || !*rawName || !w || !h) return;
-        if (x > 0xFFFF || y > 0xFFFF || w > 0xFFFF || h > 0xFFFF) return;
-        // Only base-level mips carry rects: "…MM0" is stripped, deeper mip
-        // pages fall back to scaled originals on the host.
+        ++atlasReportCalls_;
+        if (!pageKey || !rawName || !*rawName || !w || !h ||
+            x > 0xFFFF || y > 0xFFFF || w > 0xFFFF || h > 0xFFFF) {
+            ++atlasRejectedInvalid_;
+            return;
+        }
+        // Every engine reduction level is a valid atlas page. The resource
+        // pack contains one canonical base image, so FooMM0..FooMM9 all map
+        // to Foo; the host scales it to the selected rect and builds mips.
         std::string name(rawName);
         const size_t n = name.size();
         if (n >= 3 && name[n - 3] == 'M' && name[n - 2] == 'M' &&
             name[n - 1] >= '0' && name[n - 1] <= '9') {
-            if (name[n - 1] != '0') return;
             name.resize(n - 3);
+            ++atlasMipCanonicalized_;
             if (name.empty()) return;
         }
         char dedupe[96];
         std::snprintf(dedupe, sizeof(dedupe), "%p|%u|%u|%s",
                       pageKey, x, y, name.c_str());
         if (!atlasRectSeen_.insert(dedupe).second) return;
-        // temporary bring-up telemetry: where do reports stall?
-        if ((++atlasReported_ % 100) == 1) {
+        if ((++atlasReported_ % 250) == 1) {
             size_t pendingCount = 0;
             for (const auto &kv : pendingAtlasRects_) pendingCount += kv.second.size();
-            gog_debugf("atlas-map: reported=%u resolved=%zu pending=%zu emitted=%zu",
-                       atlasReported_, atlasRects_.size(), pendingCount,
-                       atlasRectsEmitted_);
+            gog_debugf("atlas-map: calls=%u unique=%u mip-canonicalized=%u invalid=%u "
+                       "resolved=%zu pending=%zu acked=%zu emitted=%zu",
+                       atlasReportCalls_, atlasReported_, atlasMipCanonicalized_,
+                       atlasRejectedInvalid_, atlasRects_.size(), pendingCount,
+                       atlasRectsAcked_, atlasRectsEmitted_);
         }
         const auto found = surfaceTextures_.find(reinterpret_cast<uintptr_t>(pageKey));
         if (found != surfaceTextures_.end()) {
@@ -338,6 +361,14 @@ public:
         cmd.h = static_cast<uint16_t>(h);
         std::strncpy(cmd.name, name, sizeof(cmd.name) - 1);
         atlasRects_.push_back(cmd);
+        // If this page was uploaded before its first map existed, force one
+        // acknowledged full upload so the host has the original 1x backing
+        // pixels from which to compose the named HD atlas.
+        const auto texture = textures_.find(textureId);
+        if (texture != textures_.end()) {
+            texture->second.pending = true;
+            texture->second.lastSentFrame = 0;
+        }
         // mid-frame reports still reach the consumer this frame
         if (active_) emitAtlasRects();
     }
@@ -482,6 +513,7 @@ public:
         InterlockedExchange(asLong(&slot_->sequence), sequence_);
         InterlockedExchange(asLong(&header_->latest_slot), static_cast<LONG>(slotIndex_));
         InterlockedExchange(asLong(&header_->latest_frame), static_cast<LONG>(frame_));
+        if (atlasRectsEmitted_ > atlasRectsAcked_) atlasLastSentFrame_ = frame_;
         for (auto &entry : textures_) {
             TextureCache &texture = entry.second;
             if (texture.sentInCurrentFrame) {
@@ -1935,8 +1967,13 @@ private:
         char name[64];
     };
     std::vector<DK2MPageAtlasMapCommand> atlasRects_;
+    size_t atlasRectsAcked_ = 0;
     size_t atlasRectsEmitted_ = 0;
+    uint32_t atlasLastSentFrame_ = 0;
+    uint32_t atlasReportCalls_ = 0;
     uint32_t atlasReported_ = 0;
+    uint32_t atlasMipCanonicalized_ = 0;
+    uint32_t atlasRejectedInvalid_ = 0;
     std::unordered_map<uintptr_t, std::vector<PendingAtlasRect>> pendingAtlasRects_;
     std::unordered_set<std::string> atlasRectSeen_;
 
