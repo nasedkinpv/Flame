@@ -151,6 +151,11 @@ uint32_t packBaseColor(const dk2::Vec3f &colour) {
 // projects with: screen_x = Ax*F/z*x + Cx, screen_y = Ay*F/z*y + Cy, near
 // depth = zAdd3 - zMul3*F/z, view = g_mat_77F3A8 * v + g_vec_77F4C0.
 void emitMeshCamera() {
+    // thousands of entries per frame share one camera - build it once
+    static uint32_t lastFrame = 0xFFFFFFFFu;
+    const uint32_t stamp = gog::metal_bridge::frameCounter();
+    if (stamp == lastFrame) return;
+    lastFrame = stamp;
     uint32_t w = 0, h = 0;
     gog::metal_bridge::frameSize(&w, &h);
     if (!w || !h) return;
@@ -199,15 +204,20 @@ void emitMeshCamera() {
 // growing list; the producer keeps only the last (fullest) payload.
 void emitFrameLights(uint32_t *lightData) {
     const auto *lut = reinterpret_cast<const float *>(0x007818A0);
-    static std::vector<uint64_t> seen;  // content keys, not pointers
+    // open-addressed content-key set: the linear scan was O(lights^2) per
+    // frame across thousands of emitter calls
+    static uint64_t seenKeys[2048];  // power of two; 0 = empty
     static std::vector<DK2MLight> scratch;
     static uint32_t lastFrame = 0xFFFFFFFFu;
     const uint32_t stamp = gog::metal_bridge::frameCounter();
+    bool firstOfFrame = false;
     if (stamp != lastFrame) {
         lastFrame = stamp;
-        seen.clear();
+        std::memset(seenKeys, 0, sizeof(seenKeys));
         scratch.clear();
+        firstOfFrame = true;  // always push once so a stale slot payload can't linger
     }
+    const size_t sizeBefore = scratch.size();
     if (!lightData) {
         gog::metal_bridge::lightsSet(scratch.data(), static_cast<uint32_t>(scratch.size()),
                                      0.0f, 0.0f, 0.0f, lut);
@@ -227,13 +237,16 @@ void emitFrameLights(uint32_t *lightData) {
         std::memcpy(&pxBits, &s.position.x, 4);
         std::memcpy(&pyBits, &s.position.y, 4);
         std::memcpy(&rBits, &s.color.x, 4);
-        const uint64_t key = (static_cast<uint64_t>(pxBits) << 32) ^ (pyBits ^ (static_cast<uint64_t>(rBits) << 13));
+        uint64_t key = (static_cast<uint64_t>(pxBits) << 32) ^ (pyBits ^ (static_cast<uint64_t>(rBits) << 13));
+        if (!key) key = 1;
+        uint32_t slot = (static_cast<uint32_t>(key) * 2654435761u) & 2047u;
         bool known = false;
-        for (uint64_t k : seen) {
-            if (k == key) { known = true; break; }
+        while (seenKeys[slot]) {
+            if (seenKeys[slot] == key) { known = true; break; }
+            slot = (slot + 1) & 2047u;
         }
         if (known || scratch.size() >= 1024) continue;
-        seen.push_back(key);
+        seenKeys[slot] = key;
         DK2MLight light = {};
         light.px = s.position.x;
         light.py = s.position.y;
@@ -261,8 +274,12 @@ void emitFrameLights(uint32_t *lightData) {
                         static_cast<double>(scratch[0].facing_scale),
                         static_cast<double>(lut[0]), static_cast<double>(lut[16]));
     }
-    gog::metal_bridge::lightsSet(scratch.data(), static_cast<uint32_t>(scratch.size()),
-                                 0.0f, 0.0f, 0.0f, lut);
+    // the producer copies the whole payload (1KB LUT + lights) on every call;
+    // only push when this emitter actually contributed new lights
+    if (scratch.size() != sizeBefore || firstOfFrame) {
+        gog::metal_bridge::lightsSet(scratch.data(), static_cast<uint32_t>(scratch.size()),
+                                     0.0f, 0.0f, 0.0f, lut);
+    }
 }
 
 // SEH-guarded: level transitions leave stale cesurf/devTex pointers behind,
@@ -379,6 +396,35 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyCESurfHandle *slotHandle,
 }
 
 uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
+    // positive cache: the guarded resolve chain + per-entry ensureTexture cost
+    // ~microseconds across thousands of entries per frame, while the result
+    // only changes when the handle is repacked into a different holder page.
+    // Key on (handle, holder_parent) and re-ensure once per producer frame.
+    struct ResolvedTexture {
+        dk2::MyCESurfHandle *handle;
+        const void *holder;
+        uint32_t bridgeId;
+        void *bridgeSurface;
+        uint32_t lastEnsureFrame;
+    };
+    static ResolvedTexture cache[512];  // open-addressed, handle==nullptr empty
+    if (slotHandle) {
+        const void *holder = slotHandle->holder_parent;
+        uint32_t slot = (reinterpret_cast<uintptr_t>(slotHandle) >> 4) * 2654435761u & 511u;
+        for (int probe = 0; probe < 8; ++probe, slot = (slot + 1) & 511u) {
+            ResolvedTexture &hit = cache[slot];
+            if (!hit.handle) break;
+            if (hit.handle != slotHandle) continue;
+            if (hit.holder != holder) { hit.handle = nullptr; break; }  // repacked
+            const uint32_t stamp = gog::metal_bridge::frameCounter();
+            if (hit.lastEnsureFrame != stamp) {
+                hit.lastEnsureFrame = stamp;
+                gog::metal_bridge::ensureTexture(
+                    hit.bridgeId, static_cast<IDirectDrawSurface4 *>(hit.bridgeSurface));
+            }
+            return hit.bridgeId;
+        }
+    }
     static std::vector<const void *> badSurfaces;
     for (const void *bad : badSurfaces) {
         if (bad == slotHandle) return 0;
@@ -409,6 +455,17 @@ uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
         // capture-only registration: never disturbs stage-0 binding state
         gog::metal_bridge::ensureTexture(
             bridgeId, static_cast<IDirectDrawSurface4 *>(bridgeSurface));
+        uint32_t slot = (reinterpret_cast<uintptr_t>(slotHandle) >> 4) * 2654435761u & 511u;
+        for (int probe = 0; probe < 8; ++probe, slot = (slot + 1) & 511u) {
+            ResolvedTexture &entry = cache[slot];
+            if (entry.handle && entry.handle != slotHandle) continue;
+            entry.handle = slotHandle;
+            entry.holder = slotHandle->holder_parent;
+            entry.bridgeId = bridgeId;
+            entry.bridgeSurface = bridgeSurface;
+            entry.lastEnsureFrame = gog::metal_bridge::frameCounter();
+            break;
+        }
         return bridgeId;
     }
     if (bridgeSurface) {
