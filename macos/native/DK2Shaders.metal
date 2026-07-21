@@ -294,9 +294,6 @@ vertex DK2RasterVertex dk2_vertex_mesh(device const DK2MeshVertexIn *vertices [[
                                          base.rgb + draw.ambient.rgb,
                                          lightsHeader, lights);
     }
-    if ((draw.flags & 8u) != 0u) {  // debug: unmissable magenta
-        lit = float3(1.0f, 0.0f, 1.0f);
-    }
     DK2RasterVertex result;
     result.position = camera.viewProj * float4(positionWorld, 1.0f);
     // Replicate the engine's piecewise depth exactly: the matrix row only

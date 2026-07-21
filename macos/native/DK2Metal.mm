@@ -2353,7 +2353,7 @@ static void *renderWorker(void *context) {
                         uniform.ambient[3] = 0.0f;
                         uniform.textureIndex = binding.slot;
                         uniform.tint = meshDebug ? 0xFFFFFFFFu : inlineDraw.tint;
-                        uniform.flags = inlineDraw.flags | (meshDebug ? 8u : 0u);
+                        uniform.flags = inlineDraw.flags;
                         uniform.pad = 0;
                         // pipeline strictly from the draw's own flags: mesh
                         // commands sit at the frame head and must not inherit
