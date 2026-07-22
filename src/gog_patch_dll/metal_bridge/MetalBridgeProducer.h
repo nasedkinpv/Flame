@@ -112,11 +112,15 @@ void textureReleased(DWORD textureId, const void *key = nullptr);
 void atlasPageReset(const void *pageKey);
 void reportAtlasRect(const void *pageKey, const char *name, uint32_t x, uint32_t y,
                      uint32_t w, uint32_t h);
-// Replaces the CPU coverage build for one original DK2 shadow surface. The
-// handle key is resolved to its current atlas placement only when that atlas
-// is actually bound, after the engine's surface packer has run.
-void shadowMask(const void *handleKey, const void *triangles,
-                uint32_t triangleCount, uint32_t mode);
+// Replaces the CPU coverage build for one original DK2 shadow surface.
+// Immediate-mode: `pageSurface` and the rect are the placement resolved at
+// capture time by the caller (finishIfCurrent); the producer resolves the
+// bridge texture id and emits the mask into the current frame. No retained
+// per-handle state exists any more. Also marks the page as a shadow-pool
+// page: HD atlas-map reports for it are dropped from then on.
+void shadowMaskCaptured(IDirectDrawSurface4 *pageSurface, uint32_t x, uint32_t y,
+                        uint32_t w, uint32_t h, const void *triangles,
+                        uint32_t triangleCount, uint32_t mode);
 
 }
 

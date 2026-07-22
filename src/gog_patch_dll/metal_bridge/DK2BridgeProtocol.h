@@ -17,6 +17,12 @@
 #define DK2M_OVERLAY_TEXTURE_ID 0xFFFFFFFEu
 #define DK2M_CURSOR_TEXTURE_ID 0xFFFFFFFDu
 #define DK2M_INPUT_EVENT_CAPACITY 64u
+// DK2MDrawIndexedCommand.flags bit: this draw is a shadow decal (it samples
+// a region of an atlas page that a SHADOW_MASK targeted). The game's own
+// flag word only ever carries 0x1C, so a high bit is safe. Set producer-side
+// by matching the draw's stage-0 UV bounds against known mask rects; the
+// host uses it to redirect sampling to its R8 shadow twin of the page.
+#define DK2M_DRAW_INDEXED_SHADOW_DECAL (1u << 16)
 #define DK2M_MAX_LIGHTS_PER_DRAW 24u
 
 enum DK2MCommandType {
@@ -49,8 +55,14 @@ enum DK2MCommandType {
     DK2M_COMMAND_PAGE_ATLAS_MAP = 13,
     // Original DK2 shadow silhouette after its per-light projection. Payload
     // is triangle_count DK2MShadowTriangle records in the engine's 256x256
-    // subpixel coordinate space. The host rasterizes/downsamples them into
-    // the specified region of the original texture atlas before scene draws.
+    // subpixel coordinate space. Immediate-mode as of the shadow redesign:
+    // the target region is resolved AT CAPTURE TIME on the game side and the
+    // command is emitted into the frame whose bake produced it - the host
+    // must never re-resolve or retain producer-side identity. Application
+    // order: masks apply AFTER this frame's TEXTURE_UPDATE/_RECT commands
+    // (post-pass), and a mask's content persists in its target region until
+    // a later mask overwrites it (low-detail blob shadows are baked once and
+    // then reused for many frames, so per-frame clearing would drop them).
     DK2M_COMMAND_SHADOW_MASK = 14,
     // The game-side owner released this bridge texture id. The host drops
     // both the Metal texture and persistent named-atlas metadata for it.

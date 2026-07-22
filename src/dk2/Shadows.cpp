@@ -184,8 +184,29 @@ bool dk2::shadowgpu::active() {
     return gog::metal_bridge::metalShadowsEnabled();
 }
 
+namespace {
+
+void clearGpuBatch() {
+    g_gpuBatch.started = false;
+    g_gpuBatch.surfaceIndex = -1;
+    g_gpuBatch.gpu = false;
+    g_gpuBatch.triangles.clear();
+}
+
+}  // namespace
+
 bool dk2::shadowgpu::finishIfCurrent(MyCESurfHandle *handle, const MySurface *source) {
-    if (!handle || currentShadowHandle() != handle) return false;
+    if (!handle || currentShadowHandle() != handle) {
+        // Unrelated paints interleave with an in-flight bake (any surface
+        // composition calls into here), so only drop the batch when the ring
+        // has demonstrably moved past it - a stale batch would otherwise be
+        // attributed to the NEXT bake that reuses its ring index.
+        if (g_gpuBatch.started &&
+            g_gpuBatch.surfaceIndex != dk2::shadows_dword_780E6C) {
+            clearGpuBatch();
+        }
+        return false;
+    }
 
     const int surfaceIndex = dk2::shadows_dword_780E6C;
     const bool batchMatches =
@@ -205,44 +226,42 @@ bool dk2::shadowgpu::finishIfCurrent(MyCESurfHandle *handle, const MySurface *so
         gpu = false;
     }
     if (gpu) {
-        const uint32_t mode = source && source->desc.dwRGBBitCount == 8 &&
-                                      source->desc.dwRGBAlphaBitMask == 0xFF
-            ? DK2M_SHADOW_MASK_ALPHA
-            : DK2M_SHADOW_MASK_GRAYSCALE;
-        const DK2MShadowTriangle *triangles = captured && !captured->empty()
-            ? captured->data() : nullptr;
-        const uint32_t triangleCount = captured
-            ? static_cast<uint32_t>(captured->size()) : 0;
-        gog::metal_bridge::shadowMask(
-            handle, triangles, triangleCount, mode);
-    }
-    g_gpuBatch.started = false;
-    g_gpuBatch.surfaceIndex = -1;
-    g_gpuBatch.gpu = false;
-    g_gpuBatch.triangles.clear();
-    return gpu;
-}
-
-bool dk2::shadowgpu::resolveTarget(const void *handleKey, const void *boundSurface,
-                                  TargetRegion *out) {
-    if (!handleKey || !boundSurface || !out) return false;
-    __try {
-        auto *handle = reinterpret_cast<MyCESurfHandle *>(
-            const_cast<void *>(handleKey));
+        // Immediate-mode contract: the target region is resolved HERE, while
+        // the handle's placement is exactly the one this bake rasterized
+        // for. Nothing downstream may re-resolve it (the ring recycles both
+        // handles and placements, which is what glued stale silhouettes
+        // under unrelated decals in the retained design).
         SurfaceHolder *holder = handle->holder_parent;
-        if (!holder || !holder->a3 || !holder->surf) return false;
-        auto *page = reinterpret_cast<CEngineDDSurface *>(holder->surf);
-        if (page->ddSurf != boundSurface || handle->surfWidth8 == 0 ||
-            handle->surfHeight8 == 0) return false;
+        CEngineDDSurface *page = holder && holder->a3
+            ? reinterpret_cast<CEngineDDSurface *>(holder->surf) : nullptr;
         const uint32_t x = handle->x8;
         const uint32_t y = handle->y8;
         const uint32_t width = handle->surfWidth8;
         const uint32_t height = handle->surfHeight8;
-        if (x + width > static_cast<uint32_t>(holder->surf->width) ||
-            y + height > static_cast<uint32_t>(holder->surf->height)) return false;
-        *out = {x, y, width, height};
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        if (page && page->ddSurf && width && height &&
+            x + width <= static_cast<uint32_t>(holder->surf->width) &&
+            y + height <= static_cast<uint32_t>(holder->surf->height)) {
+            const uint32_t mode = source && source->desc.dwRGBBitCount == 8 &&
+                                          source->desc.dwRGBAlphaBitMask == 0xFF
+                ? DK2M_SHADOW_MASK_ALPHA
+                : DK2M_SHADOW_MASK_GRAYSCALE;
+            const DK2MShadowTriangle *triangles = captured && !captured->empty()
+                ? captured->data() : nullptr;
+            const uint32_t triangleCount = captured
+                ? static_cast<uint32_t>(captured->size()) : 0;
+            gog::metal_bridge::shadowMaskCaptured(
+                page->ddSurf, x, y, width, height, triangles, triangleCount, mode);
+        } else {
+            // No resolvable target this bake: fall back to the CPU raster so
+            // the shadow is not silently dropped.
+            if (captured) {
+                for (const DK2MShadowTriangle &triangle : *captured) {
+                    rasterizeCpuTriangle(triangle);
+                }
+            }
+            gpu = false;
+        }
     }
+    clearGpuBatch();
+    return gpu;
 }

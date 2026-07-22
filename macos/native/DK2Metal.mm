@@ -1556,6 +1556,7 @@ struct FrameMetrics {
     uint32_t shadowRejectMalformed = 0;
     uint32_t shadowRejectTarget = 0;
     uint32_t shadowRejectCapacity = 0;
+    uint32_t shadowDecalRedirects = 0;
 };
 
 class TelemetryWindow {
@@ -1867,6 +1868,8 @@ constexpr NSUInteger kShadowSubpixelSize = 256;
 constexpr NSUInteger kShadowTilesPerAxis = 8;
 constexpr NSUInteger kShadowScratchSize = kShadowSubpixelSize * kShadowTilesPerAxis;
 constexpr NSUInteger kMaxShadowMasksPerFrame = 64;
+// Pseudo-id namespace for shadow twin textures inside _textures (v14).
+constexpr uint32_t kShadowTwinIdBit = 0x80000000u;
 constexpr NSUInteger kShadowVertexBufferSize = 512 * 1024;
 constexpr NSUInteger kShadowResolveBufferSize =
     kMaxShadowMasksPerFrame * 32;
@@ -2391,6 +2394,13 @@ bool inputLogEnabled() {
     // whole renderer init - bloom is a cosmetic extra, never load-bearing.
     BOOL _bloomAvailable;
     std::unordered_map<uint32_t, id<MTLTexture>> _textures;
+    // Shadow twins (protocol v14 immediate-mode masks): SHADOW_MASK resolves
+    // into a same-format twin of the atlas page instead of the page itself,
+    // and decal draws flagged DK2M_DRAW_INDEXED_SHADOW_DECAL sample the twin.
+    // Twins are persistent (blob shadows bake once, reused for many frames)
+    // and also live in _textures under (id | kShadowTwinIdBit) so the normal
+    // bank/slot binding machinery serves them.
+    std::unordered_map<uint32_t, id<MTLTexture>> _shadowTwins;
     // The stable set is intentionally immutable during normal frames. Each
     // frame slot owns the indirect textures its argument tables reference, so
     // replacing an atlas cannot retain every historical version forever.
@@ -3206,6 +3216,8 @@ static void *renderWorker(void *context) {
                 std::memcpy(&release, snapshot->bytes.data() + view.offset, sizeof(release));
                 if (!release.texture_id) continue;
                 _textures.erase(release.texture_id);
+                _textures.erase(release.texture_id | kShadowTwinIdBit);
+                _shadowTwins.erase(release.texture_id);
                 _dynamicTextures.erase(release.texture_id);
                 respack::release(release.texture_id);
             }
@@ -3554,6 +3566,7 @@ static void *renderWorker(void *context) {
         };
         std::vector<ShadowMaskWork> shadowMasks;
         std::vector<uint32_t> shadowTargetOrder;
+        std::unordered_set<uint32_t> freshShadowTwins;
         NSUInteger shadowVertexBytes = 0;
         const bool shadowResourcesReady = _shadowsAvailable &&
             _shadowScratchTextures[slot] && _shadowMaskArgumentTables[slot] &&
@@ -3594,14 +3607,34 @@ static void *renderWorker(void *context) {
                     continue;
                 }
                 const auto found = _textures.find(shadow.texture_id);
-                id<MTLTexture> target = found == _textures.end() ? nil : found->second;
-                if (!target || target.pixelFormat != MTLPixelFormatBGRA8Unorm ||
-                    !(target.usage & MTLTextureUsageRenderTarget) ||
-                    shadow.target_x > target.width || shadow.target_y > target.height ||
-                    shadow.target_width > target.width - shadow.target_x ||
-                    shadow.target_height > target.height - shadow.target_y) {
+                id<MTLTexture> page = found == _textures.end() ? nil : found->second;
+                if (!page || shadow.target_x > page.width || shadow.target_y > page.height ||
+                    shadow.target_width > page.width - shadow.target_x ||
+                    shadow.target_height > page.height - shadow.target_y) {
                     ++metrics.shadowRejectTarget;
                     continue;
+                }
+                // Masks resolve into the page's persistent twin, never into
+                // the page itself (v14): the page keeps its art, decal draws
+                // sample the twin.
+                id<MTLTexture> target = _shadowTwins[shadow.texture_id];
+                if (!target || target.width != page.width || target.height != page.height) {
+                    MTLTextureDescriptor *twinDesc = [MTLTextureDescriptor
+                        texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                     width:page.width
+                                                    height:page.height
+                                                 mipmapped:NO];
+                    twinDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+                    twinDesc.storageMode = MTLStorageModePrivate;
+                    target = [_device newTextureWithDescriptor:twinDesc];
+                    if (!target) {
+                        ++metrics.shadowRejectUnavailable;
+                        continue;
+                    }
+                    target.label = @"DK2 shadow twin";
+                    _shadowTwins[shadow.texture_id] = target;
+                    _textures[shadow.texture_id | kShadowTwinIdBit] = target;
+                    freshShadowTwins.insert(shadow.texture_id);
                 }
                 if (![frameTextures containsAllocation:target]) {
                     [frameTextures addAllocation:target];
@@ -3694,7 +3727,11 @@ static void *renderWorker(void *context) {
                 if (targetWork == shadowMasks.end()) continue;
                 MTL4RenderPassDescriptor *resolvePass = [[MTL4RenderPassDescriptor alloc] init];
                 resolvePass.colorAttachments[0].texture = targetWork->target;
-                resolvePass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+                // A twin created this frame starts from transparent black; an
+                // existing twin accumulates (blob masks persist across frames).
+                resolvePass.colorAttachments[0].loadAction =
+                    freshShadowTwins.count(targetId) ? MTLLoadActionClear : MTLLoadActionLoad;
+                resolvePass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
                 resolvePass.colorAttachments[0].storeAction = MTLStoreActionStore;
                 id<MTL4RenderCommandEncoder> resolveEncoder =
                     [commandBuffer renderCommandEncoderWithDescriptor:resolvePass];
@@ -3742,9 +3779,10 @@ static void *renderWorker(void *context) {
             shadowRejectReported = false;
         }
         if (shadowLive && metrics.shadowMasksRendered && !shadowLiveConfirmed) {
-            NSLog(@"DK2 shadows GPU activity confirmed: received=%u rendered=%u triangles=%u",
+            NSLog(@"DK2 shadows GPU activity confirmed: received=%u rendered=%u triangles=%u decal-redirects=%u twins=%zu",
                   metrics.shadowMasksReceived, metrics.shadowMasksRendered,
-                  metrics.shadowTriangles);
+                  metrics.shadowTriangles, metrics.shadowDecalRedirects,
+                  _shadowTwins.size());
             shadowLiveConfirmed = true;
         } else if (shadowLive && metrics.shadowMasksReceived &&
                    !metrics.shadowMasksRendered && !shadowRejectReported) {
@@ -3786,6 +3824,7 @@ static void *renderWorker(void *context) {
             NSUInteger drawUniformCount = 0;
             auto *drawUniforms = static_cast<DrawUniform *>(_drawBuffers[slot].contents);
             TextureBinding currentTextureBinding = {0, 0};
+            uint32_t currentStage0TextureId = 0;
             TextureBinding currentTextureBinding1 = {0, 0};
             TextureBinding currentTextureBinding2 = {0, 0};
             NSUInteger nextSlot[kTextureArgumentTablesPerFrame];
@@ -4052,6 +4091,7 @@ static void *renderWorker(void *context) {
                     if (binding.stage == 0) {
                         currentTextureBinding = binding.texture_id
                             ? resolveTextureBinding(binding.texture_id) : TextureBinding{0, 0};
+                        currentStage0TextureId = binding.texture_id;
                     } else if (binding.stage == 1) {
                         currentTextureBinding1 = binding.texture_id
                             ? resolveTextureBindingInBank(binding.texture_id, currentTextureBinding.bank)
@@ -4629,6 +4669,20 @@ static void *renderWorker(void *context) {
                         uniform.screenHeight = static_cast<float>(snapshot->height);
                         uniform.worldGeometry = 0;
                         uniform.textureIndex = currentTextureBinding.slot;
+                        // v14 shadow decal: sample the page's shadow twin
+                        // instead of the page. Fall back to the page slot on
+                        // bank mismatch (visually = pre-redesign behaviour).
+                        if ((draw.flags & DK2M_DRAW_INDEXED_SHADOW_DECAL) &&
+                            currentStage0TextureId &&
+                            _shadowTwins.count(currentStage0TextureId)) {
+                            const TextureBinding twin = resolveTextureBindingInBank(
+                                currentStage0TextureId | kShadowTwinIdBit,
+                                currentTextureBinding.bank);
+                            if (twin.bank == currentTextureBinding.bank && twin.slot) {
+                                uniform.textureIndex = twin.slot;
+                                ++metrics.shadowDecalRedirects;
+                            }
+                        }
                         uniform.colorOp = textureStage0[1];
                         uniform.colorArg1 = textureStage0[2];
                         uniform.colorArg2 = textureStage0[3];

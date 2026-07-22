@@ -112,9 +112,10 @@ public:
             atlasResetsAcked_ = 0;
             atlasResetsEmitted_ = 0;
             atlasResetLastSentFrame_ = 0;
-            for (auto &entry : shadowMasks_) {
-                entry.second.lastSentGeneration = entry.second.generation;
-            }
+            // Immediate-mode shadow masks: whatever queued for the previous
+            // host is stale for a fresh one; high-detail masks re-arrive
+            // with the next bakes anyway.
+            pendingShadowMasks_.clear();
         } else {
             if (atlasLastSentFrame_) {
                 if (consumer == atlasLastSentFrame_) {
@@ -198,6 +199,7 @@ public:
         // before the rects that describe the page's new layout.
         emitAtlasResets();
         emitAtlasRects();
+        flushPendingShadowMasks();
 
         for (DWORD stage = 0; stage < 3; ++stage) {
             if (boundTextures_[stage]) {
@@ -227,6 +229,54 @@ public:
         }
     }
 
+    // The shadow decal quads draw through the legacy indexed path with no
+    // game-side marker (their submitter is original, untranslated code), so
+    // classify them here: stage-0 texture is a shadow-pool page AND the
+    // draw's UV bounds coincide with a mask rect captured for that page.
+    // Regular textures sharing a mixed page occupy different rects, so an
+    // exact-rect match (±1.5 texel) is a safe discriminator for the host's
+    // R8-twin redirect.
+    uint32_t shadowDecalFlag(DWORD fvf, const void *vertices, DWORD vertexCount) const {
+        if (!vertexCount) return 0;
+        const uint32_t textureId = boundTextures_[0];
+        if (!textureId || !shadowTextureIds_.count(textureId)) return 0;
+        const auto rectsIt = shadowMaskRects_.find(textureId);
+        if (rectsIt == shadowMaskRects_.end()) return 0;
+        const auto textureIt = textures_.find(textureId);
+        if (textureIt == textures_.end()) return 0;
+        const float texW = static_cast<float>(textureIt->second.width);
+        const float texH = static_cast<float>(textureIt->second.height);
+        if (texW <= 0.0f || texH <= 0.0f) return 0;
+
+        float uMin = 1e9f, uMax = -1e9f, vMin = 1e9f, vMax = -1e9f;
+        for (DWORD i = 0; i < vertexCount; ++i) {
+            float u, v;
+            if (fvf == DK2M_FVF_VERTEX1C) {
+                const auto *vertex = static_cast<const DK2MVertex1C *>(vertices) + i;
+                u = vertex->u;
+                v = vertex->v;
+            } else {
+                const auto *vertex = static_cast<const DK2MVertex2C *>(vertices) + i;
+                u = vertex->tex_coord[0][0];
+                v = vertex->tex_coord[0][1];
+            }
+            uMin = std::min(uMin, u); uMax = std::max(uMax, u);
+            vMin = std::min(vMin, v); vMax = std::max(vMax, v);
+        }
+        const float x0 = uMin * texW, x1 = uMax * texW;
+        const float y0 = vMin * texH, y1 = vMax * texH;
+        constexpr float kTolerance = 1.5f;
+        for (const ShadowMaskRect &rect : rectsIt->second) {
+            if (std::fabs(x0 - static_cast<float>(rect.x)) <= kTolerance &&
+                std::fabs(y0 - static_cast<float>(rect.y)) <= kTolerance &&
+                std::fabs(x1 - static_cast<float>(rect.x + rect.w)) <= kTolerance &&
+                std::fabs(y1 - static_cast<float>(rect.y + rect.h)) <= kTolerance) {
+                return DK2M_DRAW_INDEXED_SHADOW_DECAL;
+            }
+        }
+        return 0;
+    }
+
     void draw(DWORD fvf, const void *vertices, DWORD vertexCount,
               const WORD *indices, DWORD indexCount, DWORD flags) {
         if (!active_ || !vertices || !indices) return;
@@ -245,7 +295,7 @@ public:
         command.fvf = fvf;
         command.vertex_count = vertexCount;
         command.index_count = indexCount;
-        command.flags = flags;
+        command.flags = flags | shadowDecalFlag(fvf, vertices, vertexCount);
         append(&command, sizeof(command));
         append(vertices, static_cast<uint32_t>(vertexBytes));
         append(indices, static_cast<uint32_t>(indexBytes));
@@ -393,11 +443,16 @@ public:
             atlasLastSentFrame_ = 0;
         }
 
+        shadowMaskRects_.erase(textureId);
+        shadowTextureIds_.erase(textureId);
+
         if (!wasKnown) return;
         if ((++textureReleaseCount_ % 250) == 1) {
-            gog_debugf("Metal bridge: texture releases=%u live=%u atlas-rects=%u",
+            gog_debugf("Metal bridge: texture releases=%u live=%u atlas-rects=%u "
+                       "shadow-mask-drops=%u",
                        textureReleaseCount_, static_cast<unsigned>(textures_.size()),
-                       static_cast<unsigned>(atlasRects_.size()));
+                       static_cast<unsigned>(atlasRects_.size()),
+                       shadowMasksDropped_);
         }
         textureReleases_.push_back(textureId);
         if (active_) emitTextureReleases();
@@ -419,6 +474,10 @@ public:
             ++atlasRejectedInvalid_;
             return;
         }
+        // Shadow-pool pages are procedural render targets; resource-pack art
+        // must never be composed into them (channel-B of the stale-slot bug:
+        // pack sprites glued into reused shadow pages).
+        if (shadowPageKeys_.count(reinterpret_cast<uintptr_t>(pageKey))) return;
         // Every engine reduction level is a valid atlas page. The resource
         // pack contains one canonical base image, so FooMM0..FooMM9 all map
         // to Foo; the host scales it to the selected rect and builds mips.
@@ -577,21 +636,105 @@ public:
         return metalShadowsEnabled_.load(std::memory_order_relaxed);
     }
 
-    void shadowMask(const void *handleKey, const void *triangles,
-                    uint32_t triangleCount, uint32_t mode) {
-        if (!handleKey || !metalShadowsEnabled() ||
-            (triangleCount && !triangles)) return;
+    struct PendingShadowMask {
+        uint32_t textureId = 0;
+        uint32_t x = 0, y = 0, w = 0, h = 0;
+        uint32_t mode = DK2M_SHADOW_MASK_ALPHA;
+        std::vector<DK2MShadowTriangle> triangles;
+    };
+    struct ShadowMaskRect {
+        uint32_t x, y, w, h;
+    };
+
+    // Immediate-mode shadow mask: target resolved at capture time by the
+    // caller. Emitted straight into the active frame; captures that land
+    // between frames queue and flush at the next begin(). The host applies
+    // masks after the frame's texture updates, and mask content persists in
+    // its target region (blob shadows bake once and reuse for many frames).
+    void shadowMaskCaptured(IDirectDrawSurface4 *pageSurface, uint32_t x, uint32_t y,
+                            uint32_t w, uint32_t h, const void *triangles,
+                            uint32_t triangleCount, uint32_t mode) {
+        if (!pageSurface || !w || !h || !metalShadowsEnabled() ||
+            (triangleCount && !triangles) || !ensureMapped()) return;
         const uint64_t triangleBytes =
             static_cast<uint64_t>(triangleCount) * sizeof(DK2MShadowTriangle);
         if (triangleBytes > DK2M_SLOT_CAPACITY - sizeof(DK2MShadowMaskCommand)) return;
-        ShadowMaskState &state = shadowMasks_[reinterpret_cast<uintptr_t>(handleKey)];
-        state.triangles.resize(triangleCount);
+
+        const uintptr_t pageKey = reinterpret_cast<uintptr_t>(pageSurface);
+        if (shadowPageKeys_.insert(pageKey).second) {
+            // First time this page hosts a shadow: it is procedural, never
+            // resource-pack material. Drop any HD atlas map it accumulated
+            // while (or before) doubling as a texture page, and refuse
+            // future reports (see reportAtlasRect).
+            atlasPageReset(pageSurface);
+        }
+
+        const uint32_t textureId = ensureSurfaceTexture(pageSurface);
+        if (!textureId) return;
+        shadowTextureIds_.insert(textureId);
+
+        // Rect registry for decal tagging (see draw()): replace-on-same-
+        // origin keeps it bounded at the ring size per page.
+        std::vector<ShadowMaskRect> &rects = shadowMaskRects_[textureId];
+        bool known = false;
+        for (ShadowMaskRect &rect : rects) {
+            if (rect.x == x && rect.y == y) {
+                rect.w = w;
+                rect.h = h;
+                known = true;
+                break;
+            }
+        }
+        if (!known && rects.size() < 128) rects.push_back({x, y, w, h});
+
+        PendingShadowMask mask;
+        mask.textureId = textureId;
+        mask.x = x; mask.y = y; mask.w = w; mask.h = h;
+        mask.mode = mode;
+        mask.triangles.resize(triangleCount);
         if (triangleCount) {
-            std::memcpy(state.triangles.data(), triangles,
+            std::memcpy(mask.triangles.data(), triangles,
                         static_cast<size_t>(triangleBytes));
         }
-        state.mode = mode;
-        if (++state.generation == 0) ++state.generation;
+        if (active_) {
+            if (!emitShadowMask(mask)) ++shadowMasksDropped_;
+        } else if (pendingShadowMasks_.size() < 256) {
+            pendingShadowMasks_.push_back(std::move(mask));
+        } else {
+            ++shadowMasksDropped_;
+        }
+    }
+
+    bool emitShadowMask(const PendingShadowMask &mask) {
+        const uint64_t triangleBytes =
+            static_cast<uint64_t>(mask.triangles.size()) * sizeof(DK2MShadowTriangle);
+        const uint64_t commandBytes = sizeof(DK2MShadowMaskCommand) + triangleBytes;
+        if (commandBytes > UINT32_MAX || used_ + commandBytes > DK2M_SLOT_CAPACITY) {
+            return false;
+        }
+        DK2MShadowMaskCommand command = {};
+        command.header.type = DK2M_COMMAND_SHADOW_MASK;
+        command.header.size = static_cast<uint32_t>(commandBytes);
+        command.texture_id = mask.textureId;
+        command.target_x = mask.x;
+        command.target_y = mask.y;
+        command.target_width = mask.w;
+        command.target_height = mask.h;
+        command.triangle_count = static_cast<uint32_t>(mask.triangles.size());
+        command.mode = mask.mode;
+        append(&command, sizeof(command));
+        if (triangleBytes) {
+            append(mask.triangles.data(), static_cast<uint32_t>(triangleBytes));
+        }
+        ++commandCount_;
+        return true;
+    }
+
+    void flushPendingShadowMasks() {
+        for (const PendingShadowMask &mask : pendingShadowMasks_) {
+            if (!emitShadowMask(mask)) ++shadowMasksDropped_;
+        }
+        pendingShadowMasks_.clear();
     }
 
     // Capture-only registration for the GPU mesh path: same cache upkeep as
@@ -997,9 +1140,7 @@ private:
         if (previous == enabled) return;
         gog_debugf("metal shadows bridge: GPU rasterizer %s", enabled ? "on" : "off");
         if (!enabled) {
-            for (auto &entry : shadowMasks_) {
-                entry.second.lastSentGeneration = entry.second.generation;
-            }
+            pendingShadowMasks_.clear();
             // Metal resolves shadow masks into the host's copy of these atlas
             // pages; the producer's CPU cache never sees those writes.  On a
             // live switch back to CPU shadows, force the original page bytes
@@ -1666,45 +1807,8 @@ private:
         total = value > UINT32_MAX - total ? UINT32_MAX : total + value;
     }
 
-    void emitShadowMasks(DWORD textureId, IDirectDrawSurface4 *surface) {
-        if (!textureId || !surface || !metalShadowsEnabled()) return;
-        for (auto &entry : shadowMasks_) {
-            ShadowMaskState &state = entry.second;
-            if (!state.generation || state.lastSentGeneration == state.generation) continue;
-            dk2::shadowgpu::TargetRegion target = {};
-            if (!dk2::shadowgpu::resolveTarget(
-                    reinterpret_cast<const void *>(entry.first), surface, &target)) {
-                continue;
-            }
-            const uint64_t triangleBytes =
-                static_cast<uint64_t>(state.triangles.size()) * sizeof(DK2MShadowTriangle);
-            const uint64_t commandBytes = sizeof(DK2MShadowMaskCommand) + triangleBytes;
-            if (commandBytes > UINT32_MAX || used_ + commandBytes > DK2M_SLOT_CAPACITY) {
-                continue;
-            }
-            DK2MShadowMaskCommand command = {};
-            command.header.type = DK2M_COMMAND_SHADOW_MASK;
-            command.header.size = static_cast<uint32_t>(commandBytes);
-            command.texture_id = textureId;
-            command.target_x = target.x;
-            command.target_y = target.y;
-            command.target_width = target.width;
-            command.target_height = target.height;
-            command.triangle_count = static_cast<uint32_t>(state.triangles.size());
-            command.mode = state.mode;
-            append(&command, sizeof(command));
-            if (triangleBytes) {
-                append(state.triangles.data(), static_cast<uint32_t>(triangleBytes));
-            }
-            ++commandCount_;
-            shadowTextureIds_.insert(textureId);
-            state.lastSentGeneration = state.generation;
-        }
-    }
-
     void emitTexture(DWORD stage, DWORD textureId,
                      IDirectDrawSurface4 *surface = nullptr) {
-        bool textureReadyForShadow = false;
         if (textureId) {
             auto found = textures_.find(textureId);
             if (found != textures_.end()) {
@@ -1731,11 +1835,8 @@ private:
                         texture.sentInCurrentFrame = true;
                     }
                 }
-                textureReadyForShadow = !texture.pending || texture.sentInCurrentFrame;
             }
         }
-
-        if (textureReadyForShadow) emitShadowMasks(textureId, surface);
 
         if (used_ + sizeof(DK2MSetTextureCommand) > DK2M_SLOT_CAPACITY) return;
         DK2MSetTextureCommand binding = {};
@@ -2275,6 +2376,7 @@ private:
             std::remove(deadSurfaces_.begin(), deadSurfaces_.end(), key),
             deadSurfaces_.end());
         atlasSeenByPage_.erase(pageKey);
+        shadowPageKeys_.erase(pageKey);
     }
 
     void append(const void *data, uint32_t size) {
@@ -2342,13 +2444,10 @@ private:
     uint32_t lastInputHeartbeat_ = 0;
     DWORD lastInputHeartbeatTick_ = 0;
     uint8_t appliedKeys_[32] = {};
-    struct ShadowMaskState {
-        std::vector<DK2MShadowTriangle> triangles;
-        uint32_t mode = DK2M_SHADOW_MASK_ALPHA;
-        uint32_t generation = 0;
-        uint32_t lastSentGeneration = 0;
-    };
-    std::unordered_map<uintptr_t, ShadowMaskState> shadowMasks_;
+    std::vector<PendingShadowMask> pendingShadowMasks_;
+    std::unordered_map<uint32_t, std::vector<ShadowMaskRect>> shadowMaskRects_;
+    uint32_t shadowMasksDropped_ = 0;
+    std::unordered_set<uintptr_t> shadowPageKeys_;
     std::unordered_set<uint32_t> shadowTextureIds_;
     std::atomic<bool> metalShadowsEnabled_{false};
     struct MeshState {
@@ -2580,9 +2679,11 @@ void reportAtlasRect(const void *pageKey, const char *name, uint32_t x, uint32_t
     producer.reportAtlasRect(pageKey, name, x, y, w, h);
 }
 
-void shadowMask(const void *handleKey, const void *triangles,
-                uint32_t triangleCount, uint32_t mode) {
-    producer.shadowMask(handleKey, triangles, triangleCount, mode);
+void shadowMaskCaptured(IDirectDrawSurface4 *pageSurface, uint32_t x, uint32_t y,
+                        uint32_t w, uint32_t h, const void *triangles,
+                        uint32_t triangleCount, uint32_t mode) {
+    producer.shadowMaskCaptured(pageSurface, x, y, w, h, triangles,
+                                triangleCount, mode);
 }
 
 void setGameTickTiming(uint32_t tickMicroseconds) {
