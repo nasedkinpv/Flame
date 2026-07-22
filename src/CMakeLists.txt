@@ -53,6 +53,7 @@ add_library(${TARGET} SHARED
         dk2/Vec3i.cpp
         dk2/Vec3d.cpp
         dk2/Pos2i.cpp
+        dk2/AABB.cpp
         dk2/RenderData.cpp
         dk2/CursorDrawer.cpp
         dk2/DrawTexToBuf.cpp

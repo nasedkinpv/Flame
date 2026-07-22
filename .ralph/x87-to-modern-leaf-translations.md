@@ -75,3 +75,11 @@ If any target turns out non-leaf (calls out / touches globals), note it and move
 DKII member-fn ABI for "output + operand" methods: **param1 = output (written + returned), param2(+) = operands**. Confirmed via Vec3f::mulV/substractAssign disasm. Always verify from disasm which stack slot is written vs read. Difftests MUST assert the non-output operand is untouched when distinct, else a param-order bug hides behind a self-consistent test.
 
 ### Next: item 3 — Pos2i::shiftDiv `0x004D1EC0`
+
+### Iteration 2 — DONE
+
+- [x] **Pos2i::shiftDiv** `0x004D1EC0` — committed `4a5a39f`. 5415 combos.
+  - Surprise: NOT a plain shift — it's **16.16 fixed-point division**: `output.c = ((int64)c << 16) / divisor` (truncate toward zero). The `shl eax,0x10 / sar edx,0x10 / idiv` idiom == `(int64)c << 16`, verified bit-exact incl. negatives via a standalone check.
+  - x86 `idiv` faults (#DE) on divisor==0 or quotient overflow; test stays in `|v|<=32767` so quotients fit int32 (both orig & rewrite fault identically outside that).
+
+### Next: item 4 — AABB::contains `0x0052D3A0` + isIntersects `0x005B7050`
