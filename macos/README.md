@@ -2,7 +2,7 @@
 
 The current native pipeline keeps the original 32-bit game simulation isolated in Wine and renders it in a separate arm64 AppKit/Metal 4 host:
 
-`DK2 + Flametal (i386/Wine) → shared protocol v14 → AppKit + Metal 4 (arm64)`
+`DK2 + Flametal (i386/Wine) → shared protocol v15 → AppKit + Metal 4 (arm64)`
 
 Flametal (the underlying [DiaLight/Flame](https://github.com/DiaLight/Flame) patch layer this fork is built on) captures the game's Direct3D 3 command stream without asking WineD3D to render it. The native host owns presentation, scaling, focus, keyboard and mouse input. Absolute pointer coordinates use AppKit, raw relative motion and keyboard state use GameController, and scrolling uses AppKit's precise wheel events.
 
@@ -41,6 +41,10 @@ would suppress the projected triangles sent to the GPU.
 Protocol v14 carries the final DK2 per-draw blend and depth state with retained
 mesh commands; this is required because those commands are staged independently
 of the legacy render-state stream.
+
+Protocol v15 adds the live host-to-game cursor presentation scale. The Metal
+quad and the translated original tooltip placement consume the same value, so
+size, hotspot and edge-aware tooltip gap change together.
 
 The old inline experiment was slower than the translated SSE2 CPU transform,
 because it recopied every vertex and issued roughly 1300 small draws each
@@ -88,10 +92,11 @@ resolution = "1600x1200"  # widescreen (e.g. 1800x1200) is experimental: the
 movies = false
 level = ""              # non-empty skips the normal menu and loads this level
 
-[renderer]              # all four keys apply live, no restart needed
+[renderer]              # all five keys apply live, no restart needed
 bloom = true
 metal_shadows = true
 render_scale = 1.0       # fraction of the display's native backing resolution, 0.375-1.0
+cursor_scale = 1.0       # cursor size; hotspot and tooltip gap follow live, 0.25-2.0
 hd_textures = true
 
 [patches]                # applied on next launch, passed to the game as
@@ -113,7 +118,7 @@ pretending a live in-place change happened.
 
 The host watches the file (a `DISPATCH_SOURCE_TYPE_VNODE` source, re-armed
 across the atomic-replace renames a save performs) and live-applies bloom,
-metal_shadows, render_scale and hd_textures the moment the file changes,
+metal_shadows, render_scale, cursor_scale and hd_textures the moment the file changes,
 whether edited by hand or through Settings. Toggling `hd_textures` marks every
 mapped atlas page dirty: off rebuilds pages from their stored original pixels,
 and on recomposes them from the named pack. Rebuilds are budgeted across frames,

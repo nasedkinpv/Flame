@@ -69,6 +69,7 @@ struct Settings {
     bool bloom = true;
     bool metalShadows = true;
     float renderScale = 1.0f;
+    float cursorScale = 1.0f;
     bool hdTextures = true;
     // [patches]
     bool meshGpuPath = false;
@@ -87,6 +88,7 @@ std::atomic<bool> gBloomLive{true};
 std::atomic<bool> gShadowsLive{true};
 std::atomic<bool> gHdTexturesLive{true};
 std::atomic<uint32_t> gRenderScaleBits{floatBits(1.0f)};
+std::atomic<uint32_t> gCursorScaleBits{floatBits(1.0f)};
 
 bool gEnvBloomSet = false;
 bool gEnvShadowsSet = false;
@@ -217,11 +219,13 @@ std::string renderSettingsFile(const Settings &s) {
       << "# Level file name to load directly, skipping the normal menu. Empty = normal menu.\n"
       << "level = \"" << s.level << "\"\n\n";
     o << "[renderer]\n"
-      << "# All four keys in this section apply live (no restart) while the game is running.\n"
+      << "# All five keys in this section apply live (no restart) while the game is running.\n"
       << "bloom = " << tomlBool(s.bloom) << "\n"
       << "metal_shadows = " << tomlBool(s.metalShadows) << "\n"
       << "# Fraction of the display's native backing resolution to render at, 0.375-1.0\n"
       << "render_scale = " << tomlFloat(s.renderScale) << "\n"
+      << "# Cursor presentation scale; its hotspot and tooltip gap scale together, 0.25-2.0\n"
+      << "cursor_scale = " << tomlFloat(s.cursorScale) << "\n"
       << "hd_textures = " << tomlBool(s.hdTextures) << "\n\n";
     o << "[patches]\n"
       << "mesh_gpu_path = " << tomlBool(s.meshGpuPath) << "\n"
@@ -273,6 +277,7 @@ Settings load() {
             s.bloom = tomlGet<bool>(*r, "bloom", s.bloom);
             s.metalShadows = tomlGet<bool>(*r, "metal_shadows", s.metalShadows);
             s.renderScale = tomlGet<float>(*r, "render_scale", s.renderScale);
+            s.cursorScale = tomlGet<float>(*r, "cursor_scale", s.cursorScale);
             s.hdTextures = tomlGet<bool>(*r, "hd_textures", s.hdTextures);
         }
         if (const auto *p = tomlSection(data, "patches")) {
@@ -288,6 +293,7 @@ Settings load() {
     }
     s.shadowLevel = std::clamp(s.shadowLevel, 0, 3);
     s.renderScale = std::clamp(s.renderScale, 0.375f, 1.0f);
+    s.cursorScale = std::clamp(s.cursorScale, 0.25f, 2.0f);
     return s;
 }
 
@@ -321,6 +327,14 @@ void applyRendererLive(const Settings &s) {
         const uint32_t was = gRenderScaleBits.exchange(floatBits(clamped), std::memory_order_relaxed);
         if (was != floatBits(clamped)) {
             NSLog(@"DK2 settings: render_scale -> %.3f", (double)clamped);
+        }
+    }
+    {
+        const float clamped = std::clamp(s.cursorScale, 0.25f, 2.0f);
+        const uint32_t was = gCursorScaleBits.exchange(
+            floatBits(clamped), std::memory_order_relaxed);
+        if (was != floatBits(clamped)) {
+            NSLog(@"DK2 settings: cursor_scale -> %.3f", (double)clamped);
         }
     }
     {
@@ -2213,6 +2227,8 @@ bool inputLogEnabled() {
 
 - (void)publishCurrentInput {
     DK2MInputState published = _input;
+    published.cursor_scale_bits = dk2cfg::gCursorScaleBits.load(
+        std::memory_order_relaxed);
     if (dk2ShadowsEnabled() && gShadowGpuAvailable.load(std::memory_order_acquire)) {
         published.flags |= DK2M_INPUT_METAL_SHADOWS;
     } else {
@@ -5143,6 +5159,8 @@ static void *renderWorker(void *context) {
     NSButton *_debugProbes;
     NSSlider *_renderScale;
     NSTextField *_renderScaleLabel;
+    NSSlider *_cursorScale;
+    NSTextField *_cursorScaleLabel;
     NSPopUpButton *_shadowLevel;
     NSComboBox *_resolution;
     NSTextField *_level;
@@ -5215,7 +5233,7 @@ static void *renderWorker(void *context) {
     const CGFloat rowHeight = 24, rowGap = 10, headerGap = 30;
     const CGFloat topMargin = 40, bottomMargin = 20;
     const int headerCount = 4;   // Renderer, Game, Patches, Developer
-    const int rowCount = 14;     // 4 + 3 + 3 + (caption + level + warning + winedebug)
+    const int rowCount = 15;     // 5 + 3 + 3 + (caption + level + warning + winedebug)
     const CGFloat contentWidth = 560;
     const CGFloat contentHeight = topMargin + bottomMargin +
         headerCount * (headerGap + rowHeight + rowGap) +
@@ -5281,6 +5299,20 @@ static void *renderWorker(void *context) {
     _renderScaleLabel = [self labelWithFrame:NSMakeRect(controlX + controlWidth - 48, y, 48, rowHeight)
                                         text:[self percentString:s.renderScale] bold:NO];
     [container addSubview:_renderScaleLabel];
+    y -= rowHeight + rowGap;
+
+    addRowLabel(@"Cursor Scale");
+    _cursorScale = [NSSlider sliderWithValue:s.cursorScale
+                                     minValue:0.25
+                                     maxValue:2.0
+                                       target:self
+                                       action:@selector(controlChanged:)];
+    _cursorScale.frame = NSMakeRect(controlX, y, controlWidth - 56, rowHeight);
+    _cursorScale.continuous = YES;
+    [container addSubview:_cursorScale];
+    _cursorScaleLabel = [self labelWithFrame:NSMakeRect(controlX + controlWidth - 48, y, 48, rowHeight)
+                                        text:[self percentString:s.cursorScale] bold:NO];
+    [container addSubview:_cursorScaleLabel];
     y -= rowHeight + rowGap;
 
     addHeader(@"Game");
@@ -5414,6 +5446,7 @@ static void *renderWorker(void *context) {
     s.bloom = _bloom.state == NSControlStateValueOn;
     s.metalShadows = _metalShadows.state == NSControlStateValueOn;
     s.renderScale = std::clamp((float)_renderScale.doubleValue, 0.375f, 1.0f);
+    s.cursorScale = std::clamp((float)_cursorScale.doubleValue, 0.25f, 2.0f);
     s.hdTextures = _hdTextures.state == NSControlStateValueOn;
     s.meshGpuPath = _meshGpuPath.state == NSControlStateValueOn;
     s.shadowCache = _shadowCache.state == NSControlStateValueOn;
@@ -5421,6 +5454,7 @@ static void *renderWorker(void *context) {
     s.winedebug = _winedebug.stringValue.UTF8String;
 
     _renderScaleLabel.stringValue = [self percentString:s.renderScale];
+    _cursorScaleLabel.stringValue = [self percentString:s.cursorScale];
     _levelWarning.hidden = s.level.empty();
 
     if (!dk2cfg::writeAtomic(s)) {
@@ -5551,9 +5585,13 @@ static void *renderWorker(void *context) {
     gMetalView = _view;
     dk2cfg::gOnApplied = [] {
         // render_scale changed; re-derive the drawable size without waiting
-        // for an unrelated window resize (bloom/shadows/hd_textures need no
-        // extra nudge, they are read fresh every frame/texture-upload).
-        if (gMetalView) dispatch_async(dispatch_get_main_queue(), ^{ [gMetalView setNeedsLayout:YES]; });
+        // for an unrelated window resize. Republish input too: cursor_scale
+        // travels host->game in that shared state so tooltip and cursor switch
+        // on the same update.
+        if (gMetalView) dispatch_async(dispatch_get_main_queue(), ^{
+            [gMetalView setNeedsLayout:YES];
+            [gMetalView publishCurrentInput];
+        });
     };
     dk2cfg::startWatching();
 
