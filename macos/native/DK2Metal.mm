@@ -1643,10 +1643,11 @@ public:
               p(&FrameMetrics::residentTextureMB, 95),
               p(&FrameMetrics::residentTextureMB, 99));
         NSLog(@"PERF shadows totals/%zu frames: live=%llu received=%llu rendered=%llu "
-               "triangles=%llu rejected(unavailable=%llu malformed=%llu target=%llu capacity=%llu)",
+               "triangles=%llu decal-redirects=%llu rejected(unavailable=%llu malformed=%llu target=%llu capacity=%llu)",
               kFrames, total(&FrameMetrics::shadowLive),
               total(&FrameMetrics::shadowMasksReceived),
               total(&FrameMetrics::shadowMasksRendered), total(&FrameMetrics::shadowTriangles),
+              total(&FrameMetrics::shadowDecalRedirects),
               total(&FrameMetrics::shadowRejectUnavailable),
               total(&FrameMetrics::shadowRejectMalformed),
               total(&FrameMetrics::shadowRejectTarget),
