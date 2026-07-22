@@ -2,6 +2,7 @@
 // Created by DiaLight on 10.09.2024.
 //
 #include "dk2/CDefaultPlayerInterface.h"
+#include "dk2/CursorPresentation.h"
 #include "dk2/entities/CCreature.h"
 #include "dk2/entities/CDeadBody.h"
 #include "dk2/entities/CObject.h"
@@ -16,6 +17,7 @@
 #include "dk2_globals.h"
 #include "dk2_memory.h"
 #include "gog_patch.h"
+#include <metal_bridge/MetalBridgeProducer.h>
 #include "patches/big_resolution_fix/expand_surf_idx_array.h"
 #include "patches/micro_patches.h"
 #include "tools/bug_hunter.h"
@@ -51,45 +53,6 @@ char *buildWorldTooltip(dk2::CDefaultPlayerInterface *self) {
     return reinterpret_cast<Function>(0x0042EA70)(self);
 }
 
-struct TooltipPlacement {
-    int x;
-    int y;
-};
-
-int referenceMetric(int value, int dimension, int referenceDimension) {
-    return static_cast<int>(static_cast<int64_t>(value) * dimension /
-                            referenceDimension);
-}
-
-TooltipPlacement placeTooltipOriginal(
-        const dk2::Pos2i &mouse,
-        const dk2::AABB &textBounds,
-        const dk2::Size2i &viewport,
-        const dk2::Size2i &reference,
-        bool alternateOffset) {
-    const int textWidth = textBounds.maxX - textBounds.minX;
-    const int textHeight = textBounds.maxY - textBounds.minY;
-    TooltipPlacement placement {
-        mouse.x + referenceMetric(
-            alternateOffset ? 60 : 98, reference.w, 640),
-        alternateOffset ? mouse.y - textHeight / 2 : mouse.y - textHeight,
-    };
-
-    const int rightMargin = referenceMetric(40, reference.w, 640);
-    if (placement.x + textWidth > viewport.w - rightMargin) {
-        placement.x = mouse.x - textWidth -
-            referenceMetric(30, reference.w, 640);
-        placement.y = mouse.y - textHeight / 2;
-    }
-
-    const int minY = referenceMetric(40, reference.h, 480);
-    const int maxY = viewport.h - referenceMetric(10, reference.h, 480) -
-        textHeight;
-    if (placement.y <= minY) placement.y = minY;
-    if (placement.y >= maxY) placement.y = maxY;
-    return placement;
-}
-
 dk2::PixelMask tooltipTextMask(const dk2::CDefaultPlayerInterface *self) {
     dk2::PixelMask mask {0xFF, 0xFF, 0xFF, 0, 0};
     if (*reinterpret_cast<const int *>(reinterpret_cast<const uint8_t *>(self) + 0x1084) != 2)
@@ -108,7 +71,9 @@ dk2::PixelMask tooltipTextMask(const dk2::CDefaultPlayerInterface *self) {
 }  // namespace
 
 
-// Behaviour-identical translation of 0042E590.
+// Behaviour-identical translation of 0042E590. The only intentional change
+// is isolated in cursor_presentation::placeTooltip(): CursorScale multiplies
+// the two cursor-to-tooltip gaps before the original side switch and clamps.
 void dk2::CDefaultPlayerInterface::sub_42E590() {
     if (this->inMenu || this->f2726) return;
 
@@ -196,8 +161,10 @@ void dk2::CDefaultPlayerInterface::sub_42E590() {
         static_cast<int>(MyWindow_instance.dwWidth),
         static_cast<int>(MyWindow_instance.dwHeight),
     };
-    const TooltipPlacement placement = placeTooltipOriginal(
-        mouse, textBounds, viewport, reference, this->f12B2 != 0);
+    const cursor_presentation::TooltipPlacement placement =
+        cursor_presentation::placeTooltip(
+            mouse, textBounds, viewport, reference, this->f12B2 != 0,
+            gog::metal_bridge::cursorScale());
 
     this->sub_411D00(
         placement.x + textBounds.minX,

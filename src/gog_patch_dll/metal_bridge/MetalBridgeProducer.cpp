@@ -5,6 +5,7 @@
 #include <gog_globals.h>
 #include <gog_debug.h>
 #include <dk2_functions.h>
+#include "dk2/CursorPresentation.h"
 #include <patches/replace_mouse_dinput_to_user32.h>
 #include <d3d.h>
 
@@ -609,6 +610,13 @@ public:
         return metalShadowsEnabled_.load(std::memory_order_relaxed);
     }
 
+    float cursorScale() const {
+        const uint32_t bits = cursorScaleBits_.load(std::memory_order_relaxed);
+        float value;
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
+    }
+
     struct PendingShadowMask {
         uint32_t textureId = 0;
         uint32_t x = 0, y = 0, w = 0, h = 0;
@@ -1135,11 +1143,24 @@ private:
         }
     }
 
+    void setCursorScale(uint32_t bits) {
+        float value;
+        std::memcpy(&value, &bits, sizeof(value));
+        if (!std::isfinite(value)) value = 1.0f;
+        value = std::clamp(value, 0.25f, 2.0f);
+        std::memcpy(&bits, &value, sizeof(bits));
+        const uint32_t previous = cursorScaleBits_.exchange(
+            bits, std::memory_order_relaxed);
+        if (previous != bits)
+            gog_debugf("metal cursor scale: %d%%", static_cast<int>(std::lround(value * 100.0f)));
+    }
+
     void processInput() {
         DK2MInputState input = {};
         if (!readInput(input)) return;
         if (input.host_pid == 0) {
             setMetalShadowsEnabled(false);
+            setCursorScale(0x3F800000u);
             if (inputHostPid_ != 0) {
                 releaseAppliedInput();
                 inputHostPid_ = 0;
@@ -1170,6 +1191,7 @@ private:
 
         const bool active = (input.flags & DK2M_INPUT_ACTIVE) != 0;
         setMetalShadowsEnabled((input.flags & DK2M_INPUT_METAL_SHADOWS) != 0);
+        setCursorScale(input.cursor_scale_bits);
         if (!newHost && active) {
             const uint32_t eventCount = input.event_write - inputEventWrite_;
             if (eventCount <= DK2M_INPUT_EVENT_CAPACITY) {
@@ -2010,10 +2032,17 @@ private:
             !cursor.displayWidth || !cursor.displayHeight) return;
 
         constexpr WORD indices[] = {0, 1, 2, 0, 2, 3};
-        const float left = static_cast<float>(cursor.mouseX - cursor.hotspotX);
-        const float top = static_cast<float>(cursor.mouseY - cursor.hotspotY);
-        const float right = left + static_cast<float>(cursor.displayWidth);
-        const float bottom = top + static_cast<float>(cursor.displayHeight);
+        const float presentationScale = cursorScale();
+        const float hotspotX = std::round(cursor.hotspotX * presentationScale);
+        const float hotspotY = std::round(cursor.hotspotY * presentationScale);
+        const float displayWidth = std::max(
+            1.0f, std::round(cursor.displayWidth * presentationScale));
+        const float displayHeight = std::max(
+            1.0f, std::round(cursor.displayHeight * presentationScale));
+        const float left = static_cast<float>(cursor.mouseX) - hotspotX;
+        const float top = static_cast<float>(cursor.mouseY) - hotspotY;
+        const float right = left + displayWidth;
+        const float bottom = top + displayHeight;
         const DK2MVertex1C vertices[] = {
             {left, top, 0.0f, 1.0f, 0xFFFFFFFFu, 0.0f, 0.0f},
             {right, top, 0.0f, 1.0f, 0xFFFFFFFFu, 1.0f, 0.0f},
@@ -2423,6 +2452,7 @@ private:
     std::unordered_set<uintptr_t> shadowPageKeys_;
     std::unordered_set<uint32_t> shadowTextureIds_;
     std::atomic<bool> metalShadowsEnabled_{false};
+    std::atomic<uint32_t> cursorScaleBits_{0x3F800000u};
     struct MeshState {
         std::vector<uint8_t> blob;  // serialized DK2MMeshRegisterCommand + payload
         bool pending = true;
@@ -2479,6 +2509,10 @@ bool isEnabled() {
 
 bool metalShadowsEnabled() {
     return producer.metalShadowsEnabled();
+}
+
+float cursorScale() {
+    return producer.cursorScale();
 }
 
 bool headlessDirectDrawEnabled() {

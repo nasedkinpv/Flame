@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 14u
+#define DK2M_VERSION 15u
 #define DK2M_TIMING_QUANTUM_US 8u
 #define DK2M_SLOT_COUNT 3u
 // A 1600x1200 High-Res frame can introduce 9-12 MiB of 128x128 surfaces while
@@ -143,6 +143,7 @@ typedef struct DK2MInputState {
     uint32_t wheel_y;
     uint32_t buttons;
     uint32_t host_pid;
+    uint32_t cursor_scale_bits;
     uint8_t keys[32];
     uint32_t event_write;
     DK2MInputEvent events[DK2M_INPUT_EVENT_CAPACITY];
@@ -380,8 +381,8 @@ typedef struct DK2MShadowMaskCommand {
 #if defined(__cplusplus)
 static_assert(sizeof(DK2MFrameSlot) == 40, "bridge slot layout changed");
 static_assert(sizeof(DK2MInputEvent) == 8, "bridge input event layout changed");
-static_assert(sizeof(DK2MInputState) == 592, "bridge input state layout changed");
-static_assert(sizeof(DK2MFileHeader) == 760, "bridge header layout changed");
+static_assert(sizeof(DK2MInputState) == 596, "bridge input state layout changed");
+static_assert(sizeof(DK2MFileHeader) == 764, "bridge header layout changed");
 static_assert(sizeof(DK2MCommandHeader) == 8, "bridge command layout changed");
 static_assert(sizeof(DK2MClearCommand) == 24, "bridge clear layout changed");
 static_assert(sizeof(DK2MVertex1C) == 28, "DK2 Vertex1C layout changed");

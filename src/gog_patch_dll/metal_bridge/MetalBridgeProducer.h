@@ -9,6 +9,9 @@ namespace gog::metal_bridge {
 
 bool isEnabled();
 bool metalShadowsEnabled();
+// Live host-owned presentation scale shared by the final Metal cursor quad
+// and the translated DK2 tooltip placement. Returns 1.0 without a host.
+float cursorScale();
 // Enabled by default for the native bridge. Set DK2_HEADLESS_DDRAW=0 for the
 // legacy WineD3D A/B fallback.
 bool headlessDirectDrawEnabled();
