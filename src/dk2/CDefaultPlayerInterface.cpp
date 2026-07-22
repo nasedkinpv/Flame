@@ -19,9 +19,208 @@
 #include "patches/big_resolution_fix/expand_surf_idx_array.h"
 #include "patches/micro_patches.h"
 #include "tools/bug_hunter.h"
+#include "dk2/resources/MyResources.h"
+#include "dk2/text/render/MyTextRenderer.h"
+#include "dk2/utils/PixelMask.h"
 #if __has_include(<dk2_research.h>)
    #include <dk2_research.h>
 #endif
+
+
+namespace {
+
+#pragma pack(push, 1)
+struct TooltipState {
+    int currentId;          // CDefaultPlayerInterface + 0x48FB
+    int pendingId;          // +0x48FF
+    int sourceToken;        // +0x4903
+    uint32_t showAfterMs;   // +0x4907
+    int active;             // +0x490B
+    int skipDelay;          // +0x490F
+};
+#pragma pack(pop)
+
+static_assert(sizeof(TooltipState) == 0x18);
+
+TooltipState &tooltipState(dk2::CDefaultPlayerInterface *self) {
+    return *reinterpret_cast<TooltipState *>(self->gap_48FB);
+}
+
+char *buildWorldTooltip(dk2::CDefaultPlayerInterface *self) {
+    using Function = char *(__thiscall *)(dk2::CDefaultPlayerInterface *);
+    return reinterpret_cast<Function>(0x0042EA70)(self);
+}
+
+struct TooltipPlacement {
+    int x;
+    int y;
+};
+
+int referenceMetric(int value, int dimension, int referenceDimension) {
+    return static_cast<int>(static_cast<int64_t>(value) * dimension /
+                            referenceDimension);
+}
+
+TooltipPlacement placeTooltipOriginal(
+        const dk2::Pos2i &mouse,
+        const dk2::AABB &textBounds,
+        const dk2::Size2i &viewport,
+        const dk2::Size2i &reference,
+        bool alternateOffset) {
+    const int textWidth = textBounds.maxX - textBounds.minX;
+    const int textHeight = textBounds.maxY - textBounds.minY;
+    TooltipPlacement placement {
+        mouse.x + referenceMetric(
+            alternateOffset ? 60 : 98, reference.w, 640),
+        alternateOffset ? mouse.y - textHeight / 2 : mouse.y - textHeight,
+    };
+
+    const int rightMargin = referenceMetric(40, reference.w, 640);
+    if (placement.x + textWidth > viewport.w - rightMargin) {
+        placement.x = mouse.x - textWidth -
+            referenceMetric(30, reference.w, 640);
+        placement.y = mouse.y - textHeight / 2;
+    }
+
+    const int minY = referenceMetric(40, reference.h, 480);
+    const int maxY = viewport.h - referenceMetric(10, reference.h, 480) -
+        textHeight;
+    if (placement.y <= minY) placement.y = minY;
+    if (placement.y >= maxY) placement.y = maxY;
+    return placement;
+}
+
+dk2::PixelMask tooltipTextMask(const dk2::CDefaultPlayerInterface *self) {
+    dk2::PixelMask mask {0xFF, 0xFF, 0xFF, 0, 0};
+    if (*reinterpret_cast<const int *>(reinterpret_cast<const uint8_t *>(self) + 0x1084) != 2)
+        return mask;
+
+    const uint16_t sceneId = *reinterpret_cast<const uint16_t *>(
+        reinterpret_cast<const uint8_t *>(self) + 0x1088);
+    const auto *sceneObject = reinterpret_cast<const uint8_t *>(dk2::sceneObjects[sceneId]);
+    if (*reinterpret_cast<const int *>(sceneObject + 0x2BC)) {
+        mask.b = 0x4B;
+        mask.g = 0x4B;
+    }
+    return mask;
+}
+
+}  // namespace
+
+
+// Behaviour-identical translation of 0042E590.
+void dk2::CDefaultPlayerInterface::sub_42E590() {
+    if (this->inMenu || this->f2726) return;
+
+    TooltipState &state = tooltipState(this);
+    const uint32_t now = getTimeMs();
+    if (state.pendingId != 0 && state.pendingId != state.currentId) {
+        state.currentId = state.pendingId;
+        state.pendingId = 0;
+        if (state.skipDelay) {
+            state.showAfterMs = now;
+        } else {
+            state.showAfterMs = now + (state.currentId != -1 ? 250u : 1500u);
+        }
+    }
+
+    if (state.currentId != -1) {
+        const int tooltipKind = static_cast<int>(this->f4658);
+        const int sourceToken = tooltipKind >= 0 && tooltipKind <= 5
+            ? this->cgui_manager.fA4
+            : this->cgui_manager.fA8;
+        if (sourceToken != state.sourceToken) {
+            state.sourceToken = 0;
+            state.currentId = 0;
+        }
+        state.active = 1;
+    } else {
+        if (MyResources_instance.playerCfg.worldTooltipsEnabled) {
+            const uint16_t hoveredSceneId = *reinterpret_cast<const uint16_t *>(
+                this->gap_10BE);
+            const uint16_t tooltipSceneId = *reinterpret_cast<const uint16_t *>(
+                this->gap_10BE + 2);
+            if (hoveredSceneId != tooltipSceneId ||
+                this->cgui_manager.probably_isCursorAtButton()) {
+                state.sourceToken = 0;
+                state.currentId = 0;
+            }
+            state.active = 0;
+        } else {
+            state.sourceToken = 0;
+            state.currentId = 0;
+        }
+    }
+
+    if (state.currentId == 0 || now <= state.showAfterMs) return;
+
+    AABB logicalArea {0, 0, 600, 400};
+    AABB scaledArea;
+    scaledArea = *this->cgui_manager.scaleAabb_2560_1920(
+        &scaledArea, &logicalArea);
+
+    alignas(MyTextRenderer) uint8_t rendererStorage[sizeof(MyTextRenderer)];
+    auto &renderer = *reinterpret_cast<MyTextRenderer *>(rendererStorage);
+    renderer.constructor();
+
+    int renderStatus = 0;
+    AABB textBounds {};
+    char *mbText = nullptr;
+    bool measured = true;
+    if (state.currentId != -1) {
+        const int tooltipKind = static_cast<int>(this->f4658);
+        if ((tooltipKind >= 0 && tooltipKind <= 3) || state.currentId == 0x8BE) {
+            mbText = buildWorldTooltip(this);
+        } else {
+            mbText = reinterpret_cast<char *>(
+                MyMbStringList_idx1091_getMbString(state.currentId));
+        }
+    } else {
+        this->sub_42D4A0();
+        measured = UniToMb_convert(g_wchar_buf, MBStr_741120, 512) != FALSE;
+        mbText = reinterpret_cast<char *>(MBStr_741120);
+    }
+
+    if (measured) {
+        renderer.renderText2(
+            &renderStatus, &scaledArea, mbText, &FontObj_3_instance,
+            &textBounds);
+    }
+
+    const Pos2i mouse = this->cgui_manager.mousePos;
+    const Size2i viewport {
+        static_cast<int>(this->cgui_manager.width),
+        static_cast<int>(this->cgui_manager.height),
+    };
+    const Size2i reference {
+        static_cast<int>(MyWindow_instance.dwWidth),
+        static_cast<int>(MyWindow_instance.dwHeight),
+    };
+    const TooltipPlacement placement = placeTooltipOriginal(
+        mouse, textBounds, viewport, reference, this->f12B2 != 0);
+
+    this->sub_411D00(
+        placement.x + textBounds.minX,
+        placement.y + textBounds.minY + 10,
+        placement.x + textBounds.maxX,
+        placement.y + textBounds.maxY - 10,
+        1);
+
+    if (state.currentId != -1) {
+        this->printText(
+            &this->_tooltip, 0, 0,
+            reinterpret_cast<uint8_t *>(mbText),
+            &MyWindow_instance.getColors()->colorWhite,
+            0x11, 1, FontObj_3_instance, 1);
+    } else {
+        PixelMask mask = tooltipTextMask(this);
+        this->whatEverFont_42CAB0(
+            &this->_tooltip, 0, 0, g_wchar_buf, &mask,
+            0x11, 1, FontObj_3_instance, 1);
+    }
+    this->sub_42CEE0(&this->_tooltip, placement.x, placement.y, 0);
+    renderer.destructor();
+}
 
 
 int dk2::CDefaultPlayerInterface::tickKeyboard2() {
@@ -774,4 +973,3 @@ void dk2::CDefaultPlayerInterface::sub_42CEE0(RtGuiView *view, int a3_x, int a4_
     v22_tryLevel = -1;
     v21_renderInfo.destructor();
 }
-

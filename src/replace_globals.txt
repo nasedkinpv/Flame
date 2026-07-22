@@ -17,6 +17,7 @@
 0042C7D0 int CDefaultPlayerInterface::sub_42C7D0(int, int, int, const char *, RtGuiView *)
 0042CDF0 void CDefaultPlayerInterface::createSurfacesForView_42CDF0(RtGuiView *)
 0042CEE0 void CDefaultPlayerInterface::sub_42CEE0(RtGuiView *, int, int, int)
+0042E590 void CDefaultPlayerInterface::sub_42E590()
 
 # CButton
 0042A160 int __cdecl CButton_render_42A160(CButton *, CDefaultPlayerInterface *)
