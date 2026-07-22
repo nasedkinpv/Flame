@@ -1,5 +1,0 @@
-00:00:03.0850 [inf] unpackResources: compressed 981054
-00:00:03.0919 [inf] unpackResources: decompressed 7734272
-00:00:04.0106 [inf] flameLoaderMain: Flame resources loaded v1.7 Flame build 260719 8762cd6
-00:00:04.0138 [err] connectFlameAndDkii: [-] nothing to replace for symbol ?dk2_start@dk2@@YGHXZ in DKII
-00:00:04.0165 [inf] DllMain: Flame loader succeeded

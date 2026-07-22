@@ -50,7 +50,9 @@ venv.bak/
 /dist/
 .DS_Store
 /macos/native/build/
-/flametal/
+/flame/
+/.hd/
+/.claude/
 **/genlib/*.exp
 **/genlib/*.lib
 **/genlib/*.def
@@ -63,4 +65,6 @@ venv.bak/
 MESSAGE.LOG
 /scratchpad/
 /.porting/
+/.venv/
+*.bak
 /macos/build-on-fs-windows.zsh
