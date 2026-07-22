@@ -459,7 +459,23 @@ int readHolderGuarded(dk2::MyCESurfHandle *handle, const void **holderOut) {
     }
 }
 
+// __renderFun_setSceneObject2E builds the UV scale/offset tables from
+// sceneHandle->curReduction (58A996..58A9CD).  The texture page must come
+// from that same effective handle; using the unreduced handle pairs reduced
+// UVs with a different atlas page and exposes unrelated sprites at far zoom.
+dk2::MyCESurfHandle *currentReductionGuarded(dk2::MyCESurfHandle *handle) {
+    __try {
+        if (!handle) return nullptr;
+        dk2::MyCESurfHandle *reduced = handle->curReduction;
+        const uintptr_t value = reinterpret_cast<uintptr_t>(reduced);
+        return value >= 0x10000u && (value & 3u) == 0 ? reduced : handle;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return handle;
+    }
+}
+
 uint32_t resolveBridgeTextureId(dk2::MyCESurfHandle *slotHandle) {
+    slotHandle = currentReductionGuarded(slotHandle);
     // plausibility gate BEFORE any dereference (guarded or not): garbage
     // handles (e.g. 0x4DC9 from anim scenes) change value every call, so the
     // negative cache never hits and the recovered-SEH storm crashes WOW64.

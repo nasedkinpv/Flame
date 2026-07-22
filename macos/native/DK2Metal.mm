@@ -71,7 +71,7 @@ struct Settings {
     float renderScale = 1.0f;
     bool hdTextures = true;
     // [patches]
-    bool meshGpuPath = true;
+    bool meshGpuPath = false;
     bool shadowCache = true;
     bool debugProbes = false;
     // [debug]

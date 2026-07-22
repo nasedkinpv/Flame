@@ -44,11 +44,12 @@ of the legacy render-state stream.
 
 The old inline experiment was slower than the translated SSE2 CPU transform,
 because it recopied every vertex and issued roughly 1300 small draws each
-frame. Protocol v13 removes that feeding cost and is now the default. DK2's
-terrain subdivision still produces mostly distinct topologies, so instancing
-is opportunistic rather than the main win; retained upload, compact animated
-positions and exact per-draw light selection are the important reductions.
-Set `mesh_gpu_path = false` only for a restart-based A/B against the legacy CPU
+frame. Protocol v13 removes that feeding cost. DK2's terrain subdivision still
+produces mostly distinct topologies, so instancing is opportunistic rather than
+the main win; retained upload, compact animated positions and exact per-draw
+light selection are the important reductions. The retained path remains an
+opt-in parity test while its remaining scene effects are audited; set
+`mesh_gpu_path = true` and restart to compare it with the default legacy CPU
 transform path.
 
 The renderer deliberately uses one `CAMetalLayer`. World geometry and the
@@ -94,7 +95,7 @@ render_scale = 1.0       # fraction of the display's native backing resolution, 
 hd_textures = true
 
 [patches]                # applied on next launch, passed to the game as
-mesh_gpu_path = true      # -gog:MeshGpuPath=/-flametal:ShadowCache=/
+mesh_gpu_path = false     # -gog:MeshGpuPath=/-flametal:ShadowCache=/
 shadow_cache = true       # -flametal:DebugProbes= CLI flags; CPU shadows only
 debug_probes = false
 
@@ -225,9 +226,11 @@ upstream. Pass `-DFLAMETAL_WELCOME_WINDOW=ON` to build it in.
 
 ## Cursor assets
 
-The game cursor is replayed as a final independent Metal quad, so it no longer
-inherits overlay scaling or its black/white matte trail. Original RGBA cursor
-sheets can be derived locally from the user's game for future HD replacements:
+The game cursor is captured at its full strip-frame size and replayed as a
+final independent Metal quad, so it no longer inherits overlay scaling or its
+black/white matte trail. Both keyed capture paths use the same tolerant colour
+key and coverage antialiasing, including the worker-thread menu cursor path.
+Original RGBA cursor sheets can be derived locally from the user's game:
 
 ```sh
 python3 tools/extract_dk2_cursors.py "/path/to/Dungeon Keeper 2" scratchpad/cursors --split-frames
@@ -235,8 +238,11 @@ python3 tools/extract_dk2_cursors.py "/path/to/Dungeon Keeper 2" scratchpad/curs
 
 The command writes the 15 original sheets, split animation frames, hotspots,
 dimensions and hashes. These derived game assets are intentionally not stored
-in the repository. Runtime cursor textures keep participating in the existing
-hash-based `textures-hd` lookup.
+in the repository. `flametal:HDCursorDir` can point at a complete set of
+`cursor_<Name>_f<NN>.png` frames at exactly 4x their original dimensions; the
+loader substitutes the whole strip before DK2's normal scaling and falls back
+to Sprite.WAD if any frame is absent or malformed. Runtime cursor textures also
+keep participating in the existing hash-based `textures-hd` lookup.
 
 ## Isolation and data
 
