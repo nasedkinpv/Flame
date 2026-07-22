@@ -99,3 +99,39 @@ DKII member-fn ABI for "output + operand" methods: **param1 = output (written + 
   - Difftest extended to all 4 AABB methods with output==this/output==other aliasing + operand-untouched assertions.
 
 ### Next: item 6 — AABB::appendPoint `0x00556590` + move `0x005DC2D0`
+
+### Iteration 5 — DONE
+
+- [x] **AABB::appendPoint** `0x00556590` + **move** `0x5DC2D0` — committed `2055283`. 491875 cases.
+  - appendPoint surprise: it TRANSLATES this by the point (add to all 4 fields), not a min/max "grow to include" — name is misleading, disasm is authoritative. Then copies this→output.
+  - move relocates this to (newX,newY) preserving width/height; returns newX (eax). Modular-arithmetic associativity means the delta sub/add grouping is safe.
+  - difftest now covers all 6 AABB methods in one binary.
+
+## 🔁 REFLECTION (iteration 5)
+
+**Accomplished (5 iterations, 7 functions):** Vec3i::add, Vec3d::addVec3d, Pos2i::shiftDiv, AABB::{contains, isIntersects, intersection, getOuter, appendPoint, move}. All with bit-exact difftests (≈7.7M total cases), all committed (6 feat + 1 fix commits).
+
+**Working well:**
+
+- The disasm → reference-model → rewrite → bit-exact-difftest loop is fast and reliable. Every function so far has been a clean integer leaf.
+- Catching the param-order bug in iteration 1 led to the "assert operand untouched" rule — difftests now genuinely discriminate, proven by the deliberately-swapped impl asserting.
+- The standalone idiom-check (Pos2i fixed-point) before writing is a good habit for non-obvious idioms.
+
+**Watch-outs / adjustments:**
+
+- 2/7 function NAMES were misleading (Vec3d is int not double; appendPoint translates instead of grows). Lesson reinforced: trust the disasm, not the symbol name.
+- Integer overflow must use uint32 wraparound to stay bit-exact with x86 and UB-free.
+- LSP "file not found" on the api headers is noise (include path resolves at build); the clang++ difftest build is the real gate.
+
+**Next priorities:** item 7 Vec3i::calcLength (confirm the integer-sqrt algorithm before trusting — may be non-trivial), then item 8 Mat3x3f difftests (high value: harden the existing UNTESTED FP rewrites — no new rewrite, just tests).
+
+### Final verification command (rerunnable from worktree root)
+
+```
+for t in vec3i vec3d pos2i aabb; do
+  clang++ -arch x86_64 -O2 -std=c++17 -I tests/${t}_difftest \
+    -o /tmp/${t}_difftest tests/${t}_difftest/${t}_difftest.cpp && /tmp/${t}_difftest
+done
+```
+
+(Also re-run vec3f_difftest for the pre-existing rewrite.) All print `OK:`.
