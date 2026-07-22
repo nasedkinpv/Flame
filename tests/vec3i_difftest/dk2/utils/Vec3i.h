@@ -7,6 +7,7 @@ namespace dk2 {
 struct Vec3i {
     int32_t x, y, z;
     Vec3i *add(Vec3i *right, Vec3i *output);
+    uint32_t calcLength();
 };
 #pragma pack(pop)
 static_assert(sizeof(Vec3i) == 0xC);

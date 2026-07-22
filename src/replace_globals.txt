@@ -40,6 +40,7 @@
 
 # Vec3i
 00437FE0 Vec3i *Vec3i::add(Vec3i *, Vec3i *)
+00555990 uint32_t Vec3i::calcLength()
 
 # Vec3d
 0040F680 Vec3d *Vec3d::addVec3d(Vec3d *, Vec3d *)
