@@ -200,6 +200,7 @@
 00574200 void __cdecl setGammaRamp(const void *)
 00574310 void __cdecl textureCache_init(float, float, const char *, int)
 00575780 bool __cdecl engine_drawScene(char)
+0065FAE0 uint32_t __cdecl asm_fast_sqrt(uint32_t)
 # Per-mesh frustum culling.  Four side planes are evaluated in parallel while
 # retaining the original sign-bit boundary semantics.  The adjacent 575F10
 # projection implementation uses the same sign-bit boundary checks and now
