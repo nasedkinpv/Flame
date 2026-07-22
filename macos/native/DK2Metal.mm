@@ -966,7 +966,30 @@ struct PageState {
     uint32_t rebuilds = 0;                       // reset by every full upload
     bool dirty = false;
     bool demoted = false;
+    // Generation-churn cooldown: pages whose generation is adopted too often
+    // draw plain 1x until they calm down (self-recovering, unlike demote).
+    uint32_t adoptWindowStart = 0;
+    uint32_t adoptCount = 0;
+    uint32_t cooldownUntilFrame = 0;
 };
+
+// Shared per-frame budget for HD compositions (full-upload path and dirty
+// rebuilds draw from the same pool): composePage is synchronous CPU work
+// inside encode, and generation churn made it flood (encode p95 21.9ms).
+uint32_t &frameNumber() { static uint32_t f = 0; return f; }
+uint32_t &compositionBudget() { static uint32_t b = 0; return b; }
+constexpr uint32_t kAdoptWindowFrames = 120;
+constexpr uint32_t kAdoptChurnThreshold = 4;
+constexpr uint32_t kCooldownFrames = 300;
+
+void beginFrame(uint32_t frame) {
+    frameNumber() = frame;
+    compositionBudget() = kMaxRebuildsPerFrame;
+}
+
+bool pageCooling(const PageState &st) {
+    return st.cooldownUntilFrame && frameNumber() < st.cooldownUntilFrame;
+}
 
 std::unordered_map<uint32_t, PageState> &pages() {
     static std::unordered_map<uint32_t, PageState> map;
@@ -1007,6 +1030,17 @@ id<MTLTexture> resetForNewGeneration(id<MTLDevice> device, uint32_t textureId) {
     st.dirty = false;
     st.demoted = false;
     st.rebuilds = 0;
+    // Churn accounting: too many adoptions in a short window puts the page
+    // on a cooldown during which no HD composition is attempted (it draws
+    // plain 1x); expires by itself, unlike the old demote.
+    const uint32_t frame = frameNumber();
+    if (frame - st.adoptWindowStart > kAdoptWindowFrames) {
+        st.adoptWindowStart = frame;
+        st.adoptCount = 0;
+    }
+    if (++st.adoptCount >= kAdoptChurnThreshold) {
+        st.cooldownUntilFrame = frame + kCooldownFrames;
+    }
     if (!hadComposite || st.pixels1x.empty() || !st.w || !st.h) return nil;
     id<MTLTexture> plain = texhd::createMipmapped(device, st.pixels1x.data(),
                                                   st.w, st.h, textureId);
@@ -1249,9 +1283,21 @@ id<MTLTexture> buildFromUpload(id<MTLDevice> device, uint32_t textureId,
         std::memcpy(st.pixels1x.data() + (size_t)y * width * 4,
                     pixels + (size_t)y * pitch, (size_t)width * 4);
     }
-    st.dirty = false;
     st.rebuilds = 0;
     st.demoted = false;
+    // Cooling pages and budget-exhausted frames skip the synchronous
+    // composition: pixels are stored, the page stays plain for now, and a
+    // deferred rebuild picks it up once budget allows / cooldown expires.
+    if (pageCooling(st) || !compositionBudget()) {
+        // Stay dirty either way: rebuildDirty skips cooling pages without
+        // clearing the flag, so composition resumes when the cooldown
+        // expires or budget frees up.
+        st.dirty = true;
+        st.hdTexture = nil;
+        return nil;
+    }
+    --compositionBudget();
+    st.dirty = false;
     st.hdTexture = composePage(device, textureId, st, packHits);
     return st.hdTexture;
 }
@@ -1317,14 +1363,13 @@ bool applyRectToStored(uint32_t textureId, uint32_t x, uint32_t y,
 void rebuildDirty(id<MTLDevice> device, uint32_t *packHits,
                   const std::unordered_set<uint32_t> &suspended,
                   void (^bind)(uint32_t textureId, id<MTLTexture> texture)) {
-    uint32_t budget = kMaxRebuildsPerFrame;
     for (auto &kv : pages()) {
-        if (!budget) break;
+        if (!compositionBudget()) break;
         PageState &st = kv.second;
         if (!st.dirty || st.pixels1x.empty() || st.demoted) continue;
-        if (suspended.contains(kv.first)) continue;
+        if (suspended.contains(kv.first) || pageCooling(st)) continue;
         st.dirty = false;
-        --budget;
+        --compositionBudget();
         if (++st.rebuilds > kDemoteRebuilds) {
             st.demoted = true;
             id<MTLTexture> plain = texhd::createMipmapped(
@@ -3242,6 +3287,7 @@ static void *renderWorker(void *context) {
             }
         }
 
+        respack::beginFrame(static_cast<uint32_t>(_frame));
         // v15 generation adoption. Returns true when a command stamped with
         // `generation` for `textureId` should be applied. gen 0 = the texture
         // never repacks (legacy/simple textures) and bypasses the machinery.
@@ -3281,8 +3327,15 @@ static void *renderWorker(void *context) {
                     _textures.erase(texIt);
                 }
             }
-            _shadowTwins.erase(textureId);
-            _textures.erase(textureId | kShadowTwinIdBit);
+            // Twin lifetime follows RESET adoptions only. A newer-generation
+            // pixel update/map/mask arriving first (its reset lost or later
+            // in the stream) must not kill the twin that this same frame's
+            // masks are about to build - or just built (masks precede the
+            // draw encode; per stream order RESET(N+1) precedes masks(N+1)).
+            if (isReset) {
+                _shadowTwins.erase(textureId);
+                _textures.erase(textureId | kShadowTwinIdBit);
+            }
             return true;
         };
 

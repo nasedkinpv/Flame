@@ -11,10 +11,13 @@
 #include <metal_bridge/DK2BridgeProtocol.h>
 #include <metal_bridge/MetalBridgeProducer.h>
 
+#include "patches/logging.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <emmintrin.h>
 #include <limits>
+#include <unordered_map>
 #include <vector>
 
 
@@ -33,6 +36,31 @@ struct GpuShadowBatch {
 };
 
 GpuShadowBatch g_gpuBatch;
+
+// Retained per-handle mask geometry, mirroring the engine's own design: the
+// original keeps baked coverage in the handle's scratch surface and re-blits
+// it on every repack repaint, so mask content survives layout changes and
+// generation bumps without a rebake. The GPU path leaves the scratch blank,
+// so retain the triangles here and RE-EMIT them (at the handle's current,
+// already-updated placement -> fresh generation) whenever the engine
+// repaints a handle we baked. Bounded by the ring + blob cache population.
+// Lookups happen only with the handle as `this` inside paint(), so a stored
+// pointer is never dereferenced stale.
+struct RetainedMask {
+    uint32_t mode = 0;
+    std::vector<DK2MShadowTriangle> triangles;
+};
+std::unordered_map<dk2::MyCESurfHandle *, RetainedMask> g_retainedMasks;
+int g_retainedPoolCount = -1;  // MyEntryBuf count; change = pool churn, drop all
+uint32_t g_maskReemits = 0;
+
+void retainedPoolGuard() {
+    const int count = dk2::MyEntryBuf_MyScaledSurface_instance.count;
+    if (count != g_retainedPoolCount) {
+        g_retainedPoolCount = count;
+        g_retainedMasks.clear();
+    }
+}
 
 dk2::MyCESurfHandle *currentShadowHandle() {
     const int index = dk2::shadows_dword_780E6C;
@@ -205,6 +233,39 @@ bool dk2::shadowgpu::finishIfCurrent(MyCESurfHandle *handle, const MySurface *so
             g_gpuBatch.surfaceIndex != dk2::shadows_dword_780E6C) {
             clearGpuBatch();
         }
+        // Repack repaint of a handle we baked: the engine re-blits the
+        // handle's scratch into its (possibly new) placement, but the GPU
+        // path keeps that scratch blank. Re-emit the retained triangles at
+        // the CURRENT placement - which also stamps the page's fresh
+        // post-repack generation. Without this, every bake whose page
+        // repacks later in the same frame is dropped as a stale generation
+        // (measured 80% of masks on Level1), and the decals draw against an
+        // empty twin: the residual shadow flicker.
+        if (handle && active() && !g_retainedMasks.empty()) {
+            const auto retained = g_retainedMasks.find(handle);
+            if (retained != g_retainedMasks.end() && usableGpuTarget(handle)) {
+                SurfaceHolder *holder = handle->holder_parent;
+                auto *page = reinterpret_cast<CEngineDDSurface *>(holder->surf);
+                const uint32_t x = handle->x8;
+                const uint32_t y = handle->y8;
+                const uint32_t width = handle->surfWidth8;
+                const uint32_t height = handle->surfHeight8;
+                if (x + width <= static_cast<uint32_t>(holder->surf->width) &&
+                    y + height <= static_cast<uint32_t>(holder->surf->height)) {
+                    const RetainedMask &mask = retained->second;
+                    gog::metal_bridge::shadowMaskCaptured(
+                        page->ddSurf, x, y, width, height,
+                        mask.triangles.empty() ? nullptr : mask.triangles.data(),
+                        static_cast<uint32_t>(mask.triangles.size()), mask.mode);
+                    if ((++g_maskReemits % 500) == 1) {
+                        patch::log::dbg("shadowgpu: repaint re-emits=%u retained=%u",
+                                        g_maskReemits,
+                                        (unsigned) g_retainedMasks.size());
+                    }
+                    return true;  // mask delivered; the blank CPU blit may proceed
+                }
+            }
+        }
         return false;
     }
 
@@ -251,6 +312,16 @@ bool dk2::shadowgpu::finishIfCurrent(MyCESurfHandle *handle, const MySurface *so
                 ? static_cast<uint32_t>(captured->size()) : 0;
             gog::metal_bridge::shadowMaskCaptured(
                 page->ddSurf, x, y, width, height, triangles, triangleCount, mode);
+            // Retain for repack repaints (see the early-return path above).
+            retainedPoolGuard();
+            if (g_retainedMasks.size() > 256) g_retainedMasks.clear();
+            RetainedMask &retained = g_retainedMasks[handle];
+            retained.mode = mode;
+            if (triangles) {
+                retained.triangles.assign(triangles, triangles + triangleCount);
+            } else {
+                retained.triangles.clear();
+            }
         } else {
             // No resolvable target this bake: fall back to the CPU raster so
             // the shadow is not silently dropped.
