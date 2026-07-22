@@ -1602,6 +1602,7 @@ struct FrameMetrics {
     uint32_t missingTextures = 0;
     uint32_t bindingOverflows = 0;
     uint32_t invalidDraws = 0;
+    uint32_t invSize = 0, invVtxBuf = 0, invIdxBuf = 0, invDrawCap = 0, invOther = 0;
     uint32_t meshInstances = 0;
     uint32_t meshUnique = 0;
     uint32_t meshBatches = 0;
@@ -1663,6 +1664,7 @@ public:
         NSLog(@"PERF host us p50/p95/p99: encode=%u/%u/%u drawable-wait=%u/%u/%u "
                "gpu-wait=%u/%u/%u gpu-complete=%u/%u/%u; diagnostics totals: "
                "fvf1=%llu fvf2=%llu missing-texture=%llu binding-overflow=%llu invalid-draw=%llu "
+               "inv(size/vtx/idx/cap/other)=%llu/%llu/%llu/%llu/%llu "
                "pack-maps(accepted/received)=%llu/%llu pack-hits=%llu "
                "gen(adopted/stale-dropped)=%llu/%llu",
               p(&FrameMetrics::encodeUs, 50), p(&FrameMetrics::encodeUs, 95),
@@ -1673,7 +1675,10 @@ public:
               p(&FrameMetrics::gpuCompleteUs, 95), p(&FrameMetrics::gpuCompleteUs, 99),
               total(&FrameMetrics::fvf1Draws), total(&FrameMetrics::fvf2Draws),
               total(&FrameMetrics::missingTextures), total(&FrameMetrics::bindingOverflows),
-              total(&FrameMetrics::invalidDraws), total(&FrameMetrics::packMappedRects),
+              total(&FrameMetrics::invalidDraws),
+              total(&FrameMetrics::invSize), total(&FrameMetrics::invVtxBuf),
+              total(&FrameMetrics::invIdxBuf), total(&FrameMetrics::invDrawCap),
+              total(&FrameMetrics::invOther), total(&FrameMetrics::packMappedRects),
               total(&FrameMetrics::packMapCommands), total(&FrameMetrics::packHits),
               total(&FrameMetrics::generationsAdopted),
               total(&FrameMetrics::staleGenDropped));
@@ -4971,6 +4976,12 @@ static void *renderWorker(void *context) {
                         ++drawUniformCount;
                     } else {
                         ++metrics.invalidDraws;
+                        // bring-up: which guard clause dropped this legacy draw?
+                        if (!(bridgeVertexSize && expected <= view.size)) ++metrics.invSize;
+                        else if (alignedVertexOffset + vertexBytes > kVertexBufferSize) ++metrics.invVtxBuf;
+                        else if (indexOffset + indexBytes > kIndexBufferSize) ++metrics.invIdxBuf;
+                        else if (drawUniformCount >= kMaxDrawsPerFrame) ++metrics.invDrawCap;
+                        else ++metrics.invOther;
                     }
                 }
             }
