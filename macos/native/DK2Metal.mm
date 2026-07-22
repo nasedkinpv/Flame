@@ -1005,6 +1005,34 @@ struct ComposeStats { uint32_t noDir=0, noPixels=0, noRects=0, dimMismatch=0,
                       noApplied=0, ok=0; };
 inline ComposeStats &composeStats() { static ComposeStats s; return s; }
 
+// HD toggled OFF: every page that ever held an HD composite still has its
+// 4x texture bound in _textures (pageReset only nils st.hdTexture and orphans
+// the binding, and rebuildDirty's revert is budget-limited and skips pages
+// whose st.hdTexture was already cleared). Left alone, those stale 4x pages
+// sample at the wrong scale -> the black holes seen only after toggling the
+// pack off. Synchronously rebind every page to a plain 1x texture (or drop
+// the binding so the next upload recreates it), bypassing the frame budget.
+void revertAllToPlain(id<MTLDevice> device,
+                      void (^bind)(uint32_t textureId, id<MTLTexture> texture),
+                      void (^unbind)(uint32_t textureId)) {
+    for (auto &kv : pages()) {
+        PageState &st = kv.second;
+        st.hdTexture = nil;
+        st.dirty = false;
+        st.demoted = false;
+        st.rebuilds = 0;
+        if (st.pixels1x.empty() || !st.w || !st.h ||
+            st.pixels1x.size() != (size_t)st.w * st.h * 4) {
+            unbind(kv.first);  // no valid snapshot: next upload rebuilds it
+            continue;
+        }
+        id<MTLTexture> plain = texhd::createMipmapped(
+                device, st.pixels1x.data(), st.w, st.h, kv.first);
+        if (plain) bind(kv.first, plain);
+        else unbind(kv.first);
+    }
+}
+
 // Periodic dump of why composePage returned nil (HD-holes bring-up).
 void reportComposeStats() {
     ComposeStats &s = composeStats();
@@ -3290,6 +3318,16 @@ static void *renderWorker(void *context) {
         if (hdTexturesLive != _hdTexturesLive) {
             _hdTexturesLive = hdTexturesLive;
             respack::liveStateChanged();
+            if (!hdTexturesLive) {
+                // Full synchronous revert so no stale 4x HD page lingers
+                // (the toggle-off black holes). On is fine budgeted - it
+                // upgrades plain->HD, never leaves anything invalid.
+                respack::revertAllToPlain(_device,
+                    ^(uint32_t textureId, id<MTLTexture> texture) {
+                        if (texture) _textures[textureId] = texture;
+                    },
+                    ^(uint32_t textureId) { _textures.erase(textureId); });
+            }
             NSLog(@"DK2 resource pack: live %@; %zu mapped pages scheduled for refresh",
                   hdTexturesLive ? @"on" : @"off", respack::pages().size());
         }
