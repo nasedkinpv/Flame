@@ -1000,6 +1000,24 @@ private:
             for (auto &entry : shadowMasks_) {
                 entry.second.lastSentGeneration = entry.second.generation;
             }
+            // Metal resolves shadow masks into the host's copy of these atlas
+            // pages; the producer's CPU cache never sees those writes.  On a
+            // live switch back to CPU shadows, force the original page bytes
+            // across even when normal content dedup says they are unchanged.
+            // Otherwise the host keeps sampling stale GPU masks (or whatever
+            // atlas content later reused their slots).
+            for (uint32_t textureId : shadowTextureIds_) {
+                const auto found = textures_.find(textureId);
+                if (found == textures_.end()) continue;
+                TextureCache &texture = found->second;
+                texture.pending = true;
+                texture.dirty = true;
+                texture.sentInCurrentFrame = false;
+                texture.lastSentFrame = 0;
+            }
+            gog_debugf("metal shadows bridge: restoring %u CPU atlas page(s)",
+                       static_cast<unsigned>(shadowTextureIds_.size()));
+            shadowTextureIds_.clear();
         }
     }
 
@@ -1247,6 +1265,48 @@ private:
         current = std::move(updated);
     }
 
+    // Coverage antialiasing shared by both cursor capture paths: alpha
+    // becomes the 3x3 neighbourhood coverage of the binary key mask and
+    // edge pixels inherit their opaque neighbours' average colour, so the
+    // keyed contour samples smoothly instead of a hard staircase.
+    static void coverageAntialiasCursor(std::vector<uint8_t> &px,
+                                        uint32_t width, uint32_t height) {
+        const size_t pixelCount = static_cast<size_t>(width) * height;
+        if (!pixelCount || px.size() < pixelCount * 4) return;
+        std::vector<uint8_t> mask(pixelCount);
+        for (size_t i = 0; i < pixelCount; ++i) mask[i] = px[i * 4 + 3] ? 1 : 0;
+        std::vector<uint8_t> alphaOut(pixelCount);
+        for (uint32_t y = 0; y < height; ++y) {
+            for (uint32_t x = 0; x < width; ++x) {
+                const size_t idx = static_cast<size_t>(y) * width + x;
+                uint32_t covered = 0, total = 0, r = 0, g = 0, b = 0;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    const int ny = static_cast<int>(y) + dy;
+                    if (ny < 0 || ny >= static_cast<int>(height)) continue;
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int nx = static_cast<int>(x) + dx;
+                        if (nx < 0 || nx >= static_cast<int>(width)) continue;
+                        ++total;
+                        const size_t nidx = static_cast<size_t>(ny) * width + nx;
+                        if (!mask[nidx]) continue;
+                        ++covered;
+                        r += px[nidx * 4 + 2];
+                        g += px[nidx * 4 + 1];
+                        b += px[nidx * 4 + 0];
+                    }
+                }
+                if (!covered) { alphaOut[idx] = 0; continue; }
+                alphaOut[idx] = static_cast<uint8_t>(covered * 255u / total);
+                if (!mask[idx]) {
+                    px[idx * 4 + 2] = static_cast<uint8_t>(r / covered);
+                    px[idx * 4 + 1] = static_cast<uint8_t>(g / covered);
+                    px[idx * 4 + 0] = static_cast<uint8_t>(b / covered);
+                }
+            }
+        }
+        for (size_t i = 0; i < pixelCount; ++i) px[i * 4 + 3] = alphaOut[i];
+    }
+
     static bool captureCursor(IDirectDrawSurface4 *destination, DWORD x, DWORD y,
                               IDirectDrawSurface4 *source, const RECT *sourceRect,
                               CursorSnapshot &cursor) {
@@ -1302,10 +1362,21 @@ private:
                 const uint32_t raw = srcPixels[column];
                 const uint32_t rgb = raw & rgbMask;
                 std::memcpy(out + column * 4, &raw, 3);
-                out[column * 4 + 3] = rgb >= keyLow && rgb <= keyHigh ? 0 : 0xFF;
+                if (rgb >= keyLow && rgb <= keyHigh) {
+                    out[column * 4 + 3] = 0;
+                    continue;
+                }
+                // near-key tolerance: scaling bleeds the key colour into
+                // edge pixels (green halo on the menu pointer)
+                const int dr = ((rgb >> 16) & 0xFF) - ((keyLow >> 16) & 0xFF);
+                const int dg = ((rgb >> 8) & 0xFF) - ((keyLow >> 8) & 0xFF);
+                const int db = (rgb & 0xFF) - (keyLow & 0xFF);
+                out[column * 4 + 3] =
+                    (dr * dr + dg * dg + db * db) < 24 * 24 ? 0 : 0xFF;
             }
         }
         source->Unlock(&src);
+        coverageAntialiasCursor(cursor.pixels, width, height);
 
         DDSURFACEDESC2 destinationLock = {};
         destinationLock.dwSize = sizeof(destinationLock);
@@ -1390,47 +1461,7 @@ private:
             }
         }
         source->Unlock(&rect);
-        // Coverage antialiasing for the keyed silhouette: alpha becomes the
-        // 3x3 neighbourhood coverage of the binary mask, so the contour gets
-        // fractional edge pixels instead of a hard staircase. Transparent
-        // pixels that gain partial coverage inherit the average colour of
-        // their opaque neighbours - without that the key colour would fringe
-        // right back in through linear sampling.
-        std::vector<uint8_t> &px = cursor.pixels;
-        const size_t pixelCount = static_cast<size_t>(width) * height;
-        std::vector<uint8_t> mask(pixelCount);
-        for (size_t i = 0; i < pixelCount; ++i) mask[i] = px[i * 4 + 3] ? 1 : 0;
-        std::vector<uint8_t> alphaOut(pixelCount);
-        for (uint32_t y = 0; y < height; ++y) {
-            for (uint32_t x = 0; x < width; ++x) {
-                const size_t idx = static_cast<size_t>(y) * width + x;
-                uint32_t covered = 0, total = 0;
-                uint32_t r = 0, g = 0, b = 0;
-                for (int dy = -1; dy <= 1; ++dy) {
-                    const int ny = static_cast<int>(y) + dy;
-                    if (ny < 0 || ny >= static_cast<int>(height)) continue;
-                    for (int dx = -1; dx <= 1; ++dx) {
-                        const int nx = static_cast<int>(x) + dx;
-                        if (nx < 0 || nx >= static_cast<int>(width)) continue;
-                        ++total;
-                        const size_t nidx = static_cast<size_t>(ny) * width + nx;
-                        if (!mask[nidx]) continue;
-                        ++covered;
-                        r += px[nidx * 4 + 2];
-                        g += px[nidx * 4 + 1];
-                        b += px[nidx * 4 + 0];
-                    }
-                }
-                if (!covered) { alphaOut[idx] = 0; continue; }
-                alphaOut[idx] = static_cast<uint8_t>(covered * 255u / total);
-                if (!mask[idx]) {
-                    px[idx * 4 + 2] = static_cast<uint8_t>(r / covered);
-                    px[idx * 4 + 1] = static_cast<uint8_t>(g / covered);
-                    px[idx * 4 + 0] = static_cast<uint8_t>(b / covered);
-                }
-            }
-        }
-        for (size_t i = 0; i < pixelCount; ++i) px[i * 4 + 3] = alphaOut[i];
+        coverageAntialiasCursor(cursor.pixels, width, height);
         return true;
     }
 
@@ -1666,6 +1697,7 @@ private:
                 append(state.triangles.data(), static_cast<uint32_t>(triangleBytes));
             }
             ++commandCount_;
+            shadowTextureIds_.insert(textureId);
             state.lastSentGeneration = state.generation;
         }
     }
@@ -2317,6 +2349,7 @@ private:
         uint32_t lastSentGeneration = 0;
     };
     std::unordered_map<uintptr_t, ShadowMaskState> shadowMasks_;
+    std::unordered_set<uint32_t> shadowTextureIds_;
     std::atomic<bool> metalShadowsEnabled_{false};
     struct MeshState {
         std::vector<uint8_t> blob;  // serialized DK2MMeshRegisterCommand + payload
