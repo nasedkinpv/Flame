@@ -83,3 +83,11 @@ DKII member-fn ABI for "output + operand" methods: **param1 = output (written + 
   - x86 `idiv` faults (#DE) on divisor==0 or quotient overflow; test stays in `|v|<=32767` so quotients fit int32 (both orig & rewrite fault identically outside that).
 
 ### Next: item 4 — AABB::contains `0x0052D3A0` + isIntersects `0x005B7050`
+
+### Iteration 3 — DONE
+
+- [x] **AABB::contains** `0x0052D3A0` + **isIntersects** `0x005B7050` — committed `a39446c`. 390706 box-pairs.
+  - Both pure integer predicates, BOOL (0/1), ret 4, read-only (no output/aliasing concern). contains = full enclosure (this.min≤other.min && this.max≥other.max per axis); isIntersects = inclusive overlap (touching edges count). Confirmed signed `jg`/`jl` → `<=`/`>=` mapping from disasm.
+  - Grid allows degenerate boxes (min>max) and INT32 extremes to stress the comparisons.
+
+### Next: item 5 — AABB::intersection `0x005B6FD0` + getOuter `0x005B7090` (min/max)

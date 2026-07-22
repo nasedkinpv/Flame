@@ -9,6 +9,8 @@ struct AABB {
     int32_t minX, minY, maxX, maxY;
     BOOL contains(AABB *other);
     BOOL isIntersects(AABB *other);
+    AABB *intersection(AABB *output, AABB *other);
+    AABB *getOuter(AABB *output, AABB *other);
 };
 #pragma pack(pop)
 static_assert(sizeof(AABB) == 0x10);
