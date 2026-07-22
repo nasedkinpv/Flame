@@ -1836,8 +1836,14 @@ struct DrawUniform {
     uint32_t worldGeometry;
 };
 
-constexpr NSUInteger kVertexBufferSize = 2 * 1024 * 1024;
-constexpr NSUInteger kIndexBufferSize = 512 * 1024;
+// Per-slot legacy DRAW_INDEXED scratch. 2 MiB (~74k vertices) overflowed
+// mid-frame in dense built-up dungeon views (~3000 draws/frame), dropping the
+// remainder of the frame's geometry so world tiles/textures visibly fell out.
+// 16 MiB (~590k vertices) gives generous headroom; index buffer kept at the
+// same 4:1 ratio so it never becomes the new bottleneck. Cost: 3 slots x
+// (16+4) MiB = 60 MiB, negligible on Apple Silicon.
+constexpr NSUInteger kVertexBufferSize = 16 * 1024 * 1024;
+constexpr NSUInteger kIndexBufferSize = 4 * 1024 * 1024;
 constexpr NSUInteger kMaxDrawsPerFrame = 4096;
 constexpr NSUInteger kDrawBufferSize = kMaxDrawsPerFrame * sizeof(DrawUniform);
 // Metal exposes at most 128 textures through one shader argument table, so
