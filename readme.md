@@ -8,9 +8,9 @@
 
 ![Dungeon Keeper 2 gameplay with the Metal performance HUD](docs/screenshot-gameplay-performance.jpg)
 
-Dungeon Keeper 2 running natively on Apple Silicon. Flametal is a preservation fork of [DiaLight/Flame](https://github.com/DiaLight/Flame): the game's original 32-bit simulation runs isolated in Wine, while a native AppKit/Metal 4 host renders its captured Direct3D 3 command stream — no WineD3D, real fullscreen, native input, display-aspect matching, optional HD textures.
+Flametal is a preservation project for Dungeon Keeper 2 on modern Apple Silicon Macs. Built on [DiaLight's Flame](https://github.com/DiaLight/Flame) decompilation and patching framework, it keeps the original 32-bit game simulation in an isolated Wine process while moving rendering, presentation, and input to a native AppKit/Metal 4 host. WineD3D is not used; Flametal provides real fullscreen, display-aware scaling, native input, bloom, projected Metal shadows, and optional HD textures.
 
-No game data is included or distributed. A legally obtained Dungeon Keeper 2 (GOG 1.7) copy is required.
+Flametal ships no game data. A legally obtained Dungeon Keeper 2 (GOG 1.7) copy is required.
 
 ## Install (macOS, Apple Silicon)
 
@@ -25,7 +25,7 @@ For Windows, use the upstream [Flame releases](https://github.com/DiaLight/Flame
 
 Note: saves and network sessions between Flame/Flametal and unpatched Dungeon Keeper 2 are [incompatible](https://github.com/DiaLight/Flame/issues/57) (`-original-compatible` disables the incompatible patches).
 
-Bugs: [GitHub issues](https://github.com/nasedkinpv/Flametal/issues), with reproduction steps when possible.
+Report bugs through [GitHub issues](https://github.com/nasedkinpv/Flametal/issues), with reproduction steps when possible.
 
 ## Why this approach
 
