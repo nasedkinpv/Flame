@@ -130,7 +130,7 @@ if [[ "${DK2_RUNNER_MODE}" == packaged ]]; then
       PATH='/usr/bin:/bin' \
       USER="${USER}" LOGNAME="${LOGNAME:-${USER}}" LANG='en_US.UTF-8' TMPDIR='/tmp' \
       WINEPREFIX="${PREFIX}" WINEDEBUG="${DK2_WINEDEBUG:--all}" \
-      WINEDLLOVERRIDES='dinput=b;winedbg.exe=d;mscoree,mshtml=' \
+      WINEDLLOVERRIDES='dinput=b;winedbg.exe=d;mscoree,mshtml=;wined3d,opengl32=;d3d8,d3d9,d3d10,d3d11,dxgi=' \
       DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
       DK2_HEADLESS_DDRAW="${HEADLESS_DDRAW}" \
       "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
@@ -165,7 +165,7 @@ else
     PATH='/usr/bin:/bin' \
     USER="${USER}" LOGNAME="${LOGNAME:-${USER}}" LANG='en_US.UTF-8' TMPDIR='/tmp' \
     WINEPREFIX="${PREFIX}" WINEDEBUG="${DK2_WINEDEBUG:--all}" \
-    WINEDLLOVERRIDES='dinput=b;winedbg.exe=d;mscoree,mshtml=' \
+    WINEDLLOVERRIDES='dinput=b;winedbg.exe=d;mscoree,mshtml=;wined3d,opengl32=;d3d8,d3d9,d3d10,d3d11,dxgi=' \
     DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
     DK2_HEADLESS_DDRAW="${HEADLESS_DDRAW}" \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
