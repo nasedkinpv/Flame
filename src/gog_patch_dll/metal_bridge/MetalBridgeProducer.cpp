@@ -274,8 +274,21 @@ public:
                 return DK2M_DRAW_INDEXED_SHADOW_DECAL;
             }
         }
+        // bring-up diagnostics: candidate draws that bind a shadow page but
+        // matched no rect - log the first few UV boxes with the known rects
+        if (decalMissLogged_ < 8) {
+            ++decalMissLogged_;
+            const ShadowMaskRect *first =
+                rectsIt->second.empty() ? nullptr : &rectsIt->second.front();
+            gog_debugf("decal-miss: tex=%u uvbox=(%.1f,%.1f)-(%.1f,%.1f) rects=%zu first=(%u,%u %ux%u) verts=%u fvf=%x",
+                       textureId, x0, y0, x1, y1, rectsIt->second.size(),
+                       first ? first->x : 0, first ? first->y : 0,
+                       first ? first->w : 0, first ? first->h : 0,
+                       vertexCount, fvf);
+        }
         return 0;
     }
+    mutable uint32_t decalMissLogged_ = 0;
 
     void draw(DWORD fvf, const void *vertices, DWORD vertexCount,
               const WORD *indices, DWORD indexCount, DWORD flags) {
