@@ -42,7 +42,10 @@ constexpr uint16_t fastSqrtByHighestBit[32] = {
 
 }  // namespace
 
-uint32_t asm_fast_sqrt(uint32_t n) {
+// Explicit __cdecl: this is a free function, so the project's default /Gz
+// (stdcall) would mangle it YG..., but the replace-map connector for
+// 0x0065FAE0 expects __cdecl (YA...). Without this the DLL fails to link.
+uint32_t __cdecl asm_fast_sqrt(uint32_t n) {
     if (n == 0) return 0;
     uint32_t x = fastSqrtByHighestBit[bsr32(n)];
     for (;;) {

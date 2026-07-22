@@ -8,7 +8,7 @@
 
 // Defined in asm_fast_sqrt.cpp (DKII 0x0065FAE0); native integer floor-sqrt.
 namespace dk2 {
-uint32_t asm_fast_sqrt(uint32_t);
+uint32_t __cdecl asm_fast_sqrt(uint32_t);  // __cdecl: matches the replace-map connector
 }
 
 dk2::Vec3i *dk2::Vec3i::add(Vec3i *output, Vec3i *right) {
