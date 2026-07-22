@@ -5547,6 +5547,22 @@ static void *renderWorker(void *context) {
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        // Host log file sink. Launched through `open -W`, our stdout/stderr is
+        // detached and NSLog never reaches the unified log under the GPTK/Wine
+        // context either, so mirror stderr (where NSLog writes) to a file next
+        // to the game log. Truncated per launch; tail it to read PERF/pack/gen
+        // telemetry. Disable with DK2_METAL_HOST_LOG=0.
+        if (![@"0" isEqualToString:[[NSProcessInfo processInfo].environment[@"DK2_METAL_HOST_LOG"] ?: @"1" copy]]) {
+            NSString *logDir = [NSHomeDirectory()
+                stringByAppendingPathComponent:@"Library/Logs/Dungeon Keeper II"];
+            [[NSFileManager defaultManager] createDirectoryAtPath:logDir
+                                      withIntermediateDirectories:YES
+                                                       attributes:nil error:nil];
+            NSString *logPath = [logDir stringByAppendingPathComponent:@"host.log"];
+            freopen(logPath.fileSystemRepresentation, "w", stderr);
+            setvbuf(stderr, nullptr, _IOLBF, 0);  // line-buffered so tail -f is live
+            NSLog(@"DK2 host log sink active: %@", logPath);
+        }
         for (int index = 1; index < argc; ++index) {
             NSString *argument = [NSString stringWithUTF8String:argv[index]];
             if ([argument hasPrefix:@"--self-test-frames="]) {
