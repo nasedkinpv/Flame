@@ -3504,12 +3504,20 @@ static void *renderWorker(void *context) {
                     std::memcpy(&textureUpdate, snapshot->bytes.data() + offset, sizeof(textureUpdate));
                     const size_t expected = sizeof(textureUpdate) + textureUpdate.data_size;
                     const uint32_t key = textureUpdate.texture_id;
+                    // A page's pixels are last-writer-wins by stream order, so
+                    // NEVER gate the raw bytes on generation: the game wouldn't
+                    // upload pixels it doesn't want shown, and the shared LRU
+                    // atlas repacks ~40k times per session, so gating dropped
+                    // legitimate animated-texture (water) frames. adoptGeneration
+                    // still runs for its side effect (a newer generation retires
+                    // the stale HD composite / shadow twin) but its verdict does
+                    // not decide whether the pixels apply.
                     if (textureUpdate.texture_id && expected <= view.size &&
                         textureUpdate.width && textureUpdate.height &&
                         textureUpdate.row_pitch >= textureUpdate.width * 4 &&
                         textureUpdate.data_size >= textureUpdate.row_pitch * textureUpdate.height &&
-                        adoptGeneration(textureUpdate.texture_id,
-                                        textureUpdate.generation, false)) {
+                        (adoptGeneration(textureUpdate.texture_id,
+                                         textureUpdate.generation, false), true)) {
                         ++metrics.textureUpdates;
                         metrics.textureBytes += textureUpdate.data_size;
                         const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
@@ -3664,8 +3672,11 @@ static void *renderWorker(void *context) {
                         textureUpdate.row_pitch >= textureUpdate.width * 4 &&
                         textureUpdate.data_size >=
                             static_cast<uint64_t>(textureUpdate.row_pitch) * textureUpdate.height &&
-                        adoptGeneration(textureUpdate.texture_id,
-                                        textureUpdate.generation, false)) {
+                        // Pixels are last-writer-wins, never gated (see the
+                        // full TEXTURE_UPDATE note above); adoptGeneration runs
+                        // only for its composite/twin-retirement side effect.
+                        (adoptGeneration(textureUpdate.texture_id,
+                                         textureUpdate.generation, false), true)) {
                         ++metrics.textureUpdates;
                         metrics.textureBytes += textureUpdate.data_size;
                         const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
