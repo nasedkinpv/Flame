@@ -1,11 +1,8 @@
 # Flametal
 
-![Dungeon Keeper 2 running natively on Apple Silicon](docs/screenshot-gameplay.jpg)
+![Dungeon Keeper 2 running natively on Apple Silicon](docs/screenshot-gameplay-hero.jpg)
 
-<p align="center">
-  <img src="docs/screenshot-gameplay-performance.jpg" width="49%" alt="Dungeon Keeper 2 gameplay with the Metal performance HUD">
-  <img src="docs/screenshot-gameplay-memory.jpg" width="49%" alt="Dungeon Keeper 2 memory and performance baseline on Apple Silicon">
-</p>
+![Dungeon Keeper 2 gameplay with the Metal performance HUD](docs/screenshot-gameplay-performance.jpg)
 
 Dungeon Keeper 2 running natively on Apple Silicon. Flametal is a preservation fork of [DiaLight/Flame](https://github.com/DiaLight/Flame): the game's original 32-bit simulation runs isolated in Wine, while a native AppKit/Metal 4 host renders its captured Direct3D 3 command stream — no WineD3D, real fullscreen, native input, display-aspect matching, optional HD textures.
 
