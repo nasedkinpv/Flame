@@ -249,7 +249,16 @@ public:
     // wraps the submission of all-shadow ToDraw batches (every object's
     // f2C_ >= 0x7D0) in shadowDecalScope(true/false); draws emitted inside
     // the scope carry the flag. No page or UV guessing.
-    void shadowDecalScope(bool active) { shadowDecalScope_ = active; }
+    void shadowDecalScope(bool active) {
+        shadowDecalScope_ = active;
+        // bring-up: does the scope ever open, and do draws land inside it?
+        if (active && (++scopeOpens_ % 500) == 1) {
+            gog_debugf("shadow-decal: scope opens=%u draws-inside=%u",
+                       scopeOpens_, scopeDraws_);
+        }
+    }
+    uint32_t scopeOpens_ = 0;
+    uint32_t scopeDraws_ = 0;
 
     void noteMixedShadowBatch() {
         if ((++mixedShadowBatches_ % 100) == 1) {
@@ -278,6 +287,7 @@ public:
         command.fvf = fvf;
         command.vertex_count = vertexCount;
         command.index_count = indexCount;
+        if (shadowDecalScope_) ++scopeDraws_;
         command.flags = flags |
                         (shadowDecalScope_ ? DK2M_DRAW_INDEXED_SHADOW_DECAL : 0u);
         append(&command, sizeof(command));
