@@ -91,3 +91,11 @@ DKII member-fn ABI for "output + operand" methods: **param1 = output (written + 
   - Grid allows degenerate boxes (min>max) and INT32 extremes to stress the comparisons.
 
 ### Next: item 5 — AABB::intersection `0x005B6FD0` + getOuter `0x005B7090` (min/max)
+
+### Iteration 4 — DONE
+
+- [x] **AABB::intersection** `0x005B6FD0` + **getOuter** `0x005B7090` — committed `23238f9`. 390625 box-pairs.
+  - Both min/max integer leaves, param1=output/param2=other. intersection clamps `max = max(max, min)` per axis (disjoint boxes → zero-size boundary box); getOuter is plain union (no clamp). Traced the pointer-swap min/max selection trick carefully.
+  - Difftest extended to all 4 AABB methods with output==this/output==other aliasing + operand-untouched assertions.
+
+### Next: item 6 — AABB::appendPoint `0x00556590` + move `0x005DC2D0`

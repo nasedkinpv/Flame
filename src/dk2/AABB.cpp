@@ -45,3 +45,31 @@ dk2::AABB *dk2::AABB::getOuter(AABB *output, AABB *other) {
     output->maxY = std::max(maxY, other->maxY);
     return output;
 }
+
+// 0x00556590: translate this by point (add point to all 4 fields — NOT a
+// min/max grow despite the name), then copy this to output. param1=output
+// (copied, returned), param2=point. this mutated. Two's-complement wraparound.
+dk2::AABB *dk2::AABB::appendPoint(AABB *output, tagPOINT *point) {
+    const int32_t px = point->x;
+    const int32_t py = point->y;
+    minX = static_cast<int32_t>(static_cast<uint32_t>(minX) + static_cast<uint32_t>(px));
+    minY = static_cast<int32_t>(static_cast<uint32_t>(minY) + static_cast<uint32_t>(py));
+    maxX = static_cast<int32_t>(static_cast<uint32_t>(maxX) + static_cast<uint32_t>(px));
+    maxY = static_cast<int32_t>(static_cast<uint32_t>(maxY) + static_cast<uint32_t>(py));
+    *output = *this;
+    return output;
+}
+
+// 0x005DC2D0: move this so minX->newX, minY->newY, preserving width/height
+// (maxX += newX - minX, maxY += newY - minY). Returns newX (eax in original).
+// this mutated in place. Modular arithmetic is associative, so the delta
+// computation matches x86 sub/add regardless of grouping.
+int dk2::AABB::move(int newX, int newY) {
+    const uint32_t dx = static_cast<uint32_t>(newX) - static_cast<uint32_t>(minX);
+    const uint32_t dy = static_cast<uint32_t>(newY) - static_cast<uint32_t>(minY);
+    maxX = static_cast<int32_t>(static_cast<uint32_t>(maxX) + dx);
+    maxY = static_cast<int32_t>(static_cast<uint32_t>(maxY) + dy);
+    minX = newX;
+    minY = newY;
+    return newX;
+}
