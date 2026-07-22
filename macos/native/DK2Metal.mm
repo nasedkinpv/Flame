@@ -3859,7 +3859,14 @@ static void *renderWorker(void *context) {
                     }
                     target.label = @"DK2 shadow twin";
                     _shadowTwins[shadow.texture_id] = target;
-                    _textures[shadow.texture_id | kShadowTwinIdBit] = target;
+                    // Do NOT register the twin in _textures: every distinct id
+                    // there consumes an argument-table bank slot, and twins
+                    // doubled the id count, overflowing bank 0 (>127 textures)
+                    // so real textures resolved to no slot and sampled black -
+                    // the black holes seen with metal_shadows on (HD or not).
+                    // The decal redirect is dead anyway (deferred flush, see
+                    // draws-inside=0); when it is fixed the twin must be bound
+                    // on demand from _shadowTwins, not by bloating the banks.
                     freshShadowTwins.insert(shadow.texture_id);
                 }
                 if (![frameTextures containsAllocation:target]) {
