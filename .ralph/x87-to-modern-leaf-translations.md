@@ -6,6 +6,7 @@
 Flametal replaces DKII.EXE functions at runtime via the Flametal loader. The proven confidence method is the **differential test**: rewrite the x87/integer leaf in modern C++ (SSE2 or scalar), then a one-file `*_difftest.cpp` compares the rewrite against a scalar reference over exhaustive inputs (incl. aliasing, denormals, inf, nan). Bit-exact equality holds for leaf functions: integer ops are identical everywhere; x87 float (one op per component, store to m32) rounds identically to SSE single-precision.
 
 **Proven references (do not deviate from this pattern):**
+
 - Rewrite: `src/dk2/Vec3f.cpp`, `src/dk2/Mat3x3f.cpp`
 - Difftest: `tests/vec3f_difftest/vec3f_difftest.cpp` + local shim `tests/vec3f_difftest/dk2/utils/Vec3f.h` + `tests/vec3f_difftest/dk2_functions.h`
 - Auto-gen struct prototypes w/ addresses: `libs/dkii_exe/api/dk2/utils/*.h`
@@ -15,6 +16,7 @@ Flametal replaces DKII.EXE functions at runtime via the Flametal loader. The pro
 ```
 objdump -d --start-address=0xADDR --stop-address=0xEND -M intel libs/dkii_exe/DKII.EXE
 ```
+
 Address `0xADDR` is the `/*XXXXXXXX*/` from the api header. Read enough bytes to find the next `ret`/`ret N` + padding. **Confirm it is a leaf**: no `call`/`e8` to other code, no global writes outside the struct args. If it calls other functions or touches globals, SKIP it (not a confident leaf) and pick the next.
 
 ## Per-iteration unit (ONE function, fully done)
@@ -58,3 +60,18 @@ If any target turns out non-leaf (calls out / touches globals), note it and move
 - Never skip the difftest — it is the only confidence gate.
 - If `objdump` shows the function is NOT a clean leaf, abandon it and pick the next; say so in the report.
 - Keep rewrites minimal: SSE2 only where it genuinely vectorizes; otherwise plain scalar. No abstractions.
+
+## Progress log
+
+### Iteration 1 — DONE
+
+- [x] **Vec3i::add** `0x00437FE0` — committed `420a6f0`, then **param-order fix** `7c2af69`.
+  - Pure integer leaf: `output = this + right`, two's-complement wraparound (uint32).
+  - **BUG CAUGHT & FIXED:** original ABI is **param1=output (written, returned), param2=right (read)** — verified from disasm AND the Vec3f::mulV convention. First impl had them swapped; value commutes so only distinct-pointer callers were affected. Difftest now also asserts `right` is untouched, so a swap fails the test (verified by building a deliberately-swapped impl — it asserts).
+- [x] **Vec3d::addVec3d** `0x0040F680` — committed `9493630`. Same pattern (fields are `int` despite the name). 2.98M combos.
+
+### ⚠ CRITICAL CONVENTION (applies to ALL future iterations)
+
+DKII member-fn ABI for "output + operand" methods: **param1 = output (written + returned), param2(+) = operands**. Confirmed via Vec3f::mulV/substractAssign disasm. Always verify from disasm which stack slot is written vs read. Difftests MUST assert the non-output operand is untouched when distinct, else a param-order bug hides behind a self-consistent test.
+
+### Next: item 3 — Pos2i::shiftDiv `0x004D1EC0`
