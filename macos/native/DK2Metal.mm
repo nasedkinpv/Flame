@@ -1000,6 +1000,19 @@ void release(uint32_t textureId) {
     pages().erase(textureId);
 }
 
+// bring-up counters for the HD-holes investigation.
+struct ComposeStats { uint32_t noDir=0, noPixels=0, noRects=0, dimMismatch=0,
+                      noApplied=0, ok=0; };
+inline ComposeStats &composeStats() { static ComposeStats s; return s; }
+
+// Periodic dump of why composePage returned nil (HD-holes bring-up).
+void reportComposeStats() {
+    ComposeStats &s = composeStats();
+    NSLog(@"DK2 pack compose: ok=%u nil(dir=%u pixels=%u rects=%u dim-mismatch=%u no-png=%u)",
+          s.ok, s.noDir, s.noPixels, s.noRects, s.dimMismatch, s.noApplied);
+    s = ComposeStats{};
+}
+
 // PAGE_ATLAS_RESET: the engine repacked this page. Forget every rect and
 // tear down the composed HD page; the new layout's placements re-populate
 // it. Keeping pixels1x is fine (a full upload always precedes reuse), but
@@ -1237,7 +1250,16 @@ bool noteRect(const DK2MPageAtlasMapCommand &map) {
 id<MTLTexture> composePage(id<MTLDevice> device, uint32_t textureId, PageState &st,
                            uint32_t *packHits) {
     NSString *dir = directory();
-    if (!dir || st.pixels1x.empty() || st.rects.empty()) return nil;
+    if (!dir) { ++composeStats().noDir; return nil; }
+    if (st.pixels1x.empty()) { ++composeStats().noPixels; return nil; }
+    if (st.rects.empty()) { ++composeStats().noRects; return nil; }
+    // Stale pixels1x kept across a repack that changed the page size (see
+    // pageReset) would make the HD page the wrong dimensions and misalign
+    // every decal UV = holes. Refuse to compose from a mismatched snapshot.
+    if (st.pixels1x.size() != (size_t)st.w * st.h * 4) {
+        ++composeStats().dimMismatch;
+        return nil;
+    }
     const uint32_t hdW = st.w * kScale, hdH = st.h * kScale;
     std::vector<uint8_t> hd((size_t)hdW * hdH * 4);
     scaleBilinearBgra(st.pixels1x.data(), st.w, st.h, st.w * 4,
@@ -1255,7 +1277,8 @@ id<MTLTexture> composePage(id<MTLDevice> device, uint32_t textureId, PageState &
                           rw * kScale, rh * kScale, hdW * 4);
         ++applied;
     }
-    if (!applied) return nil;
+    if (!applied) { ++composeStats().noApplied; return nil; }
+    ++composeStats().ok;
     if (packHits) *packHits += applied;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -1724,6 +1747,7 @@ public:
               p(&FrameMetrics::residentTextureMB, 50),
               p(&FrameMetrics::residentTextureMB, 95),
               p(&FrameMetrics::residentTextureMB, 99));
+        respack::reportComposeStats();
         NSLog(@"PERF shadows totals/%zu frames: live=%llu received=%llu rendered=%llu "
                "triangles=%llu decal-redirects=%llu rejected(unavailable=%llu malformed=%llu target=%llu capacity=%llu)",
               kFrames, total(&FrameMetrics::shadowLive),
