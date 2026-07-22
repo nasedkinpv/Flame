@@ -1,0 +1,64 @@
+{
+  "features" : [
+    "refractivity"
+  ],
+  "fill" : {
+    "linear-gradient" : [
+      "display-p3:0.97801,1.00000,0.96916,1.00000",
+      "display-p3:0.95076,0.93965,0.95902,1.00000"
+    ]
+  },
+  "groups" : [
+    {
+      "blend-mode" : "normal",
+      "layers" : [
+        {
+          "fill" : {
+            "linear-gradient" : [
+              "display-p3:0.70016,0.03259,0.00000,1.00000",
+              "display-p3:0.32918,0.00000,0.06957,1.00000"
+            ],
+            "orientation" : {
+              "start" : {
+                "x" : 0.5,
+                "y" : 0
+              },
+              "stop" : {
+                "x" : 0.5357357594936707,
+                "y" : 1.421904217479675
+              }
+            }
+          },
+          "image-name" : "dk2-logo.svg",
+          "name" : "dk2-logo",
+          "position" : {
+            "scale" : 1.1,
+            "translation-in-points" : [
+              0,
+              14.578125
+            ]
+          }
+        }
+      ],
+      "refractivity" : {
+        "depth" : 0.471328125,
+        "enabled" : true,
+        "strength" : 0.400703125
+      },
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.8
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.25
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
