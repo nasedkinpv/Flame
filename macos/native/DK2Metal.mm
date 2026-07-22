@@ -992,6 +992,30 @@ void pageReset(uint32_t textureId) {
     st.rebuilds = 0;
 }
 
+// v15 generation adoption: same clearing as pageReset, but additionally
+// returns a plain 1x replacement texture built from the stored pixels (nil
+// when none are stored) so the caller can unbind a stale 4x HD composite
+// immediately instead of leaving _textures pointing at the old page - the
+// direct mechanism behind 1x rects landing unscaled in old 4x textures.
+id<MTLTexture> resetForNewGeneration(id<MTLDevice> device, uint32_t textureId) {
+    auto it = pages().find(textureId);
+    if (it == pages().end()) return nil;
+    PageState &st = it->second;
+    const bool hadComposite = st.hdTexture != nil;
+    st.rects.clear();
+    st.hdTexture = nil;
+    st.dirty = false;
+    st.demoted = false;
+    st.rebuilds = 0;
+    if (!hadComposite || st.pixels1x.empty() || !st.w || !st.h) return nil;
+    id<MTLTexture> plain = texhd::createMipmapped(device, st.pixels1x.data(),
+                                                  st.w, st.h, textureId);
+    if (plain) {
+        plain.label = [NSString stringWithFormat:@"DK2 gen-reset plain %u", textureId];
+    }
+    return plain;
+}
+
 uint64_t &pngCacheEpoch() {
     static uint64_t epoch = 1;
     return epoch;
@@ -1557,6 +1581,11 @@ struct FrameMetrics {
     uint32_t shadowRejectTarget = 0;
     uint32_t shadowRejectCapacity = 0;
     uint32_t shadowDecalRedirects = 0;
+    // v15 page generations: commands from a previous incarnation of a page
+    // dropped, and adoptions of a new incarnation (atomic teardown of maps,
+    // HD composite and shadow twin).
+    uint32_t staleGenDropped = 0;
+    uint32_t generationsAdopted = 0;
 };
 
 class TelemetryWindow {
@@ -1589,7 +1618,8 @@ public:
         NSLog(@"PERF host us p50/p95/p99: encode=%u/%u/%u drawable-wait=%u/%u/%u "
                "gpu-wait=%u/%u/%u gpu-complete=%u/%u/%u; diagnostics totals: "
                "fvf1=%llu fvf2=%llu missing-texture=%llu binding-overflow=%llu invalid-draw=%llu "
-               "pack-maps(accepted/received)=%llu/%llu pack-hits=%llu",
+               "pack-maps(accepted/received)=%llu/%llu pack-hits=%llu "
+               "gen(adopted/stale-dropped)=%llu/%llu",
               p(&FrameMetrics::encodeUs, 50), p(&FrameMetrics::encodeUs, 95),
               p(&FrameMetrics::encodeUs, 99), p(&FrameMetrics::drawableWaitUs, 50),
               p(&FrameMetrics::drawableWaitUs, 95), p(&FrameMetrics::drawableWaitUs, 99),
@@ -1599,7 +1629,9 @@ public:
               total(&FrameMetrics::fvf1Draws), total(&FrameMetrics::fvf2Draws),
               total(&FrameMetrics::missingTextures), total(&FrameMetrics::bindingOverflows),
               total(&FrameMetrics::invalidDraws), total(&FrameMetrics::packMappedRects),
-              total(&FrameMetrics::packMapCommands), total(&FrameMetrics::packHits));
+              total(&FrameMetrics::packMapCommands), total(&FrameMetrics::packHits),
+              total(&FrameMetrics::generationsAdopted),
+              total(&FrameMetrics::staleGenDropped));
         NSLog(@"PERF producer us p50/p95/p99: draw-copy=%u/%u/%u texture=%u/%u/%u "
                "overlay=%u/%u/%u",
               p(&FrameMetrics::producerDrawCopyUs, 50), p(&FrameMetrics::producerDrawCopyUs, 95),
@@ -2402,6 +2434,10 @@ bool inputLogEnabled() {
     // and also live in _textures under (id | kShadowTwinIdBit) so the normal
     // bank/slot binding machinery serves them.
     std::unordered_map<uint32_t, id<MTLTexture>> _shadowTwins;
+    // v15: current page generation per texture id (absent = 0). Commands
+    // stamped with an older generation are dropped; a newer one atomically
+    // retires the page's previous incarnation (maps, HD composite, twin).
+    std::unordered_map<uint32_t, uint32_t> _pageGenerations;
     // The stable set is intentionally immutable during normal frames. Each
     // frame slot owns the indirect textures its argument tables reference, so
     // replacing an atlas cannot retain every historical version forever.
@@ -3206,39 +3242,98 @@ static void *renderWorker(void *context) {
             }
         }
 
-        // Releases and PAGE_ATLAS_MAP are persistent cache state rather than
-        // draw commands. Apply releases first, then read every map before
-        // uploads so map+upload works regardless of stream order.
+        // v15 generation adoption. Returns true when a command stamped with
+        // `generation` for `textureId` should be applied. gen 0 = the texture
+        // never repacks (legacy/simple textures) and bypasses the machinery.
+        // A newer generation atomically retires the page's previous
+        // incarnation: atlas map, HD composite (rebinding a plain 1x built
+        // from stored pixels so no stale 4x texture stays bound), shadow twin
+        // and its synthetic binding. An older generation is dropped.
+        auto adoptGeneration = [&](uint32_t textureId, uint32_t generation,
+                                   bool isReset) -> bool {
+            if (!generation) return !isReset;  // gen-less reset: legacy clear below
+            uint32_t &current = _pageGenerations[textureId];
+            if (generation < current) {
+                ++metrics.staleGenDropped;
+                return false;
+            }
+            if (generation == current) {
+                // A reset re-delivered for the already-adopted generation is
+                // a no-op by design (its clearing happened at adoption); maps
+                // and pixel updates of the current generation apply.
+                return !isReset;
+            }
+            current = generation;
+            ++metrics.generationsAdopted;
+            id<MTLTexture> plain = respack::resetForNewGeneration(_device, textureId);
+            if (plain) {
+                _textures[textureId] = plain;
+            } else {
+                // No stored pixels to rebuild from: if the current binding is
+                // not the page's own 1x size, it is a stale HD composite -
+                // drop it so the next upload recreates the texture.
+                const auto dynIt = _dynamicTextures.find(textureId);
+                const auto texIt = _textures.find(textureId);
+                if (texIt != _textures.end() && dynIt != _dynamicTextures.end() &&
+                    dynIt->second.sourceWidth &&
+                    (texIt->second.width != dynIt->second.sourceWidth ||
+                     texIt->second.height != dynIt->second.sourceHeight)) {
+                    _textures.erase(texIt);
+                }
+            }
+            _shadowTwins.erase(textureId);
+            _textures.erase(textureId | kShadowTwinIdBit);
+            return true;
+        };
+
+        // Page lifecycle commands (release / reset / atlas map) are applied
+        // in STREAM ORDER in one pass: reset A -> maps A -> reset B -> maps B
+        // must never collapse into resets-then-maps, or placements of an old
+        // layout resurrect after a newer reset. Pixel uploads stay in the
+        // main pass below and are generation-gated there.
         if (snapshot) {
             for (const CommandView &view : _commandViews) {
-                if (view.type != DK2M_COMMAND_TEXTURE_RELEASE ||
-                    view.size != sizeof(DK2MTextureReleaseCommand)) continue;
-                DK2MTextureReleaseCommand release = {};
-                std::memcpy(&release, snapshot->bytes.data() + view.offset, sizeof(release));
-                if (!release.texture_id) continue;
-                _textures.erase(release.texture_id);
-                _textures.erase(release.texture_id | kShadowTwinIdBit);
-                _shadowTwins.erase(release.texture_id);
-                _dynamicTextures.erase(release.texture_id);
-                respack::release(release.texture_id);
-            }
-            for (const CommandView &view : _commandViews) {
-                // Page repack: the engine recomposited this page from
-                // scratch. Drop its whole atlas map; the placements for the
-                // new layout follow in this same (or a later) frame.
-                if (view.type != DK2M_COMMAND_PAGE_ATLAS_RESET ||
-                    view.size != sizeof(DK2MPageAtlasResetCommand)) continue;
-                DK2MPageAtlasResetCommand reset = {};
-                std::memcpy(&reset, snapshot->bytes.data() + view.offset, sizeof(reset));
-                if (!reset.texture_id) continue;
-                respack::pageReset(reset.texture_id);
-            }
-            for (const CommandView &view : _commandViews) {
-                if (view.type != DK2M_COMMAND_PAGE_ATLAS_MAP) continue;
-                ++metrics.packMapCommands;
-                DK2MPageAtlasMapCommand map = {};
-                if (decodeAtlasMap(snapshot, view, map) && respack::noteRect(map)) {
-                    ++metrics.packMappedRects;
+                switch (view.type) {
+                case DK2M_COMMAND_TEXTURE_RELEASE: {
+                    if (view.size != sizeof(DK2MTextureReleaseCommand)) break;
+                    DK2MTextureReleaseCommand release = {};
+                    std::memcpy(&release, snapshot->bytes.data() + view.offset,
+                                sizeof(release));
+                    if (!release.texture_id) break;
+                    _textures.erase(release.texture_id);
+                    _textures.erase(release.texture_id | kShadowTwinIdBit);
+                    _shadowTwins.erase(release.texture_id);
+                    _dynamicTextures.erase(release.texture_id);
+                    _pageGenerations.erase(release.texture_id);
+                    respack::release(release.texture_id);
+                    break;
+                }
+                case DK2M_COMMAND_PAGE_ATLAS_RESET: {
+                    if (view.size != sizeof(DK2MPageAtlasResetCommand)) break;
+                    DK2MPageAtlasResetCommand reset = {};
+                    std::memcpy(&reset, snapshot->bytes.data() + view.offset,
+                                sizeof(reset));
+                    if (!reset.texture_id) break;
+                    if (!adoptGeneration(reset.texture_id, reset.generation, true) &&
+                        !reset.generation) {
+                        // gen-less producer: legacy clear, and still retire
+                        // the shadow twin (defect: repack never dropped it)
+                        respack::pageReset(reset.texture_id);
+                        _shadowTwins.erase(reset.texture_id);
+                        _textures.erase(reset.texture_id | kShadowTwinIdBit);
+                    }
+                    break;
+                }
+                case DK2M_COMMAND_PAGE_ATLAS_MAP: {
+                    ++metrics.packMapCommands;
+                    DK2MPageAtlasMapCommand map = {};
+                    if (!decodeAtlasMap(snapshot, view, map)) break;
+                    if (!adoptGeneration(map.textureId, map.generation, false)) break;
+                    if (respack::noteRect(map)) ++metrics.packMappedRects;
+                    break;
+                }
+                default:
+                    break;
                 }
             }
         }
@@ -3359,7 +3454,9 @@ static void *renderWorker(void *context) {
                     if (textureUpdate.texture_id && expected <= view.size &&
                         textureUpdate.width && textureUpdate.height &&
                         textureUpdate.row_pitch >= textureUpdate.width * 4 &&
-                        textureUpdate.data_size >= textureUpdate.row_pitch * textureUpdate.height) {
+                        textureUpdate.data_size >= textureUpdate.row_pitch * textureUpdate.height &&
+                        adoptGeneration(textureUpdate.texture_id,
+                                        textureUpdate.generation, false)) {
                         ++metrics.textureUpdates;
                         metrics.textureBytes += textureUpdate.data_size;
                         const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
@@ -3513,20 +3610,44 @@ static void *renderWorker(void *context) {
                         textureUpdate.height <= texture.height - textureUpdate.y &&
                         textureUpdate.row_pitch >= textureUpdate.width * 4 &&
                         textureUpdate.data_size >=
-                            static_cast<uint64_t>(textureUpdate.row_pitch) * textureUpdate.height) {
+                            static_cast<uint64_t>(textureUpdate.row_pitch) * textureUpdate.height &&
+                        adoptGeneration(textureUpdate.texture_id,
+                                        textureUpdate.generation, false)) {
                         ++metrics.textureUpdates;
                         metrics.textureBytes += textureUpdate.data_size;
                         const uint8_t *pixels = snapshot->bytes.data() + offset + sizeof(textureUpdate);
-                        if (respack::applyRectToStored(textureUpdate.texture_id,
-                                                       textureUpdate.x, textureUpdate.y,
-                                                       textureUpdate.width, textureUpdate.height,
-                                                       pixels, textureUpdate.row_pitch) &&
+                        // Re-resolve the binding: generation adoption above
+                        // may have rebound/erased what `texture` was read as.
+                        const auto rebound = _textures.find(textureUpdate.texture_id);
+                        texture = rebound == _textures.end() ? nil : rebound->second;
+                        const bool storedPatched = respack::applyRectToStored(
+                            textureUpdate.texture_id, textureUpdate.x, textureUpdate.y,
+                            textureUpdate.width, textureUpdate.height,
+                            pixels, textureUpdate.row_pitch);
+                        if (storedPatched &&
                             !shadowTargetIds.contains(textureUpdate.texture_id)) {
                             // The bound texture is a 4x resource-pack page; a
                             // 1x replaceRegion would land at the wrong scale.
                             // Stored pixels were patched; the page rebuilds in
                             // the pass below.
-                        } else {
+                        } else if (texture &&
+                                   textureUpdate.x <= texture.width &&
+                                   textureUpdate.y <= texture.height &&
+                                   textureUpdate.width <= texture.width - textureUpdate.x &&
+                                   textureUpdate.height <= texture.height - textureUpdate.y &&
+                                   [&] {
+                                       // A 1x rect must never write into a
+                                       // texture of another scale (a 4x HD
+                                       // composite easily contains the rect's
+                                       // bounds). The page's 1x size is the
+                                       // last full upload's dimensions.
+                                       const auto dynIt =
+                                           _dynamicTextures.find(textureUpdate.texture_id);
+                                       if (dynIt == _dynamicTextures.end() ||
+                                           !dynIt->second.sourceWidth) return true;
+                                       return texture.width == dynIt->second.sourceWidth &&
+                                              texture.height == dynIt->second.sourceHeight;
+                                   }()) {
                             [texture replaceRegion:MTLRegionMake2D(
                                                        textureUpdate.x, textureUpdate.y,
                                                        textureUpdate.width, textureUpdate.height)
@@ -3601,6 +3722,11 @@ static void *renderWorker(void *context) {
                 }
                 if (!shadowResourcesReady) {
                     ++metrics.shadowRejectUnavailable;
+                    continue;
+                }
+                // v15: a mask from a previous incarnation of the page must
+                // not rasterize into the new generation's twin.
+                if (!adoptGeneration(shadow.texture_id, shadow.generation, false)) {
                     continue;
                 }
                 if (shadowMasks.size() >= kMaxShadowMasksPerFrame) {
@@ -5050,6 +5176,7 @@ static void *renderWorker(void *context) {
     [container addSubview:_shadowCache];
     addHint(y);
     y -= rowHeight + rowGap;
+    [self syncShadowCacheEnabled];
 
     addRowLabel(@"Debug Probes");
     _debugProbes = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
@@ -5113,8 +5240,19 @@ static void *renderWorker(void *context) {
 
 // Reads every control's current value (not just sender's) and saves the
 // whole settings.toml in one atomic write.
+// The game-side coverage cache is bypassed entirely while GPU shadows run
+// (EngineShadows.cpp: cachingActive = ... && !shadowgpu::active()), so the
+// toggle is inert with Metal Shadows on - reflect that in the UI.
+- (void)syncShadowCacheEnabled {
+    if (!_shadowCache || !_metalShadows) return;
+    const BOOL metalOn = _metalShadows.state == NSControlStateValueOn;
+    _shadowCache.enabled = !metalOn;
+    _shadowCache.title = metalOn ? @" (inactive with Metal shadows)" : @"";
+}
+
 - (void)controlChanged:(id)sender {
     (void)sender;
+    [self syncShadowCacheEnabled];
     dk2cfg::Settings s;
     s.shadowLevel = (int)_shadowLevel.indexOfSelectedItem;
     std::string resolution = _resolution.stringValue.UTF8String;

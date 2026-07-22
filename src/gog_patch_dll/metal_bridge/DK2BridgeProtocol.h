@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DK2M_MAGIC 0x4D324B44u
-#define DK2M_VERSION 14u
+#define DK2M_VERSION 15u
 #define DK2M_TIMING_QUANTUM_US 8u
 #define DK2M_SLOT_COUNT 3u
 // A 1600x1200 High-Res frame can introduce 9-12 MiB of 128x128 surfaces while
@@ -17,11 +17,12 @@
 #define DK2M_OVERLAY_TEXTURE_ID 0xFFFFFFFEu
 #define DK2M_CURSOR_TEXTURE_ID 0xFFFFFFFDu
 #define DK2M_INPUT_EVENT_CAPACITY 64u
-// DK2MDrawIndexedCommand.flags bit: this draw is a shadow decal (it samples
-// a region of an atlas page that a SHADOW_MASK targeted). The game's own
-// flag word only ever carries 0x1C, so a high bit is safe. Set producer-side
-// by matching the draw's stage-0 UV bounds against known mask rects; the
-// host uses it to redirect sampling to its R8 shadow twin of the page.
+// DK2MDrawIndexedCommand.flags bit: this draw is a shadow decal. v15: set
+// GAME-SIDE from the engine's own semantic (shadow SceneObject2E, anim mode
+// >= 2000 / f2C_ >= 0x7D0), carried through the ToDraw grouping to the
+// submission - never guessed from pages or UVs. The game's own flag word
+// only ever carries 0x1C, so a high bit is safe. The host uses it to
+// redirect sampling to its shadow twin of the bound page.
 #define DK2M_DRAW_INDEXED_SHADOW_DECAL (1u << 16)
 #define DK2M_MAX_LIGHTS_PER_DRAW 24u
 
@@ -81,6 +82,7 @@ enum DK2MCommandType {
 
 struct DK2MPageAtlasMapCommand {
     uint32_t textureId;
+    uint32_t generation;  // page generation these placements describe (v15)
     uint16_t x, y, w, h;
     char name[64];  // NUL-terminated, truncated if longer
 };
@@ -210,6 +212,7 @@ typedef struct DK2MDrawIndexedCommand {
 typedef struct DK2MTextureUpdateCommand {
     DK2MCommandHeader header;
     uint32_t texture_id;
+    uint32_t generation;  // page generation of these pixels (v15; 0 = non-repacking texture)
     uint32_t width;
     uint32_t height;
     uint32_t row_pitch;
@@ -219,6 +222,7 @@ typedef struct DK2MTextureUpdateCommand {
 typedef struct DK2MTextureUpdateRectCommand {
     DK2MCommandHeader header;
     uint32_t texture_id;
+    uint32_t generation;  // page generation of these pixels (v15; 0 = non-repacking texture)
     uint32_t x;
     uint32_t y;
     uint32_t width;
@@ -241,6 +245,7 @@ typedef struct DK2MTextureReleaseCommand {
 typedef struct DK2MPageAtlasResetCommand {
     DK2MCommandHeader header;
     uint32_t texture_id;
+    uint32_t generation;  // the NEW generation this reset opens (v15)
 } DK2MPageAtlasResetCommand;
 
 typedef struct DK2MRenderStateCommand {
@@ -365,6 +370,7 @@ typedef struct DK2MShadowTriangle {
 typedef struct DK2MShadowMaskCommand {
     DK2MCommandHeader header;
     uint32_t texture_id;
+    uint32_t generation;  // page generation this mask belongs to (v15)
     uint32_t target_x;
     uint32_t target_y;
     uint32_t target_width;
@@ -387,15 +393,15 @@ static_assert(sizeof(DK2MClearCommand) == 24, "bridge clear layout changed");
 static_assert(sizeof(DK2MVertex1C) == 28, "DK2 Vertex1C layout changed");
 static_assert(sizeof(DK2MVertex2C) == 44, "DK2 Vertex2C layout changed");
 static_assert(sizeof(DK2MDrawIndexedCommand) == 24, "bridge draw layout changed");
-static_assert(sizeof(DK2MTextureUpdateCommand) == 28, "bridge texture update layout changed");
-static_assert(sizeof(DK2MTextureUpdateRectCommand) == 36,
+static_assert(sizeof(DK2MTextureUpdateCommand) == 32, "bridge texture update layout changed");
+static_assert(sizeof(DK2MTextureUpdateRectCommand) == 40,
               "bridge texture rect update layout changed");
 static_assert(sizeof(DK2MSetTextureCommand) == 16, "bridge texture binding layout changed");
 static_assert(sizeof(DK2MRenderStateCommand) == 16, "bridge render state layout changed");
 static_assert(sizeof(DK2MTextureStageStateCommand) == 20,
               "bridge texture stage state layout changed");
 static_assert(sizeof(DK2MShadowTriangle) == 24, "bridge shadow triangle layout changed");
-static_assert(sizeof(DK2MShadowMaskCommand) == 36, "bridge shadow mask layout changed");
+static_assert(sizeof(DK2MShadowMaskCommand) == 40, "bridge shadow mask layout changed");
 #endif
 
 #endif

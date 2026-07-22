@@ -77,6 +77,28 @@ struct CursorSnapshot {
 
 class Producer {
 public:
+    struct ShadowMaskRect {
+        uint32_t x, y, w, h;
+    };
+    // v15 per-page atlas lifecycle: every page (bridge texture that atlas
+    // rects or shadow masks target) tracks its own generation and its own
+    // manifest with per-page ack/retry. A repack bumps the generation and
+    // replays ONLY that page; nothing global is invalidated any more.
+    struct AtlasPageState {
+        uint32_t generation = 1;  // 0 is the protocol's "non-repacking" stamp
+        std::vector<DK2MPageAtlasMapCommand> rects;      // current generation
+        std::vector<ShadowMaskRect> maskRects;           // current generation
+        size_t rectsEmitted = 0;
+        size_t rectsAcked = 0;
+        uint32_t sentFrame = 0;        // frame carrying an unacked emission
+        // Generation whose reset sits in the current unacked emission
+        // window. Ack promotes it to ackedGeneration; a skipped frame
+        // rewinds it so the reset re-emits.
+        uint32_t advertisedGeneration = 0;
+        uint32_t ackedGeneration = 0;  // host-confirmed generation (0 = none)
+        bool sentThisFrame = false;    // marked during emission, stamped in finish()
+    };
+
     ~Producer() {
         if (view_) UnmapViewOfFile(view_);
         if (mapping_) CloseHandle(mapping_);
@@ -95,37 +117,44 @@ public:
             consumerSession != lastConsumerSession_ || consumer < lastConsumerFrame_;
         if (freshConsumer) {
             for (auto &entry : textures_) entry.second.pending = true;
-            // A fresh consumer needs the full atlas map again. Unlike draw
-            // state, maps are persistent host state and must not depend on a
-            // one-shot frame surviving the three-slot mailbox.
-            atlasRectsAcked_ = 0;
-            atlasRectsEmitted_ = 0;
-            atlasLastSentFrame_ = 0;
+            // A fresh consumer needs every page's manifest again: it knows
+            // no generation and holds no maps.
+            for (auto &entry : pages_) {
+                AtlasPageState &page = entry.second;
+                page.rectsAcked = 0;
+                page.rectsEmitted = 0;
+                page.ackedGeneration = 0;
+                page.advertisedGeneration = 0;
+                page.sentFrame = 0;
+                page.sentThisFrame = false;
+            }
             // A new host starts with no texture cache, so releases intended
             // for the previous host are already satisfied.
             textureReleases_.clear();
             textureReleasesAcked_ = 0;
             textureReleasesEmitted_ = 0;
             textureReleaseLastSentFrame_ = 0;
-            // Same for atlas resets: a fresh host holds no page maps yet.
-            atlasResets_.clear();
-            atlasResetsAcked_ = 0;
-            atlasResetsEmitted_ = 0;
-            atlasResetLastSentFrame_ = 0;
             // Immediate-mode shadow masks: whatever queued for the previous
             // host is stale for a fresh one; high-detail masks re-arrive
             // with the next bakes anyway.
             pendingShadowMasks_.clear();
         } else {
-            if (atlasLastSentFrame_) {
-                if (consumer == atlasLastSentFrame_) {
-                    atlasRectsAcked_ = atlasRectsEmitted_;
+            // Per-page ack/retry: the frame carrying a page's reset+rects
+            // either got consumed (advance the page's watermark and adopt
+            // its generation as host-known) or was skipped (rewind to the
+            // acked watermark; the reset re-emits until its generation is
+            // confirmed).
+            for (auto &entry : pages_) {
+                AtlasPageState &page = entry.second;
+                if (!page.sentFrame) continue;
+                if (consumer == page.sentFrame) {
+                    page.rectsAcked = page.rectsEmitted;
+                    page.ackedGeneration = page.advertisedGeneration;
                 } else {
-                    // The consumer skipped (or has not yet accepted) the frame
-                    // carrying these maps. Retry from the last acknowledged map.
-                    atlasRectsEmitted_ = atlasRectsAcked_;
+                    page.rectsEmitted = page.rectsAcked;
+                    page.advertisedGeneration = page.ackedGeneration;
                 }
-                atlasLastSentFrame_ = 0;
+                page.sentFrame = 0;
             }
             if (textureReleaseLastSentFrame_) {
                 if (consumer == textureReleaseLastSentFrame_) {
@@ -140,19 +169,6 @@ public:
                 textureReleases_.clear();
                 textureReleasesAcked_ = 0;
                 textureReleasesEmitted_ = 0;
-            }
-            if (atlasResetLastSentFrame_) {
-                if (consumer == atlasResetLastSentFrame_) {
-                    atlasResetsAcked_ = atlasResetsEmitted_;
-                } else {
-                    atlasResetsEmitted_ = atlasResetsAcked_;
-                }
-                atlasResetLastSentFrame_ = 0;
-            }
-            if (atlasResetsAcked_ == atlasResets_.size() && !atlasResets_.empty()) {
-                atlasResets_.clear();
-                atlasResetsAcked_ = 0;
-                atlasResetsEmitted_ = 0;
             }
         }
         lastConsumerSession_ = consumerSession;
@@ -193,12 +209,12 @@ public:
 
         emitTextureReleases();
 
-        // Maps precede full texture uploads. The host also pre-scans maps,
-        // but keeping the stream ordered makes captures and other consumers
-        // self-contained without relying on a second pass. Resets must land
-        // before the rects that describe the page's new layout.
-        emitAtlasResets();
-        emitAtlasRects();
+        // Maps precede full texture uploads. Per page the stream order is
+        // causal by construction: the page's reset (opening its current
+        // generation) always precedes that generation's rects, and every
+        // command is stamped with the generation it belongs to, so late or
+        // replayed commands of an older generation can never resurrect.
+        emitAtlasPages();
         flushPendingShadowMasks();
 
         for (DWORD stage = 0; stage < 3; ++stage) {
@@ -229,25 +245,19 @@ public:
         }
     }
 
-    // The shadow decal quads draw through the legacy indexed path with no
-    // game-side marker (their submitter is original, untranslated code), so
-    // classify them here: stage-0 texture is a shadow-pool page AND the
-    // draw's UV bounds coincide with a mask rect captured for that page.
-    // Regular textures sharing a mixed page occupy different rects, so an
-    // exact-rect match (±1.5 texel) is a safe discriminator for the host's
-    // R8-twin redirect.
-    uint32_t shadowDecalFlag(DWORD fvf, const void *vertices, DWORD vertexCount) const {
-        // Page-level classification. Bring-up telemetry showed the engine
-        // BATCHES decals: single draws sample multi-slot regions or the whole
-        // page with half-texel insets, so per-rect matching can never fire.
-        // Shadow-pool pages are dedicated (populated exclusively through
-        // shadows_begin's ring; the game side gates them out of the HD atlas
-        // map for the same reason), so any draw binding one is a decal batch.
-        (void) fvf; (void) vertices;
-        if (!vertexCount) return 0;
-        const uint32_t textureId = boundTextures_[0];
-        if (!textureId || !shadowTextureIds_.count(textureId)) return 0;
-        return DK2M_DRAW_INDEXED_SHADOW_DECAL;
+    // v15: decal classification is SEMANTIC. The translated scene walk
+    // wraps the submission of all-shadow ToDraw batches (every object's
+    // f2C_ >= 0x7D0) in shadowDecalScope(true/false); draws emitted inside
+    // the scope carry the flag. No page or UV guessing.
+    void shadowDecalScope(bool active) { shadowDecalScope_ = active; }
+
+    void noteMixedShadowBatch() {
+        if ((++mixedShadowBatches_ % 100) == 1) {
+            gog_debugf("shadow-decal: mixed batches=%u (shadow objects grouped "
+                       "with non-shadow ones - those shadows fall back to the "
+                       "page sample)",
+                       mixedShadowBatches_);
+        }
     }
 
     void draw(DWORD fvf, const void *vertices, DWORD vertexCount,
@@ -268,7 +278,8 @@ public:
         command.fvf = fvf;
         command.vertex_count = vertexCount;
         command.index_count = indexCount;
-        command.flags = flags | shadowDecalFlag(fvf, vertices, vertexCount);
+        command.flags = flags |
+                        (shadowDecalScope_ ? DK2M_DRAW_INDEXED_SHADOW_DECAL : 0u);
         append(&command, sizeof(command));
         append(vertices, static_cast<uint32_t>(vertexBytes));
         append(indices, static_cast<uint32_t>(indexBytes));
@@ -400,31 +411,14 @@ public:
             boundSurfaces_[stage] = nullptr;
         }
 
-        const size_t oldAtlasSize = atlasRects_.size();
-        atlasRects_.erase(
-            std::remove_if(atlasRects_.begin(), atlasRects_.end(),
-                           [textureId](const DK2MPageAtlasMapCommand &rect) {
-                               return rect.textureId == textureId;
-                           }),
-            atlasRects_.end());
-        if (atlasRects_.size() != oldAtlasSize) {
-            wasKnown = true;
-            // Indices are the reliability watermark. Compacting invalidates
-            // them, so replay the remaining live map from zero.
-            atlasRectsAcked_ = 0;
-            atlasRectsEmitted_ = 0;
-            atlasLastSentFrame_ = 0;
-        }
-
-        shadowMaskRects_.erase(textureId);
-        shadowTextureIds_.erase(textureId);
+        wasKnown = pages_.erase(textureId) != 0 || wasKnown;
 
         if (!wasKnown) return;
         if ((++textureReleaseCount_ % 250) == 1) {
-            gog_debugf("Metal bridge: texture releases=%u live=%u atlas-rects=%u "
+            gog_debugf("Metal bridge: texture releases=%u live=%u pages=%u "
                        "shadow-mask-drops=%u",
                        textureReleaseCount_, static_cast<unsigned>(textures_.size()),
-                       static_cast<unsigned>(atlasRects_.size()),
+                       static_cast<unsigned>(pages_.size()),
                        shadowMasksDropped_);
         }
         textureReleases_.push_back(textureId);
@@ -437,8 +431,9 @@ public:
     // first upload), so unresolved reports wait in pendingAtlasRects_ keyed
     // by the page pointer and flush when any of the id-assignment sites
     // below first associates that pointer with an id. Resolved rects live
-    // in atlasRects_ forever and are (re)emitted from a watermark, so a
-    // restarted consumer receives the full map again.
+    // in their page's manifest (pages_) under the page's current generation
+    // and re-emit per page until acked; a restarted consumer replays all
+    // manifests.
     void reportAtlasRect(const void *pageKey, const char *rawName,
                          uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
         ++atlasReportCalls_;
@@ -447,10 +442,10 @@ public:
             ++atlasRejectedInvalid_;
             return;
         }
-        // Shadow-pool pages are procedural render targets; resource-pack art
-        // must never be composed into them (channel-B of the stale-slot bug:
-        // pack sprites glued into reused shadow pages).
-        if (shadowPageKeys_.count(reinterpret_cast<uintptr_t>(pageKey))) return;
+        // The shadow gate lives per generation now: pushAtlasRect drops the
+        // report when the page's CURRENT generation hosts shadow masks. A
+        // repack opens a mask-free generation and the page becomes eligible
+        // for resource-pack art again.
         // Every engine reduction level is a valid atlas page. The resource
         // pack contains one canonical base image, so FooMM0..FooMM9 all map
         // to Foo; the host scales it to the selected rect and builds mips.
@@ -472,15 +467,16 @@ public:
                  .insert(rectKey).second) return;
         std::string name(rawName, n);
         if ((++atlasReported_ % 250) == 1) {
-            size_t pendingCount = 0;
+            size_t pendingCount = 0, liveRects = 0;
             for (const auto &kv : pendingAtlasRects_) pendingCount += kv.second.size();
+            for (const auto &kv : pages_) liveRects += kv.second.rects.size();
             gog_debugf("atlas-map: calls=%u unique=%u mip-canonicalized=%u invalid=%u "
-                       "resolved=%u pending=%u acked=%u emitted=%u",
+                       "shadow-gated=%u pages=%u live-rects=%u pending=%u",
                        atlasReportCalls_, atlasReported_, atlasMipCanonicalized_,
-                       atlasRejectedInvalid_, static_cast<unsigned>(atlasRects_.size()),
-                       static_cast<unsigned>(pendingCount),
-                       static_cast<unsigned>(atlasRectsAcked_),
-                       static_cast<unsigned>(atlasRectsEmitted_));
+                       atlasRejectedInvalid_, atlasShadowGated_,
+                       static_cast<unsigned>(pages_.size()),
+                       static_cast<unsigned>(liveRects),
+                       static_cast<unsigned>(pendingCount));
         }
         const auto found = surfaceTextures_.find(reinterpret_cast<uintptr_t>(pageKey));
         if (found != surfaceTextures_.end()) {
@@ -507,14 +503,23 @@ public:
 
     void pushAtlasRect(uint32_t textureId, const char *name,
                        uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+        AtlasPageState &page = pages_[textureId];
+        // Generation-scoped shadow gate: while THIS generation of the page
+        // hosts shadow masks, it is a procedural render target and pack art
+        // must not be composed into it.
+        if (!page.maskRects.empty()) {
+            ++atlasShadowGated_;
+            return;
+        }
         DK2MPageAtlasMapCommand cmd = {};
         cmd.textureId = textureId;
+        cmd.generation = page.generation;
         cmd.x = static_cast<uint16_t>(x);
         cmd.y = static_cast<uint16_t>(y);
         cmd.w = static_cast<uint16_t>(w);
         cmd.h = static_cast<uint16_t>(h);
         std::strncpy(cmd.name, name, sizeof(cmd.name) - 1);
-        atlasRects_.push_back(cmd);
+        page.rects.push_back(cmd);
         // If this page was uploaded before its first map existed, force one
         // acknowledged full upload so the host has the original 1x backing
         // pixels from which to compose the named HD atlas.
@@ -524,28 +529,13 @@ public:
             texture->second.lastSentFrame = 0;
         }
         // mid-frame reports still reach the consumer this frame
-        if (active_) emitAtlasRects();
-    }
-
-    void emitAtlasRects() {
-        while (atlasRectsEmitted_ < atlasRects_.size()) {
-            struct {
-                DK2MCommandHeader header;
-                DK2MPageAtlasMapCommand body;
-            } cmd = {};
-            cmd.header.type = DK2M_COMMAND_PAGE_ATLAS_MAP;
-            cmd.header.size = sizeof(cmd);
-            cmd.body = atlasRects_[atlasRectsEmitted_];
-            if (used_ + sizeof(cmd) > DK2M_SLOT_CAPACITY) break;
-            append(&cmd, sizeof(cmd));
-            ++commandCount_;
-            ++atlasRectsEmitted_;
-        }
+        if (active_) emitAtlasPage(textureId, page);
     }
 
     // Engine repacked this atlas page (SurfHashList2 detach + recomposite):
-    // drop everything we believe about its layout and tell the host to do
-    // the same. Placements reported afterwards describe the new layout.
+    // open a new generation. Only THIS page replays; the host atomically
+    // drops every artifact of the previous generation when the reset (or
+    // any newer-generation command) arrives.
     void atlasPageReset(const void *pageKey) {
         if (!pageKey) return;
         const uintptr_t key = reinterpret_cast<uintptr_t>(pageKey);
@@ -558,37 +548,61 @@ public:
             texture != textures_.end()) {
             texture->second.dirty = true;
         }
-        const size_t oldSize = atlasRects_.size();
-        atlasRects_.erase(
-            std::remove_if(atlasRects_.begin(), atlasRects_.end(),
-                           [textureId](const DK2MPageAtlasMapCommand &rect) {
-                               return rect.textureId == textureId;
-                           }),
-            atlasRects_.end());
-        if (atlasRects_.size() != oldSize) {
-            // Watermark indices shifted; replay the live map from zero.
-            atlasRectsAcked_ = 0;
-            atlasRectsEmitted_ = 0;
-            atlasLastSentFrame_ = 0;
+        AtlasPageState &page = pages_[textureId];
+        if (++page.generation == 0) ++page.generation;  // skip the reserved 0
+        page.rects.clear();
+        page.maskRects.clear();
+        page.rectsEmitted = 0;
+        page.rectsAcked = 0;
+        if ((++atlasResetCount_ % 1000) == 1) {
+            gog_debugf("atlas-map: page resets=%u pages=%u",
+                       atlasResetCount_, static_cast<unsigned>(pages_.size()));
         }
-        atlasResets_.push_back(textureId);
-        if ((++atlasResetCount_ % 100) == 1) {
-            gog_debugf("atlas-map: page resets=%u live-rects=%u",
-                       atlasResetCount_, static_cast<unsigned>(atlasRects_.size()));
-        }
-        if (active_) emitAtlasResets();
+        if (active_) emitAtlasPage(textureId, page);
     }
 
-    void emitAtlasResets() {
-        while (atlasResetsEmitted_ < atlasResets_.size()) {
+    // Per-page ordered emission: [reset opening the current generation, if
+    // the host has not confirmed it] followed by the unemitted rects of that
+    // generation. Capacity pressure just pauses the page; the per-page
+    // watermark resumes it next frame.
+    void emitAtlasPage(uint32_t textureId, AtlasPageState &page) {
+        if (page.ackedGeneration != page.generation &&
+            page.advertisedGeneration != page.generation) {
             DK2MPageAtlasResetCommand command = {};
             command.header.type = DK2M_COMMAND_PAGE_ATLAS_RESET;
             command.header.size = sizeof(command);
-            command.texture_id = atlasResets_[atlasResetsEmitted_];
-            if (used_ + sizeof(command) > DK2M_SLOT_CAPACITY) break;
+            command.texture_id = textureId;
+            command.generation = page.generation;
+            if (used_ + sizeof(command) > DK2M_SLOT_CAPACITY) return;
             append(&command, sizeof(command));
             ++commandCount_;
-            ++atlasResetsEmitted_;
+            page.advertisedGeneration = page.generation;
+            page.sentThisFrame = true;
+        }
+        while (page.rectsEmitted < page.rects.size()) {
+            struct {
+                DK2MCommandHeader header;
+                DK2MPageAtlasMapCommand body;
+            } cmd = {};
+            cmd.header.type = DK2M_COMMAND_PAGE_ATLAS_MAP;
+            cmd.header.size = sizeof(cmd);
+            cmd.body = page.rects[page.rectsEmitted];
+            if (used_ + sizeof(cmd) > DK2M_SLOT_CAPACITY) break;
+            append(&cmd, sizeof(cmd));
+            ++commandCount_;
+            ++page.rectsEmitted;
+            page.sentThisFrame = true;
+        }
+    }
+
+    void emitAtlasPages() {
+        for (auto &entry : pages_) {
+            AtlasPageState &page = entry.second;
+            const bool generationConfirmed =
+                page.ackedGeneration == page.generation ||
+                page.advertisedGeneration == page.generation;
+            if (generationConfirmed && page.rectsEmitted >= page.rects.size()) continue;
+            emitAtlasPage(entry.first, page);
         }
     }
 
@@ -611,12 +625,10 @@ public:
 
     struct PendingShadowMask {
         uint32_t textureId = 0;
+        uint32_t generation = 0;  // page generation at capture time (v15)
         uint32_t x = 0, y = 0, w = 0, h = 0;
         uint32_t mode = DK2M_SHADOW_MASK_ALPHA;
         std::vector<DK2MShadowTriangle> triangles;
-    };
-    struct ShadowMaskRect {
-        uint32_t x, y, w, h;
     };
 
     // Immediate-mode shadow mask: target resolved at capture time by the
@@ -633,22 +645,15 @@ public:
             static_cast<uint64_t>(triangleCount) * sizeof(DK2MShadowTriangle);
         if (triangleBytes > DK2M_SLOT_CAPACITY - sizeof(DK2MShadowMaskCommand)) return;
 
-        const uintptr_t pageKey = reinterpret_cast<uintptr_t>(pageSurface);
-        if (shadowPageKeys_.insert(pageKey).second) {
-            // First time this page hosts a shadow: it is procedural, never
-            // resource-pack material. Drop any HD atlas map it accumulated
-            // while (or before) doubling as a texture page, and refuse
-            // future reports (see reportAtlasRect).
-            atlasPageReset(pageSurface);
-        }
-
         const uint32_t textureId = ensureSurfaceTexture(pageSurface);
         if (!textureId) return;
-        shadowTextureIds_.insert(textureId);
 
-        // Rect registry for decal tagging (see draw()): replace-on-same-
-        // origin keeps it bounded at the ring size per page.
-        std::vector<ShadowMaskRect> &rects = shadowMaskRects_[textureId];
+        // The mask registers under the page's CURRENT generation. Its
+        // presence gates HD atlas rects for this generation (pushAtlasRect);
+        // the engine repacks a page before repurposing it, which opens a
+        // mask-free generation and lifts the gate - no permanent marking.
+        AtlasPageState &page = pages_[textureId];
+        std::vector<ShadowMaskRect> &rects = page.maskRects;
         bool known = false;
         for (ShadowMaskRect &rect : rects) {
             if (rect.x == x && rect.y == y) {
@@ -662,6 +667,7 @@ public:
 
         PendingShadowMask mask;
         mask.textureId = textureId;
+        mask.generation = page.generation;
         mask.x = x; mask.y = y; mask.w = w; mask.h = h;
         mask.mode = mode;
         mask.triangles.resize(triangleCount);
@@ -689,6 +695,7 @@ public:
         command.header.type = DK2M_COMMAND_SHADOW_MASK;
         command.header.size = static_cast<uint32_t>(commandBytes);
         command.texture_id = mask.textureId;
+        command.generation = mask.generation;
         command.target_x = mask.x;
         command.target_y = mask.y;
         command.target_width = mask.w;
@@ -701,6 +708,12 @@ public:
         }
         ++commandCount_;
         return true;
+    }
+
+    // 0 = the texture is not a lifecycle-managed atlas page (protocol v15).
+    uint32_t pageGeneration(uint32_t textureId) const {
+        const auto found = pages_.find(textureId);
+        return found == pages_.end() ? 0u : found->second.generation;
     }
 
     void flushPendingShadowMasks() {
@@ -812,11 +825,16 @@ public:
         InterlockedExchange(asLong(&slot_->sequence), sequence_);
         InterlockedExchange(asLong(&header_->latest_slot), static_cast<LONG>(slotIndex_));
         InterlockedExchange(asLong(&header_->latest_frame), static_cast<LONG>(frame_));
-        if (atlasRectsEmitted_ > atlasRectsAcked_) atlasLastSentFrame_ = frame_;
+        for (auto &entry : pages_) {
+            AtlasPageState &page = entry.second;
+            if (page.sentThisFrame) {
+                page.sentFrame = frame_;
+                page.sentThisFrame = false;
+            }
+        }
         if (textureReleasesEmitted_ > textureReleasesAcked_) {
             textureReleaseLastSentFrame_ = frame_;
         }
-        if (atlasResetsEmitted_ > atlasResetsAcked_) atlasResetLastSentFrame_ = frame_;
         for (auto &entry : textures_) {
             TextureCache &texture = entry.second;
             if (texture.sentInCurrentFrame) {
@@ -1120,18 +1138,20 @@ private:
             // across even when normal content dedup says they are unchanged.
             // Otherwise the host keeps sampling stale GPU masks (or whatever
             // atlas content later reused their slots).
-            for (uint32_t textureId : shadowTextureIds_) {
-                const auto found = textures_.find(textureId);
+            unsigned restored = 0;
+            for (auto &entry : pages_) {
+                if (entry.second.maskRects.empty()) continue;
+                const auto found = textures_.find(entry.first);
                 if (found == textures_.end()) continue;
                 TextureCache &texture = found->second;
                 texture.pending = true;
                 texture.dirty = true;
                 texture.sentInCurrentFrame = false;
                 texture.lastSentFrame = 0;
+                ++restored;
             }
             gog_debugf("metal shadows bridge: restoring %u CPU atlas page(s)",
-                       static_cast<unsigned>(shadowTextureIds_.size()));
-            shadowTextureIds_.clear();
+                       restored);
         }
     }
 
@@ -1798,6 +1818,7 @@ private:
                         update.header.type = DK2M_COMMAND_TEXTURE_UPDATE;
                         update.header.size = commandSize;
                         update.texture_id = textureId;
+                        update.generation = pageGeneration(textureId);
                         update.width = texture.width;
                         update.height = texture.height;
                         update.row_pitch = texture.rowPitch;
@@ -2349,7 +2370,6 @@ private:
             std::remove(deadSurfaces_.begin(), deadSurfaces_.end(), key),
             deadSurfaces_.end());
         atlasSeenByPage_.erase(pageKey);
-        shadowPageKeys_.erase(pageKey);
     }
 
     void append(const void *data, uint32_t size) {
@@ -2361,20 +2381,16 @@ private:
         uint16_t x, y, w, h;
         char name[64];
     };
-    std::vector<DK2MPageAtlasMapCommand> atlasRects_;
-    size_t atlasRectsAcked_ = 0;
-    size_t atlasRectsEmitted_ = 0;
-    uint32_t atlasLastSentFrame_ = 0;
+    // v15 per-page atlas lifecycle state (AtlasPageState declared at the
+    // top of the class so member signatures can reference it).
+    std::unordered_map<uint32_t, AtlasPageState> pages_;
     uint32_t atlasReportCalls_ = 0;
     uint32_t atlasReported_ = 0;
     uint32_t atlasMipCanonicalized_ = 0;
     uint32_t atlasRejectedInvalid_ = 0;
+    uint32_t atlasShadowGated_ = 0;
     std::unordered_map<uintptr_t, std::vector<PendingAtlasRect>> pendingAtlasRects_;
     std::unordered_map<uintptr_t, std::unordered_set<uint64_t>> atlasSeenByPage_;
-    std::vector<uint32_t> atlasResets_;
-    size_t atlasResetsAcked_ = 0;
-    size_t atlasResetsEmitted_ = 0;
-    uint32_t atlasResetLastSentFrame_ = 0;
     uint32_t atlasResetCount_ = 0;
     std::vector<uint32_t> textureReleases_;
     size_t textureReleasesAcked_ = 0;
@@ -2418,10 +2434,12 @@ private:
     DWORD lastInputHeartbeatTick_ = 0;
     uint8_t appliedKeys_[32] = {};
     std::vector<PendingShadowMask> pendingShadowMasks_;
-    std::unordered_map<uint32_t, std::vector<ShadowMaskRect>> shadowMaskRects_;
     uint32_t shadowMasksDropped_ = 0;
-    std::unordered_set<uintptr_t> shadowPageKeys_;
-    std::unordered_set<uint32_t> shadowTextureIds_;
+    // Semantic decal scope (v15): set by the translated scene walk around
+    // the submission of a ToDraw batch whose every SceneObject2E carries the
+    // engine's shadow mode (f2C_ >= 0x7D0). Never guessed from pages/UVs.
+    bool shadowDecalScope_ = false;
+    uint32_t mixedShadowBatches_ = 0;
     std::atomic<bool> metalShadowsEnabled_{false};
     struct MeshState {
         std::vector<uint8_t> blob;  // serialized DK2MMeshRegisterCommand + payload
@@ -2657,6 +2675,14 @@ void shadowMaskCaptured(IDirectDrawSurface4 *pageSurface, uint32_t x, uint32_t y
                         uint32_t triangleCount, uint32_t mode) {
     producer.shadowMaskCaptured(pageSurface, x, y, w, h, triangles,
                                 triangleCount, mode);
+}
+
+void shadowDecalScope(bool active) {
+    producer.shadowDecalScope(active);
+}
+
+void noteMixedShadowBatch() {
+    producer.noteMixedShadowBatch();
 }
 
 void setGameTickTiming(uint32_t tickMicroseconds) {

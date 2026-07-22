@@ -9,6 +9,7 @@
 #include "dk2/SurfaceHolder.h"
 #include "dk2/CEngineDDSurface.h"
 #include "gog_patch.h"
+#include <metal_bridge/MetalBridgeProducer.h>
 #include "dk2/Vertex18.h"
 #include "dk2/Triangle24.h"
 #include "dk2/SceneObject2E.h"
@@ -293,13 +294,27 @@ void dk2::draw3dScene() {
     const uint64_t groupFinished = measure ? sceneProfileTicks() : 0;
     for (ToDraw *cur = last_; cur; cur = cur->prev_eos) {
         const uint64_t setupStarted = measure ? sceneProfileTicks() : 0;
+        // Semantic shadow-decal classification (protocol v15): shadow
+        // objects carry the engine's own marker f2C_ >= 0x7D0 (part-13
+        // per-light decal registration). Grouping keys on holders+flags, so
+        // decals batch with decals; if a mixed batch ever appears it is
+        // reported and drawn unflagged (shadow falls back to the page
+        // sample), never the other way around.
+        bool anyShadow = false, allShadow = cur->pObj2E != NULL;
+        for (SceneObject2E *i = cur->pObj2E; i; i = i->next) {
+            if ((unsigned __int16) i->f2C_ >= 0x7D0u) anyShadow = true;
+            else allShadow = false;
+        }
+        if (anyShadow && !allShadow) gog::metal_bridge::noteMixedShadowBatch();
         addObjectToDraw(cur);
         const uint64_t meshStarted = measure ? sceneProfileTicks() : 0;
+        gog::metal_bridge::shadowDecalScope(anyShadow && allShadow);
         for (SceneObject2E *i = cur->pObj2E; i; i = i->next) {
             i->mesh->v___addRenderObj((unsigned __int16) i->f2C_, i);
         }
         const uint64_t submitStarted = measure ? sceneProfileTicks() : 0;
         drawTexToSurfTriangles();
+        gog::metal_bridge::shadowDecalScope(false);
         const uint64_t submitFinished = measure ? sceneProfileTicks() : 0;
         cur->holders[0]->ToDraw = NULL;
         if (measure) {

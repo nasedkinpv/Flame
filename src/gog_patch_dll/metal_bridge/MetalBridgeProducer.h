@@ -115,12 +115,21 @@ void reportAtlasRect(const void *pageKey, const char *name, uint32_t x, uint32_t
 // Replaces the CPU coverage build for one original DK2 shadow surface.
 // Immediate-mode: `pageSurface` and the rect are the placement resolved at
 // capture time by the caller (finishIfCurrent); the producer resolves the
-// bridge texture id and emits the mask into the current frame. No retained
-// per-handle state exists any more. Also marks the page as a shadow-pool
-// page: HD atlas-map reports for it are dropped from then on.
+// bridge texture id, stamps the page's CURRENT generation (v15) and emits
+// the mask into the current frame. While a page generation hosts masks, HD
+// atlas-map reports for it are dropped; a repack opens a mask-free
+// generation and lifts the gate.
 void shadowMaskCaptured(IDirectDrawSurface4 *pageSurface, uint32_t x, uint32_t y,
                         uint32_t w, uint32_t h, const void *triangles,
                         uint32_t triangleCount, uint32_t mode);
+// v15 semantic decal scope: the scene walk brackets the submission of a
+// ToDraw batch whose EVERY SceneObject2E is a shadow decal (f2C_ >= 0x7D0);
+// indexed draws emitted inside the scope carry
+// DK2M_DRAW_INDEXED_SHADOW_DECAL. noteMixedShadowBatch() reports batches
+// that mix shadow and non-shadow objects (expected none; those shadows
+// fall back to sampling the page).
+void shadowDecalScope(bool active);
+void noteMixedShadowBatch();
 
 }
 
