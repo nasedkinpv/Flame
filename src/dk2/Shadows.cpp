@@ -204,6 +204,15 @@ int __cdecl dk2::shadows_process_58E080(
         g_gpuBatch.triangles.push_back(triangle);
         return 0;
     }
+    // GPU shadows on = GPU-only by design: never rasterize CPU coverage into
+    // the shared atlas page. A shadow that is not GPU-eligible (not 32x32, or
+    // its page has no ddSurf) is simply absent for now - far better than the
+    // hybrid, where CPU coverage written here into a ring-reused scratch got
+    // re-blitted and decals sampled another object's silhouette ("shadows
+    // from other objects"). Making the GPU path cover every shadow, and fixing
+    // the decal redirect, is the remaining work; correctness (no stale
+    // artifacts) comes first. Off (metal_shadows=false) keeps the full CPU path.
+    if (gog::metal_bridge::metalShadowsEnabled()) return 0;
     rasterizeCpuTriangle(triangle);
     return 0;
 }
