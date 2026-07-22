@@ -237,61 +237,18 @@ public:
     // exact-rect match (±1.5 texel) is a safe discriminator for the host's
     // R8-twin redirect.
     uint32_t shadowDecalFlag(DWORD fvf, const void *vertices, DWORD vertexCount) const {
+        // Page-level classification. Bring-up telemetry showed the engine
+        // BATCHES decals: single draws sample multi-slot regions or the whole
+        // page with half-texel insets, so per-rect matching can never fire.
+        // Shadow-pool pages are dedicated (populated exclusively through
+        // shadows_begin's ring; the game side gates them out of the HD atlas
+        // map for the same reason), so any draw binding one is a decal batch.
+        (void) fvf; (void) vertices;
         if (!vertexCount) return 0;
         const uint32_t textureId = boundTextures_[0];
         if (!textureId || !shadowTextureIds_.count(textureId)) return 0;
-        const auto rectsIt = shadowMaskRects_.find(textureId);
-        if (rectsIt == shadowMaskRects_.end()) return 0;
-        const auto textureIt = textures_.find(textureId);
-        if (textureIt == textures_.end()) return 0;
-        const float texW = static_cast<float>(textureIt->second.width);
-        const float texH = static_cast<float>(textureIt->second.height);
-        if (texW <= 0.0f || texH <= 0.0f) return 0;
-
-        float uMin = 1e9f, uMax = -1e9f, vMin = 1e9f, vMax = -1e9f;
-        for (DWORD i = 0; i < vertexCount; ++i) {
-            float u, v;
-            if (fvf == DK2M_FVF_VERTEX1C) {
-                const auto *vertex = static_cast<const DK2MVertex1C *>(vertices) + i;
-                u = vertex->u;
-                v = vertex->v;
-            } else {
-                const auto *vertex = static_cast<const DK2MVertex2C *>(vertices) + i;
-                u = vertex->tex_coord[0][0];
-                v = vertex->tex_coord[0][1];
-            }
-            uMin = std::min(uMin, u); uMax = std::max(uMax, u);
-            vMin = std::min(vMin, v); vMax = std::max(vMax, v);
-        }
-        const float x0 = uMin * texW, x1 = uMax * texW;
-        const float y0 = vMin * texH, y1 = vMax * texH;
-        constexpr float kTolerance = 1.5f;
-        for (const ShadowMaskRect &rect : rectsIt->second) {
-            if (std::fabs(x0 - static_cast<float>(rect.x)) <= kTolerance &&
-                std::fabs(y0 - static_cast<float>(rect.y)) <= kTolerance &&
-                std::fabs(x1 - static_cast<float>(rect.x + rect.w)) <= kTolerance &&
-                std::fabs(y1 - static_cast<float>(rect.y + rect.h)) <= kTolerance) {
-                return DK2M_DRAW_INDEXED_SHADOW_DECAL;
-            }
-        }
-        // bring-up diagnostics: candidate draws that bind a shadow page but
-        // matched no rect - log the first few UV boxes with the known rects
-        if (decalMissLogged_ < 8) {
-            ++decalMissLogged_;
-            const ShadowMaskRect *first =
-                rectsIt->second.empty() ? nullptr : &rectsIt->second.front();
-            gog_debugf("decal-miss: tex=%u uvbox10=(%d,%d)-(%d,%d) rects=%u first=(%u,%u %ux%u) verts=%u",
-                       textureId,
-                       (int) (x0 * 10.0f), (int) (y0 * 10.0f),
-                       (int) (x1 * 10.0f), (int) (y1 * 10.0f),
-                       (unsigned) rectsIt->second.size(),
-                       first ? (unsigned) first->x : 0u, first ? (unsigned) first->y : 0u,
-                       first ? (unsigned) first->w : 0u, first ? (unsigned) first->h : 0u,
-                       (unsigned) vertexCount);
-        }
-        return 0;
+        return DK2M_DRAW_INDEXED_SHADOW_DECAL;
     }
-    mutable uint32_t decalMissLogged_ = 0;
 
     void draw(DWORD fvf, const void *vertices, DWORD vertexCount,
               const WORD *indices, DWORD indexCount, DWORD flags) {
