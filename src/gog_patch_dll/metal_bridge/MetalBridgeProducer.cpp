@@ -280,11 +280,14 @@ public:
             ++decalMissLogged_;
             const ShadowMaskRect *first =
                 rectsIt->second.empty() ? nullptr : &rectsIt->second.front();
-            gog_debugf("decal-miss: tex=%u uvbox=(%.1f,%.1f)-(%.1f,%.1f) rects=%zu first=(%u,%u %ux%u) verts=%u fvf=%x",
-                       textureId, x0, y0, x1, y1, rectsIt->second.size(),
-                       first ? first->x : 0, first ? first->y : 0,
-                       first ? first->w : 0, first ? first->h : 0,
-                       vertexCount, fvf);
+            gog_debugf("decal-miss: tex=%u uvbox10=(%d,%d)-(%d,%d) rects=%u first=(%u,%u %ux%u) verts=%u",
+                       textureId,
+                       (int) (x0 * 10.0f), (int) (y0 * 10.0f),
+                       (int) (x1 * 10.0f), (int) (y1 * 10.0f),
+                       (unsigned) rectsIt->second.size(),
+                       first ? (unsigned) first->x : 0u, first ? (unsigned) first->y : 0u,
+                       first ? (unsigned) first->w : 0u, first ? (unsigned) first->h : 0u,
+                       (unsigned) vertexCount);
         }
         return 0;
     }
