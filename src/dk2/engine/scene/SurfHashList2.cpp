@@ -33,8 +33,11 @@ void reportHardwareAtlasRect(dk2::MyCESurfHandle *handle) {
         if (wipLeft > 0 && (std::strstr(dbgName, "Rock") || std::strstr(dbgName, "T_") ||
                             std::strstr(dbgName, "Path"))) {
             --wipLeft;
-            patch::log::dbg("reportHardwareAtlasRect: \"%s\" holder_parent=%p w=%u h=%u",
+            patch::log::dbg("reportHardwareAtlasRect: \"%s\" holder_parent=%p pageKey=%p "
+                            "x8=%u y8=%u w=%u h=%u",
                             dbgName, (void *) handle->holder_parent,
+                            handle->holder_parent ? atlasPageKey(handle->holder_parent->surf) : nullptr,
+                            (unsigned) handle->x8, (unsigned) handle->y8,
                             (unsigned) handle->surfWidth8, (unsigned) handle->surfHeight8);
         }
     }
