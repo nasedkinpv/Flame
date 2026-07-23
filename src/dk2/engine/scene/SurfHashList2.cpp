@@ -40,7 +40,7 @@ void reportHardwareAtlasRect(dk2::MyCESurfHandle *handle) {
 // project), so called through a raw function pointer to its original
 // address like the other genapi-missed helpers.
 using CreateHolderFn = dk2::SurfaceHolder *(__cdecl *)(int, dk2::MyCEngineSurfDesc *, int);
-constexpr auto createHolder = reinterpret_cast<CreateHolderFn>(0x00591DA0);
+const CreateHolderFn createHolder = reinterpret_cast<CreateHolderFn>(0x00591DA0);
 
 }  // namespace
 
