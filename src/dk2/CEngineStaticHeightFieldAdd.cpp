@@ -1,6 +1,7 @@
 #include "dk2/engine/primitive/CEngineStaticHeightField.h"
 
 #include "dk2/MyCESurfHandle.h"
+#include "dk2/MyCESurfScale.h"
 #include "dk2/MyScaledSurface.h"
 #include "dk2/Obj57AD20.h"
 #include "dk2/SceneObject2E.h"
