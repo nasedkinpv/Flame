@@ -58899,10 +58899,11 @@ global: va=0057AA40,name=sub_57AA40,size=457,member_of=constructor_0057AD20
     ret: kind=void
     arg: kind=ptr
       type: kind=struct,id=constructor_0057AD20
-global: va=0057AC10,name=sub_57AC10,size=42
+global: va=0057AC10,name=sub_57AC10,size=42,member_of=constructor_0057AD20
   type: kind=function,declspec=thiscall
     ret: kind=int,size=4,signed=True
-    arg: kind=int,size=4,signed=True
+    arg: kind=ptr
+      type: kind=struct,id=constructor_0057AD20
     arg: kind=ptr
       type: kind=int,size=4,signed=True
 global: va=0057AC40,name=sub_57AC40,size=215,member_of=constructor_0057AD20

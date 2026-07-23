@@ -1206,6 +1206,50 @@ int __fastcall sub_57BBF0(
 }  // namespace dk2
 
 
+// DKII 0x0057AC10: computes this->f2C, the per-object light-selection mask,
+// by testing the object's bounding sphere (this->vec/this->f20, populated by
+// the untranslated sub_57AA40) against every candidate light via sub_57BBF0
+// (a real geometric distance-vs-influence-radius test, filter mask
+// hardcoded to 1). See .porting/roadmap-native.md "Light selection -> GPU"
+// for the full disasm trace that established this signature (this->f2C =
+// sub_57BBF0(a1, 1, vec.x, vec.y, vec.z, f20) | f28; ret 0x4, single stack
+// arg = a1, a pointer to the frame's light-list, unused here).
+//
+// We deliberately do NOT replicate that test: the GPU mesh path already
+// re-derives light selection itself, per-VERTEX (dk2_mesh_accumulate_lights,
+// settings.toml [game] light_selection_gpu, default on) - finer-grained than
+// this whole-object sphere test, so its result goes unused on that path.
+// Skipping the real test removes a guest-CPU bounding-sphere-vs-<=32-lights
+// loop from every object, every frame - the actual Rosetta cost; merely
+// ignoring f2C's value (as the settings toggle above does) does not, since
+// the original test still ran regardless.
+//
+// Accepted trade-off: the legacy CPU lighting fallback (Obj57BCB0, exercised
+// on ~0.02-0.05% of draws per measured deTally/retainfail counters - see
+// drawEntryOnGpu below) still consults f2C and does NOT itself re-test
+// distance, so it could rarely over-light in those rare fallback frames.
+//
+// settings.toml [game] light_selection_gpu (default on) gates this: when
+// off, call the ORIGINAL (untranslated) sub_57BBF0 directly at its fixed
+// address for the real geometric test - sub_57BBF0 itself is not replaced,
+// so this reproduces the original's exact behaviour without re-deriving its
+// internals (see roadmap for the traced signature: thiscall, lightList this,
+// then mask/x/y/z/radius on the stack).
+int dk2::Obj57AD20::sub_57AC10(int *a1) {
+    static const bool skipCpuSelection = [] {
+        const char *v = std::getenv("DK2_LIGHT_SELECTION_GPU");
+        return !v || std::strcmp(v, "0") != 0;
+    }();
+    if (skipCpuSelection) {
+        f2C = static_cast<int>(0xFFFFFFFFu) | f28;
+        return f2C;
+    }
+    using SelectFn = int(__thiscall *)(int *, uint32_t, float, float, float, float);
+    const auto select = reinterpret_cast<SelectFn>(0x0057BBF0);
+    f2C = select(a1, 1u, vec.x, vec.y, vec.z, f20) | f28;
+    return f2C;
+}
+
 int *dk2::Obj57AD20::sub_57A9A0(
         int entryIndex,
         SceneObject2E *scene,
