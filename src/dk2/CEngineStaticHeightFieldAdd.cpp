@@ -195,7 +195,20 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
         andMask &= 0xFFFFFFBFu;
     }
 
+    // wip: defensive null-guards (menu/world-load crash investigation) --
+    // NOT present in the original decompile (mirrored elsewhere in this file
+    // per this project's no-silent-fixes convention), but this function is
+    // now confirmed to crash intermittently on world load, and the original
+    // x86 relies on Windows SEH to survive a bad pointer here where our
+    // translation would just segfault -- same rationale as the SEH-guarded
+    // resolveBridgeTextureIdGuarded negative-cache pattern in Obj57AD20.cpp.
+    // Bail out (append nothing) rather than crash if the surface isn't
+    // ready yet -- plausible during level-load before resources finish
+    // decompressing, given the intermittent (not deterministic) crash.
     MyScaledSurface *surf = MyEntryBuf_MyScaledSurface_getByIdx(field_10);
+    if (surf == nullptr || surf->scaledSurfArr == nullptr) {
+        return 0;
+    }
     const uint32_t combinedFlags = (andMask & surf->drawFlags) | orMask;
 
     // LOD pick: metric = radius * reductionFactor / baseHandle->surfWidth8,
@@ -203,6 +216,9 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     // undocumented float constants instead -- this one is a plain literal
     // compare, confirmed via the raw `fcmp`s against 1.0/0.5/0.25).
     MyCESurfHandle *baseHandle = surf->scaledSurfArr->surfScaledArr[0];
+    if (baseHandle == nullptr) {
+        return 0;
+    }
     const float metric = roundedDiv(
             roundedMul(pObj57AD20->f20, reductionFactor),
             static_cast<float>(baseHandle->surfWidth8));
@@ -220,6 +236,9 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     }
     MyCESurfHandle *handle = reinterpret_cast<MyCESurfHandle *const *>(
             surf->scaledSurfArr)[lodLevel + indexAdjust * 4];
+    if (handle == nullptr) {
+        return 0;
+    }
 
     MyCESurfHandle_static_addToHashList_flagsOr400(
             handle, static_cast<int16_t>(combinedFlags));
