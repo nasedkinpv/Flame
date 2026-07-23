@@ -1004,6 +1004,12 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     const dk2::meshgpu::InlineTarget target = {
         textureId, uS, vS, uO, vO, meshFlags, tint};
     if (sampler) {
+        if (meshFlags & DK2M_DRAW_MESH_ADDITIVE) {
+            patch::log::dbg(
+                "drawEntryOnGpu ADDITIVE: branch=INLINE(sampler) "
+                "vertexCount=%u indexCount=%u frame=%u",
+                vertexCount, indexCount, gog::metal_bridge::frameCounter());
+        }
         dk2::meshgpu::emitInline(
             target, vertices, vertexCount, indices, indexCount, lights,
             ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
@@ -1050,6 +1056,15 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                 entry, indexCount, vertexCount, signature, uvScale,
                 &retained)) {
             return deTally(6);
+        }
+        if (meshFlags & DK2M_DRAW_MESH_ADDITIVE) {
+            patch::log::dbg(
+                "drawEntryOnGpu ADDITIVE: branch=DEFORMED meshId=%u "
+                "signature=0x%016llX vertexCount=%u indexCount=%u "
+                "poolAddr=%p frame=%u",
+                retained.meshId, static_cast<unsigned long long>(signature),
+                vertexCount, indexCount, entry.vertices,
+                gog::metal_bridge::frameCounter());
         }
         dk2::meshgpu::emitDeformed(
             target, retained.meshId, positions, vertexCount, identity, lights,
