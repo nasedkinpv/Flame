@@ -11,6 +11,7 @@
 #include "dk2/utils/Vec3f.h"
 #include "dk2_functions.h"
 #include "dk2_globals.h"
+#include "patches/logging.h"
 
 #include <cstdint>
 #include <cstring>
@@ -214,9 +215,30 @@ struct SubmeshRecord {
 #pragma pack(pop)
 static_assert(sizeof(SubmeshRecord) == 0x14);
 
+// wip: instrumentation for the "checkerboard holes in unclaimed rock"
+// investigation (2026-07-24) -- same rationale as the heightfield sibling's
+// g_hfStats. Remove once the cause is confirmed.
+struct StaticMeshStats {
+    uint32_t calls = 0, parts = 0, nullSurf = 0, nullScaledSurfArr = 0,
+             nullBaseHandle = 0, nullHandle1 = 0, nullSurf2 = 0, nullHandle2 = 0,
+             appended = 0;
+};
+StaticMeshStats g_smStats;
+
 }  // namespace
 
 int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
+    ++g_smStats.calls;
+    if (g_smStats.calls % 256 == 0) {
+        patch::log::dbg("staticmesh append stats: calls=%u parts=%u nullSurf=%u "
+                        "nullScaledSurfArr=%u nullBaseHandle=%u nullHandle1=%u "
+                        "nullSurf2=%u nullHandle2=%u appended=%u maxCount=%d count=%u",
+                        g_smStats.calls, g_smStats.parts, g_smStats.nullSurf,
+                        g_smStats.nullScaledSurfArr, g_smStats.nullBaseHandle,
+                        g_smStats.nullHandle1, g_smStats.nullSurf2, g_smStats.nullHandle2,
+                        g_smStats.appended, SceneObject2EList_instance.maxCount,
+                        SceneObject2E_count);
+    }
     // 0x586190..0x5861D4: early-out guards. TODO(verify): 0x760B60/0x760B84/
     // 0x764BB8 have no names anywhere in the API; treated as raw globals.
     if ((a5_flags & 0x8) != 0 && *reinterpret_cast<const int32_t *>(0x00760B60) == 0) {
@@ -281,6 +303,7 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
     }
 
     auto appendEntry = [&]() -> SceneObject2E & {
+        ++g_smStats.appended;
         if (SceneObject2E_count >= static_cast<uint32_t>(SceneObject2EList_instance.maxCount)) {
             SceneObject2EList_instance.objects2EToDraw_enlarge(SceneObject2E_count);
         }
@@ -291,6 +314,7 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
 
     const auto *records = reinterpret_cast<const SubmeshRecord *>(pObj57AD20->f4);
     for (int32_t part = 0; part < sprsCount; ++part) {
+        ++g_smStats.parts;
         const SubmeshRecord &record = records[part];
 
         // 0x5862AC..0x5862BB: resolve this sub-part's base MyScaledSurface.
@@ -301,7 +325,7 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
         // until now and an unchecked deref here would crash instead of
         // relying on Windows SEH like the original x86 does). Skip just
         // this sub-part rather than aborting the whole append.
-        if (surf == nullptr) continue;
+        if (surf == nullptr) { ++g_smStats.nullSurf; continue; }
 
         // 0x5862BE..0x5862F3: combine draw flags.
         uint32_t andMask = 0xFFFFFFFFu;
@@ -325,9 +349,9 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
         // 0x586341..0x58638A: LOD metric = record.mmFactor * reductionFactor
         // / baseHandle.surfWidth8, compared against 3 undocumented float
         // thresholds to pick a coarse level 0..3.
-        if (surf->scaledSurfArr == nullptr) continue;
+        if (surf->scaledSurfArr == nullptr) { ++g_smStats.nullScaledSurfArr; continue; }
         MyCESurfHandle *baseHandle = surf->scaledSurfArr->surfScaledArr[0];
-        if (baseHandle == nullptr) continue;
+        if (baseHandle == nullptr) { ++g_smStats.nullBaseHandle; continue; }
         const float metric = roundedDiv(
                 roundedMul(record.mmFactor, reductionFactor),
                 static_cast<float>(baseHandle->surfWidth8));
@@ -357,7 +381,7 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
         const int32_t flatIndex = lodLevel + 4 * (widthStep * probHeight + fineIndex);
         MyCESurfHandle *handle1 =
                 reinterpret_cast<MyCESurfHandle *const *>(surf->scaledSurfArr)[flatIndex];
-        if (handle1 == nullptr) continue;
+        if (handle1 == nullptr) { ++g_smStats.nullHandle1; continue; }
 
         MyCESurfHandle_static_addToHashList_flagsOr400(
                 handle1, static_cast<int16_t>(combinedFlags1));
@@ -377,7 +401,7 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
             // parameters, and the picked LOD level is the best-supported
             // candidate for sub_581B80's declared first parameter.
             MyScaledSurface *surf2 = MyEntryBuf_MyScaledSurface_getByIdx(field_20);
-            if (surf2 == nullptr) continue;
+            if (surf2 == nullptr) { ++g_smStats.nullSurf2; continue; }
             const int lodLevel2 = sub_57F030(surf2, reductionFactor, record.mmFactor);
             // Verified against the raw listing at 0x5863dd..0x5863e0: ECX (this)
             // is surf2 (MOV ECX,EDI), and the 2nd stack arg is `this->field_24`
@@ -390,7 +414,7 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
             // `surf2->sub_581B80(lod2, field_74, 0)`.
             const float field24AsFloat = *reinterpret_cast<const float *>(&field_24);
             handle2 = surf2->sub_581B80(lodLevel2, field24AsFloat, 0);
-            if (handle2 == nullptr) continue;
+            if (handle2 == nullptr) { ++g_smStats.nullHandle2; continue; }
 
             uint32_t andMask2 = 0xFFFFFFFFu;
             uint32_t orMask2 = 0;

@@ -10,6 +10,7 @@
 #include "dk2/utils/Vec3f.h"
 #include "dk2_functions.h"
 #include "dk2_globals.h"
+#include "patches/logging.h"
 
 #include <cstdint>
 #include <cstring>
@@ -129,9 +130,27 @@ struct SceneAddRequest {
 };
 #pragma pack(pop)
 
+// wip: instrumentation for the "checkerboard holes in unclaimed rock"
+// investigation (2026-07-24) -- logs every ~256 calls so we can see, live,
+// how often each bail-out actually fires relative to total calls/appends.
+// Remove once the cause is confirmed.
+struct HeightFieldStats {
+    uint32_t calls = 0, cullFail = 0, nullSurf = 0, nullBaseHandle = 0,
+             nullHandle = 0, appended = 0;
+};
+HeightFieldStats g_hfStats;
+
 }  // namespace
 
 int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
+    ++g_hfStats.calls;
+    if (g_hfStats.calls % 256 == 0) {
+        patch::log::dbg("heightfield append stats: calls=%u cullFail=%u nullSurf=%u "
+                        "nullBaseHandle=%u nullHandle=%u appended=%u maxCount=%d count=%u",
+                        g_hfStats.calls, g_hfStats.cullFail, g_hfStats.nullSurf,
+                        g_hfStats.nullBaseHandle, g_hfStats.nullHandle, g_hfStats.appended,
+                        SceneObject2EList_instance.maxCount, SceneObject2E_count);
+    }
     // Both guards must pass (single combined condition, unlike the
     // static-mesh sibling's two sequential early returns).
     if ((a8 & 0x8) != 0 && *reinterpret_cast<const int32_t *>(0x00760B60) == 0) {
@@ -158,6 +177,7 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     if (request->ignoreCull == 0) {
         uint32_t cullScratch = 0;
         if (Vec3f_static_sub_575D70(&camSpacePos, pObj57AD20->f20, &cullScratch) == 0) {
+            ++g_hfStats.cullFail;
             return 0;
         }
     }
@@ -207,6 +227,7 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     // decompressing, given the intermittent (not deterministic) crash.
     MyScaledSurface *surf = MyEntryBuf_MyScaledSurface_getByIdx(field_10);
     if (surf == nullptr || surf->scaledSurfArr == nullptr) {
+        ++g_hfStats.nullSurf;
         return 0;
     }
     const uint32_t combinedFlags = (andMask & surf->drawFlags) | orMask;
@@ -217,6 +238,7 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     // compare, confirmed via the raw `fcmp`s against 1.0/0.5/0.25).
     MyCESurfHandle *baseHandle = surf->scaledSurfArr->surfScaledArr[0];
     if (baseHandle == nullptr) {
+        ++g_hfStats.nullBaseHandle;
         return 0;
     }
     const float metric = roundedDiv(
@@ -237,6 +259,7 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     MyCESurfHandle *handle = reinterpret_cast<MyCESurfHandle *const *>(
             surf->scaledSurfArr)[lodLevel + indexAdjust * 4];
     if (handle == nullptr) {
+        ++g_hfStats.nullHandle;
         return 0;
     }
 
@@ -249,6 +272,7 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     const int16_t vertsPerSide = static_cast<int16_t>(gridWidth + 1);
     const int32_t triangleCountX2 = gridWidth * gridWidth * 2;
     if (triangleCountX2 != 0) {
+        ++g_hfStats.appended;
         if (SceneObject2E_count >= static_cast<uint32_t>(SceneObject2EList_instance.maxCount)) {
             SceneObject2EList_instance.objects2EToDraw_enlarge(SceneObject2E_count);
         }
