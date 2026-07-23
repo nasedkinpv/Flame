@@ -550,9 +550,13 @@ static inline float dk2_vnoise(float2 p) {
 // so the normal is reconstructed from two scrolling noise layers around +Z.
 static inline float4 dk2_water_overlay(float4 base, float2 uv, float2 screenUv,
                                        float t, bool lava) {
+    // CONTINUOUS domain from screen pixels, NOT the per-tile uv (which repeats
+    // 0..1 every tile -> visible grid seams + repeating caustics). Screen-space
+    // means the pattern is camera-locked, which for animated water reads fine.
+    const float2 P = screenUv * 0.010f;   // ~pixels -> wave units
     // two scrolling noise fields -> height, differentiated -> surface normal
-    const float2 w1 = uv * 7.0f + float2(t * 0.06f, t * 0.045f);
-    const float2 w2 = uv * 13.0f - float2(t * 0.05f, t * 0.08f);
+    const float2 w1 = P * 3.0f + float2(t * 0.06f, t * 0.045f);
+    const float2 w2 = P * 6.3f - float2(t * 0.05f, t * 0.08f);
     const float e = 0.06f;
     float hC = dk2_vnoise(w1) * 0.6f + dk2_vnoise(w2) * 0.4f;
     float hX = dk2_vnoise(w1 + float2(e, 0)) * 0.6f + dk2_vnoise(w2 + float2(e, 0)) * 0.4f;
@@ -568,34 +572,31 @@ static inline float4 dk2_water_overlay(float4 base, float2 uv, float2 screenUv,
     float fres = pow(1.0f - saturate(dot(N, V)), 3.0f);
     // tight sun/heat glint riding the reconstructed normal
     float spec = pow(saturate(dot(N, H)), lava ? 40.0f : 140.0f);
-    // caustic veins: sharpened, counter-scrolling noise
-    float caust = pow(saturate(dk2_vnoise(uv * 9.0f - float2(t * 0.11f, t * 0.07f))), 5.0f);
+    // caustic veins: sharpened, counter-scrolling noise (continuous domain)
+    float caust = pow(saturate(dk2_vnoise(P * 4.2f - float2(t * 0.11f, t * 0.07f))), 5.0f);
 
-    // The engine base is a 3-frame slideshow (~300ms/frame) - jumpy and ugly.
-    // Drive the look PROCEDURALLY (continuous in t) and use the base only as a
-    // faint luminance modulation so shore edges / depth variation survive
-    // without the slideshow dominating.
-    const float baseLum = dot(base.rgb, float3(0.299f, 0.587f, 0.114f));
+    // Fully procedural: the engine base is a jumpy 3-frame slideshow, so it is
+    // NOT sampled for colour at all - only base.a is kept for the tile's shape/
+    // shore alpha. A low-frequency noise gives large-scale depth variation so
+    // the surface is not a flat wash.
+    const float bigDepth = dk2_vnoise(P * 0.8f + float2(t * 0.012f, t * 0.008f));
     float3 col;
     if (lava) {
-        const float3 deep = float3(0.30f, 0.045f, 0.02f);
-        const float3 hot  = float3(1.7f, 0.65f, 0.15f);
+        const float3 deep = float3(0.28f, 0.04f, 0.018f);
+        const float3 hot  = float3(1.8f, 0.68f, 0.16f);
         float throb = 0.5f + 0.5f * sin(t * 1.6f + hC * 6.28318f);
-        // crust-vs-molten from continuous noise, not the base frame
-        float molten = pow(saturate(hC * 0.7f + caust + 0.15f), 2.0f);
+        float molten = pow(saturate(hC * 0.5f + bigDepth * 0.4f + caust + 0.12f), 2.0f);
         col = mix(deep, hot, molten);
-        col *= 0.75f + 0.5f * baseLum;                     // keep bed variation
-        col += hot * throb * 0.20f;                        // slow emissive throb
+        col += hot * throb * 0.22f;                        // slow emissive throb
         col += spec * float3(2.0f, 1.2f, 0.5f);            // molten glint
         col += fres * float3(0.6f, 0.2f, 0.06f);           // heat rim
     } else {
-        const float3 deep    = float3(0.03f, 0.14f, 0.22f);
-        const float3 shallow = float3(0.10f, 0.34f, 0.42f);
-        // depth from continuous noise + a little of the base's brightness
-        float depth = saturate(0.35f + hC * 0.35f + baseLum * 0.30f);
+        const float3 deep    = float3(0.02f, 0.12f, 0.20f);
+        const float3 shallow = float3(0.11f, 0.36f, 0.44f);
+        float depth = saturate(0.30f + hC * 0.30f + bigDepth * 0.40f);
         col = mix(deep, shallow, depth);
         col += spec * float3(1.0f, 0.98f, 0.92f) * 1.6f;   // continuous sun sparkle
-        col += caust * float3(0.14f, 0.34f, 0.38f) * 0.7f; // continuous caustics
+        col += caust * float3(0.15f, 0.36f, 0.40f) * 0.75f; // continuous caustics
         col += fres * float3(0.12f, 0.18f, 0.22f);         // sky rim
     }
     return float4(col, base.a);

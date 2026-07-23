@@ -72,6 +72,7 @@ struct Settings {
     bool lightSelectionGpu = true;
     // [renderer]
     bool bloom = true;
+    bool waterShader = true;
     bool metalShadows = true;
     float renderScale = 1.0f;
     float cursorScale = 1.0f;
@@ -90,6 +91,7 @@ inline float bitsFloat(uint32_t b) { float f; std::memcpy(&f, &b, sizeof(f)); re
 // Live renderer knobs, read every frame; settings.toml is the base, an env
 // var present at startup pins the value and the file watcher stops touching it.
 std::atomic<bool> gBloomLive{true};
+std::atomic<bool> gWaterShaderLive{true};
 std::atomic<bool> gShadowsLive{true};
 std::atomic<bool> gHdTexturesLive{true};
 std::atomic<uint32_t> gRenderScaleBits{floatBits(1.0f)};
@@ -229,6 +231,7 @@ std::string renderSettingsFile(const Settings &s) {
     o << "[renderer]\n"
       << "# All five keys in this section apply live (no restart) while the game is running.\n"
       << "bloom = " << tomlBool(s.bloom) << "\n"
+      << "water_shader = " << tomlBool(s.waterShader) << "\n"
       << "metal_shadows = " << tomlBool(s.metalShadows) << "\n"
       << "# Fraction of the display's native backing resolution to render at, 0.375-1.0\n"
       << "render_scale = " << tomlFloat(s.renderScale) << "\n"
@@ -284,6 +287,7 @@ Settings load() {
         }
         if (const auto *r = tomlSection(data, "renderer")) {
             s.bloom = tomlGet<bool>(*r, "bloom", s.bloom);
+            s.waterShader = tomlGet<bool>(*r, "water_shader", s.waterShader);
             s.metalShadows = tomlGet<bool>(*r, "metal_shadows", s.metalShadows);
             s.renderScale = tomlGet<float>(*r, "render_scale", s.renderScale);
             s.cursorScale = tomlGet<float>(*r, "cursor_scale", s.cursorScale);
@@ -322,6 +326,8 @@ void applyRendererLive(const Settings &s) {
     if (!gEnvBloomSet) {
         const bool was = gBloomLive.exchange(s.bloom, std::memory_order_relaxed);
         if (was != s.bloom) NSLog(@"DK2 settings: bloom -> %s", s.bloom ? "on" : "off");
+        const bool wasW = gWaterShaderLive.exchange(s.waterShader, std::memory_order_relaxed);
+        if (wasW != s.waterShader) NSLog(@"DK2 settings: water_shader -> %s", s.waterShader ? "on" : "off");
     }
     if (!gEnvShadowsSet) {
         const bool was = gShadowsLive.exchange(s.metalShadows, std::memory_order_relaxed);
@@ -5002,8 +5008,11 @@ static void *renderWorker(void *context) {
                         uniform.screenHeight = static_cast<float>(snapshot->height);
                         uniform.worldGeometry = 0;
                         // Modern water/lava overlay: tag the draw by the atlas
-                        // material class of its stage-0 texture (see respack).
-                        uniform.materialFlags = respack::materialClassFor(currentStage0TextureId);
+                        // material class of its stage-0 texture (see respack),
+                        // gated by the live water_shader setting.
+                        uniform.materialFlags =
+                            dk2cfg::gWaterShaderLive.load(std::memory_order_relaxed)
+                                ? respack::materialClassFor(currentStage0TextureId) : 0u;
                         uniform.waterTime = _materialClock;
                         uniform.textureIndex = currentTextureBinding.slot;
                         // v14 shadow decal: sample the page's shadow twin
@@ -5201,6 +5210,7 @@ static void *renderWorker(void *context) {
 
 @implementation DK2PreferencesWindowController {
     NSButton *_bloom;
+    NSButton *_waterShader;
     NSButton *_metalShadows;
     NSButton *_hdTextures;
     NSButton *_movies;
@@ -5324,6 +5334,12 @@ static void *renderWorker(void *context) {
     _bloom = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
                                 title:@"" checked:s.bloom];
     [container addSubview:_bloom];
+    y -= rowHeight + rowGap;
+
+    addRowLabel(@"Water Shader");
+    _waterShader = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
+                                     title:@"" checked:s.waterShader];
+    [container addSubview:_waterShader];
     y -= rowHeight + rowGap;
 
     addRowLabel(@"Metal Shadows");
@@ -5503,6 +5519,7 @@ static void *renderWorker(void *context) {
     s.lightSelectionGpu = _lightSelectionGpu.state == NSControlStateValueOn;
     s.level = _level.stringValue.UTF8String;
     s.bloom = _bloom.state == NSControlStateValueOn;
+    s.waterShader = _waterShader.state == NSControlStateValueOn;
     s.metalShadows = _metalShadows.state == NSControlStateValueOn;
     s.renderScale = std::clamp((float)_renderScale.doubleValue, 0.375f, 1.0f);
     s.cursorScale = std::clamp((float)_cursorScale.doubleValue, 0.25f, 2.0f);
