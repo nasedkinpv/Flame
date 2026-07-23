@@ -448,6 +448,15 @@
 # implementation, but leave the original dispatcher untouched for production.
 #00582CE0 void CEngineDynamicMesh::fun_582CE0(int, SceneObject2E *)
 
+# CEngineStaticMesh
+# Translated in CEngineStaticMeshAdd.cpp since 2026-07-21 but never actually
+# registered here until now -- discovered while translating the heightfield
+# sibling below. Added the same defensive null-guards (unchecked
+# MyScaledSurface/MyCESurfHandle pointer derefs) preemptively before first
+# live test, following the same reasoning that fixed the heightfield
+# sibling's intermittent crash.
+00586190 int CEngineStaticMesh::appendToSceneObject2EList(int)
+
 # CEngineStaticHeightField
 # Crashed once (of two attempts) on world load. Re-checked the loader
 # (tools/flametal_loader/main.cpp connectFlametalAndDkii): it patches PE

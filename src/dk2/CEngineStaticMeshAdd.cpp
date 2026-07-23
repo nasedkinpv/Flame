@@ -289,6 +289,13 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
 
         // 0x5862AC..0x5862BB: resolve this sub-part's base MyScaledSurface.
         MyScaledSurface *surf = MyEntryBuf_MyScaledSurface_getByIdx(record.surfIdx);
+        // wip: defensive null-guard (same rationale as the heightfield
+        // sibling CEngineStaticHeightFieldAdd.cpp -- not present in the
+        // original decompile, but this function was never actually live
+        // until now and an unchecked deref here would crash instead of
+        // relying on Windows SEH like the original x86 does). Skip just
+        // this sub-part rather than aborting the whole append.
+        if (surf == nullptr) continue;
 
         // 0x5862BE..0x5862F3: combine draw flags.
         uint32_t andMask = 0xFFFFFFFFu;
@@ -312,7 +319,9 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
         // 0x586341..0x58638A: LOD metric = record.mmFactor * reductionFactor
         // / baseHandle.surfWidth8, compared against 3 undocumented float
         // thresholds to pick a coarse level 0..3.
+        if (surf->scaledSurfArr == nullptr) continue;
         MyCESurfHandle *baseHandle = surf->scaledSurfArr->surfScaledArr[0];
+        if (baseHandle == nullptr) continue;
         const float metric = roundedDiv(
                 roundedMul(record.mmFactor, reductionFactor),
                 static_cast<float>(baseHandle->surfWidth8));
@@ -342,6 +351,7 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
         const int32_t flatIndex = lodLevel + 4 * (widthStep * probHeight + fineIndex);
         MyCESurfHandle *handle1 =
                 reinterpret_cast<MyCESurfHandle *const *>(surf->scaledSurfArr)[flatIndex];
+        if (handle1 == nullptr) continue;
 
         MyCESurfHandle_static_addToHashList_flagsOr400(
                 handle1, static_cast<int16_t>(combinedFlags1));
@@ -361,8 +371,10 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
             // parameters, and the picked LOD level is the best-supported
             // candidate for sub_581B80's declared first parameter.
             MyScaledSurface *surf2 = MyEntryBuf_MyScaledSurface_getByIdx(field_20);
+            if (surf2 == nullptr) continue;
             const int lodLevel2 = sub_57F030(surf2, reductionFactor, record.mmFactor);
             handle2 = surf2->sub_581B80(lodLevel2, 0.0f, 0);
+            if (handle2 == nullptr) continue;
 
             uint32_t andMask2 = 0xFFFFFFFFu;
             uint32_t orMask2 = 0;
