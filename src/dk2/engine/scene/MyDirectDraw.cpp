@@ -310,7 +310,20 @@ int __cdecl dk2::static_MyDirectDraw_devTexture_init(MyDirectDraw *mydd) {
         }
         pSurfHashList2_2 = v26;
         patch::log::dbg("bump16: SurfHashList2(argb32) ctor enter");
-        if (((unsigned __int8) v26->constructor(&MyCEngineSurfDesc_argb32_instance, 32, 512) & (unsigned __int8) v14) ==
+        // Target holder-page count bumped 512 -> 2048 (2026-07-24): the
+        // original's own SurfHashList2::_probablySort LRU (holder_size=128,
+        // fixed, unrelated to this count) started evicting/recompositing
+        // pages far more often once CEngineStaticMesh/CEngineStaticHeightField
+        // ::appendToSceneObject2EList started correctly registering many more
+        // objects that were previously invisible/miscategorized (this same
+        // session's fixes) -- more live MyCESurfHandles competing for a fixed
+        // page pool. FUN_00591da0 (the per-page allocator, decompiled) has no
+        // other hardcoded cap besides plain malloc/DirectDraw-surface failure,
+        // which the existing loop already handles gracefully (breaks early,
+        // degrades to whatever it could allocate) -- so this is a safe count
+        // bump, not a struct-layout change (holder_size/arr5x5 fields
+        // untouched). 2048 * 128x128x32bit ~= 128MB, reasonable on modern HW.
+        if (((unsigned __int8) v26->constructor(&MyCEngineSurfDesc_argb32_instance, 32, 2048) & (unsigned __int8) v14) ==
             0) {
             SurfHashList2_initialized = 1;
             MyDirectDraw_devTexture_destroy();
