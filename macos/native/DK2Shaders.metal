@@ -135,18 +135,24 @@ struct DK2MeshCamera {
     float pad0, pad1;
 };
 
-// Solve for the world XZ that projects to a given NDC on the water plane Y=0.
-// Only rows x/y/w of viewProj are used (row z is the piecewise-depth far branch
-// and unreliable), so this is robust: two linear equations, two unknowns.
+// Solve for the world XY that projects to a given NDC on the ground plane Z=0.
+// In DK2 world space X/Y are the horizontal map axes and Z is height, so the
+// floor is a Z=const plane; the near-top-down camera never sees it edge-on, so
+// there is no horizon singularity. World X (col 0) and Y (col 1) are the
+// unknowns; Z (col 2) is pinned to the plane height. Only clip rows x/y/w are
+// used (row z is the piecewise-depth far branch, unreliable). Two equations,
+// two unknowns.
 static float2 dk2_unproject_ground(constant DK2MeshCamera &camera, float2 ndc) {
-    const float4 A = camera.viewProj[0];  // world x column
-    const float4 C = camera.viewProj[2];  // world z column
-    const float4 D = camera.viewProj[3];  // translation column
-    // (A.x - ndc.x*A.w) wx + (C.x - ndc.x*C.w) wz = ndc.x*D.w - D.x
-    const float a00 = A.x - ndc.x * A.w, a01 = C.x - ndc.x * C.w;
-    const float a10 = A.y - ndc.y * A.w, a11 = C.y - ndc.y * C.w;
-    const float b0 = ndc.x * D.w - D.x;
-    const float b1 = ndc.y * D.w - D.y;
+    const float kPlaneZ = 0.0f;               // water/floor height in world Z
+    const float4 A = camera.viewProj[0];      // world x column
+    const float4 B = camera.viewProj[1];      // world y column
+    const float4 C = camera.viewProj[2];      // world z column (pinned)
+    const float4 D = camera.viewProj[3];      // translation column
+    const float4 K = C * kPlaneZ + D;         // constant term at z = kPlaneZ
+    const float a00 = A.x - ndc.x * A.w, a01 = B.x - ndc.x * B.w;
+    const float a10 = A.y - ndc.y * A.w, a11 = B.y - ndc.y * B.w;
+    const float b0 = ndc.x * K.w - K.x;
+    const float b1 = ndc.y * K.w - K.y;
     const float det = a00 * a11 - a01 * a10;
     if (abs(det) < 1e-12f) return float2(0.0f);
     const float inv = 1.0f / det;
@@ -574,64 +580,57 @@ static inline float dk2_vnoise(float2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// Modern water/lava overlay on top of the engine-animated base colour (the
-// engine already scrolls a UV sine, so we do NOT re-do the ripple - we add
-// what it cannot: a procedural surface normal for sun glints, animated
-// caustic veins, a depth tint and, for lava, emissive throb). No world
-// normal is available on legacy floor tiles, and the camera is near top-down,
-// so the normal is reconstructed from two scrolling noise layers around +Z.
-static inline float4 dk2_water_overlay(float4 base, float2 worldXZ,
+// Four-octave fbm over the value noise above.
+static inline float dk2_fbm(float2 p) {
+    float sum = 0.0f, amp = 0.5f;
+    for (int i = 0; i < 4; ++i) {
+        sum += amp * dk2_vnoise(p);
+        p *= 2.03f;
+        amp *= 0.5f;
+    }
+    return sum;
+}
+
+// Simple, tasteful top-down water/lava. Standard practice: two slow scrolling
+// fbm layers give a height field; its gradient is the surface normal; a fixed
+// sun gives one soft broad specular; a gentle grazing (fresnel-ish) term lifts
+// the rim. Calm palette, no high-frequency sparkle spam. The domain is the
+// world XY reconstructed on the floor plane, so it is physically fixed to the
+// level. Only base.a (tile/shore shape) is kept from the engine texture.
+static inline float4 dk2_water_overlay(float4 base, float2 worldXY,
                                        float t, bool lava) {
-    // WORLD-anchored domain: reconstructed world XZ (Y=0 plane) so the surface
-    // is physically fixed to the level and pans/zooms with the camera - we fly
-    // over it. No per-tile uv (tiling) and no screen-lock. kWorldScale tunes
-    // wave size vs world units.
-    const float kWorldScale = 0.012f;
-    const float2 P = worldXZ * kWorldScale;
-    // two scrolling noise fields -> height, differentiated -> surface normal
-    const float2 w1 = P * 3.0f + float2(t * 0.06f, t * 0.045f);
-    const float2 w2 = P * 6.3f - float2(t * 0.05f, t * 0.08f);
-    const float e = 0.06f;
-    float hC = dk2_vnoise(w1) * 0.6f + dk2_vnoise(w2) * 0.4f;
-    float hX = dk2_vnoise(w1 + float2(e, 0)) * 0.6f + dk2_vnoise(w2 + float2(e, 0)) * 0.4f;
-    float hY = dk2_vnoise(w1 + float2(0, e)) * 0.6f + dk2_vnoise(w2 + float2(0, e)) * 0.4f;
-    const float bump = lava ? 2.2f : 1.4f;
-    float3 N = normalize(float3((hC - hX) * bump / e, (hC - hY) * bump / e, 1.0f));
+    const float kScale = 0.020f;              // world units -> ripple size (tune)
+    const float2 p = worldXY * kScale;
+    const float flow = lava ? 0.35f : 1.0f;   // lava creeps, water flows
+    const float2 a = p        + float2(0.030f, 0.021f) * t * flow;
+    const float2 b = p * 1.7f - float2(0.019f, 0.034f) * t * flow;
 
-    const float3 V = float3(0.0f, 0.0f, 1.0f);              // near top-down
-    const float3 L = normalize(float3(0.45f, 0.35f, 0.82f)); // fake keeper sun
+    const float e = 0.15f;
+    const float h  = dk2_fbm(a)            * 0.6f + dk2_fbm(b)            * 0.4f;
+    const float hx = dk2_fbm(a + float2(e, 0)) * 0.6f + dk2_fbm(b + float2(e, 0)) * 0.4f;
+    const float hy = dk2_fbm(a + float2(0, e)) * 0.6f + dk2_fbm(b + float2(0, e)) * 0.4f;
+    const float slope = lava ? 1.6f : 2.4f;
+    const float3 N = normalize(float3((h - hx) * slope / e, (h - hy) * slope / e, 1.0f));
+
+    const float3 V = float3(0.0f, 0.0f, 1.0f);               // near top-down
+    const float3 L = normalize(float3(0.4f, 0.5f, 0.75f));   // fixed sun
     const float3 H = normalize(L + V);
+    const float spec = pow(saturate(dot(N, H)), lava ? 30.0f : 60.0f);  // broad, soft
+    const float fres = pow(1.0f - saturate(N.z), 3.0f);      // grazing lift
 
-    // fresnel is subtle top-down; drives depth tint + a rim of sky/heat colour
-    float fres = pow(1.0f - saturate(dot(N, V)), 3.0f);
-    // tight sun/heat glint riding the reconstructed normal
-    float spec = pow(saturate(dot(N, H)), lava ? 40.0f : 140.0f);
-    // caustic veins: sharpened, counter-scrolling noise (continuous domain)
-    float caust = pow(saturate(dk2_vnoise(P * 4.2f - float2(t * 0.11f, t * 0.07f))), 5.0f);
-
-    // Fully procedural: the engine base is a jumpy 3-frame slideshow, so it is
-    // NOT sampled for colour at all - only base.a is kept for the tile's shape/
-    // shore alpha. A low-frequency noise gives large-scale depth variation so
-    // the surface is not a flat wash.
-    const float bigDepth = dk2_vnoise(P * 0.8f + float2(t * 0.012f, t * 0.008f));
     float3 col;
     if (lava) {
-        const float3 deep = float3(0.28f, 0.04f, 0.018f);
-        const float3 hot  = float3(1.8f, 0.68f, 0.16f);
-        float throb = 0.5f + 0.5f * sin(t * 1.6f + hC * 6.28318f);
-        float molten = pow(saturate(hC * 0.5f + bigDepth * 0.4f + caust + 0.12f), 2.0f);
-        col = mix(deep, hot, molten);
-        col += hot * throb * 0.22f;                        // slow emissive throb
-        col += spec * float3(2.0f, 1.2f, 0.5f);            // molten glint
-        col += fres * float3(0.6f, 0.2f, 0.06f);           // heat rim
+        const float3 deep = float3(0.30f, 0.045f, 0.02f);
+        const float3 hot  = float3(1.7f, 0.62f, 0.14f);
+        col = mix(deep, hot, saturate(h + 0.15f));
+        col += spec * float3(2.0f, 1.1f, 0.45f);            // molten glint
+        col += fres * float3(0.5f, 0.16f, 0.05f);           // heat rim
     } else {
-        const float3 deep    = float3(0.02f, 0.12f, 0.20f);
-        const float3 shallow = float3(0.11f, 0.36f, 0.44f);
-        float depth = saturate(0.30f + hC * 0.30f + bigDepth * 0.40f);
-        col = mix(deep, shallow, depth);
-        col += spec * float3(1.0f, 0.98f, 0.92f) * 1.6f;   // continuous sun sparkle
-        col += caust * float3(0.15f, 0.36f, 0.40f) * 0.75f; // continuous caustics
-        col += fres * float3(0.12f, 0.18f, 0.22f);         // sky rim
+        const float3 deep    = float3(0.03f, 0.15f, 0.22f);
+        const float3 shallow = float3(0.10f, 0.34f, 0.42f);
+        col = mix(deep, shallow, saturate(h + 0.2f));
+        col += spec * float3(1.0f, 0.97f, 0.9f) * 0.9f;     // soft sun
+        col = mix(col, float3(0.35f, 0.5f, 0.6f), fres * 0.25f); // sky rim
     }
     return float4(col, base.a);
 }
