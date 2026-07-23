@@ -16,6 +16,7 @@
 #include "dk2_globals.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <emmintrin.h>
 
@@ -417,9 +418,22 @@ void dk2::CEngineAnimMesh::appendToSceneObject2EList(int requestArg) {
     }
 
     // Part 9: light/sphere spatial query + Obj57BCB0 lights collection.
+    // field_68 feeds ONLY dk2::meshgpu::prepareLights' `mask` (GPU mesh path,
+    // CEngineAnimMesh.cpp) - with settings.toml [game] light_selection_gpu on
+    // (default), that mask is ignored there in favour of a per-vertex GPU
+    // test (see Obj57AD20.cpp sub_57AC10 for the full rationale/trade-off),
+    // so skip the real sphere-cull query for it too. The SECOND query below
+    // (mask=4) is untouched: it feeds `lights.sub_57C080` -> field_3C, an
+    // ambient-colour contribution consumed regardless of GPU/CPU mesh path.
     auto *collection = reinterpret_cast<int32_t *>(static_cast<intptr_t>(field_58));
-    field_68 = dk2::sub_57BBF0(collection, nullptr, worldPos.x, worldPos.y,
-                               worldPos.z, radius, 0x100);
+    static const bool skipCpuLightSelection = [] {
+        const char *v = std::getenv("DK2_LIGHT_SELECTION_GPU");
+        return !v || std::strcmp(v, "0") != 0;
+    }();
+    field_68 = skipCpuLightSelection
+        ? -1
+        : dk2::sub_57BBF0(collection, nullptr, worldPos.x, worldPos.y,
+                          worldPos.z, radius, 0x100);
     const int lightMask = dk2::sub_57BBF0(collection, nullptr, worldPos.x,
                                           worldPos.y, worldPos.z, radius, 4);
     Obj57BCB0 lights;

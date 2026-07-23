@@ -1230,11 +1230,10 @@ int __fastcall sub_57BBF0(
 // distance, so it could rarely over-light in those rare fallback frames.
 //
 // settings.toml [game] light_selection_gpu (default on) gates this: when
-// off, call the ORIGINAL (untranslated) sub_57BBF0 directly at its fixed
-// address for the real geometric test - sub_57BBF0 itself is not replaced,
-// so this reproduces the original's exact behaviour without re-deriving its
-// internals (see roadmap for the traced signature: thiscall, lightList this,
-// then mask/x/y/z/radius on the stack).
+// off, call the already-translated dk2::sub_57BBF0 (src/dk2/sub_57BBF0.cpp) -
+// the real geometric sphere-cull test - exactly like CEngineStaticMeshAdd.cpp
+// does for its own copy of this same call (mask=1, collection=a1, position=
+// vec, radius=f20; see that file's comment for the verified call site).
 int dk2::Obj57AD20::sub_57AC10(int *a1) {
     static const bool skipCpuSelection = [] {
         const char *v = std::getenv("DK2_LIGHT_SELECTION_GPU");
@@ -1244,9 +1243,7 @@ int dk2::Obj57AD20::sub_57AC10(int *a1) {
         f2C = static_cast<int>(0xFFFFFFFFu) | f28;
         return f2C;
     }
-    using SelectFn = int(__thiscall *)(int *, uint32_t, float, float, float, float);
-    const auto select = reinterpret_cast<SelectFn>(0x0057BBF0);
-    f2C = select(a1, 1u, vec.x, vec.y, vec.z, f20) | f28;
+    f2C = dk2::sub_57BBF0(a1, nullptr, vec.x, vec.y, vec.z, f20, 1) | f28;
     return f2C;
 }
 
