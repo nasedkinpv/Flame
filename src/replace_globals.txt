@@ -515,6 +515,13 @@
 005948D0 int SurfHashList::_probablySort()
 
 # SurfHashList2
+# constructor: holder_size bumped 128 -> 256 (2026-07-24, terrain-HD
+# investigation) -- see the file's own header comment for why. Uses
+# createHolder (0x591DA0, raw address call, genapi never extracted it) and
+# CEngineDDSurface::constructor/MyHeap_alloc/MyHeap_free (all already
+# declared) for everything else -- no other original function's own
+# behavior changes, only the size this constructor allocates holders at.
+00592BD0 char SurfHashList2::constructor(MyCEngineSurfDesc *, int, int)
 00593F50 int SurfHashList2::_probablySort()
 
 # CPCEngineInterface

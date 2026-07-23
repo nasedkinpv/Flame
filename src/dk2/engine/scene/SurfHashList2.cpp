@@ -9,9 +9,9 @@
 #include "dk2/CEngineSurfaceBase.h"
 #include "dk2/CEngineDDSurface.h"
 #include "dk2/MyStringHashMap_MyCESurfHandle_entry.h"
+#include "dk2/MyCEngineSurfDesc.h"
+#include "dk2/SurfHashListItem.h"
 #include <metal_bridge/MetalBridgeProducer.h>
-#include "patches/logging.h"
-#include <cstring>
 
 namespace {
 
@@ -24,23 +24,6 @@ const void *atlasPageKey(dk2::CEngineSurfaceBase *page) {
 }
 
 void reportHardwareAtlasRect(dk2::MyCESurfHandle *handle) {
-    // wip: terrain-HD investigation (2026-07-24c) -- see which gate a
-    // terrain-looking handle fails here, if any.
-    if (handle) {
-        const char *dbgName =
-            dk2::MyStringHashMap_MyCESurfHandle_instance.entries.buf[handle->mapIdx].name;
-        static int wipLeft = 30;
-        if (wipLeft > 0 && (std::strstr(dbgName, "Rock") || std::strstr(dbgName, "T_") ||
-                            std::strstr(dbgName, "Path"))) {
-            --wipLeft;
-            patch::log::dbg("reportHardwareAtlasRect: \"%s\" holder_parent=%p pageKey=%p "
-                            "x8=%u y8=%u w=%u h=%u",
-                            dbgName, (void *) handle->holder_parent,
-                            handle->holder_parent ? atlasPageKey(handle->holder_parent->surf) : nullptr,
-                            (unsigned) handle->x8, (unsigned) handle->y8,
-                            (unsigned) handle->surfWidth8, (unsigned) handle->surfHeight8);
-        }
-    }
     if (!handle || !handle->holder_parent || !handle->surfWidth8 || !handle->surfHeight8) return;
     const char *name =
         dk2::MyStringHashMap_MyCESurfHandle_instance.entries.buf[handle->mapIdx].name;
@@ -49,8 +32,101 @@ void reportHardwareAtlasRect(dk2::MyCESurfHandle *handle) {
         handle->surfWidth8, handle->surfHeight8);
 }
 
+// FUN_00591da0 (still original/untranslated): allocates one SurfaceHolder
+// (0x20 bytes) wrapping a fresh hardware CEngineDDSurface of size
+// (holderSize x holderSize), built from `desc`. cdecl, no header entry
+// exists for it anywhere in libs/dkii_exe/api (confirmed absent by grep --
+// same situation as Obj57AD20::sub_57AC10 documented elsewhere in this
+// project), so called through a raw function pointer to its original
+// address like the other genapi-missed helpers.
+using CreateHolderFn = dk2::SurfaceHolder *(__cdecl *)(int, dk2::MyCEngineSurfDesc *, int);
+constexpr auto createHolder = reinterpret_cast<CreateHolderFn>(0x00591DA0);
+
 }  // namespace
 
+// dk2::SurfHashList2::constructor (0x592BD0). Allocates `targetHolders`
+// hardware holder pages of holder_size x holder_size each (bailing early if
+// an allocation fails), then requires at least `minHolders` to have
+// succeeded -- otherwise tears everything down and reports failure.
+//
+// holder_size bumped 0x80 (128) -> 0x100 (256) (2026-07-24): the original's
+// hardcoded 128 packs many small, unrelated named textures (terrain rock/
+// floor/wall variants, ~15-30 per page observed live) into one tiny shared
+// atlas page, so the HD resource-pack art (verified separately reaching
+// composePage successfully) gets scaled down into a correspondingly tiny
+// sub-rect and reads as blurry -- not a registration bug, a page-size
+// ceiling. 256 is the max safe bump: MyCESurfHandle::x8/y8 (the position of
+// a handle's rect within its holder) are uint8_t, so positions must stay in
+// 0..255, meaning holder_size can be at most 256. Untouched:
+// createHolder/sub_593880's own math (they already read holder_size back
+// from `this`, not a hardcoded local), and FUN_00591da0 itself (unchanged,
+// original address) -- it already computes everything (including
+// SurfaceHolder::_1divSize = 1/holder_size) from the size it's given.
+char dk2::SurfHashList2::constructor(MyCEngineSurfDesc *desc, int minHolders, int targetHolders) {
+    this->surfDesc = desc;
+    this->holder_size = 0x100;
+    this->holder_count = 0;
+
+    int allocated = 0;
+    if (targetHolders > 0) {
+        do {
+            SurfaceHolder *newHolder = createHolder(this->holder_size, this->surfDesc, 1);
+            if (!newHolder) break;
+            ++this->holder_count;
+            if (this->holder_first != nullptr) {
+                this->holder_first->next_ = newHolder;
+            }
+            newHolder->next_ = nullptr;
+            ++allocated;
+            newHolder->prev_ = this->holder_first;
+            this->holder_first = newHolder;
+        } while (allocated < targetHolders);
+    }
+
+    if (this->holder_count < minHolders) {
+        // Not enough holders could be allocated: reverse-walk the list
+        // (built via prev_ above) and tear every holder down, matching the
+        // original's cleanup exactly.
+        SurfaceHolder *cur = this->holder_first;
+        SurfaceHolder *reversed = nullptr;
+        while (cur != nullptr) {
+            SurfaceHolder *walkNext = cur->prev_;
+            cur->prev_ = reversed;
+            reversed = cur;
+            cur = walkNext;
+        }
+        this->holder_first = nullptr;
+        cur = reversed;
+        while (cur != nullptr) {
+            SurfaceHolder *next = cur->prev_;
+            if (cur->surf) {
+                cur->surf->v_scalar_destructor(1);
+            }
+            if (cur->hashItem_link) {
+                // Unreachable in practice: freshly-allocated holders here
+                // have never been hashed into, so hashItem_link is always
+                // null -- mirrored for fidelity rather than assumed away.
+                using FreeItemFn = void (__thiscall *)(SurfHashListItem *);
+                reinterpret_cast<FreeItemFn>(0x00592D40)(cur->hashItem_link);
+            }
+            MyHeap_free(cur);
+            cur = next;
+        }
+        if (this->ddsurf) {
+            this->ddsurf->v_scalar_destructor(1);
+        }
+        this->ddsurf = nullptr;
+        return 0;
+    }
+
+    auto *newDdsurf = static_cast<CEngineDDSurface *>(MyHeap_alloc(sizeof(CEngineDDSurface)));
+    if (!newDdsurf) {
+        this->ddsurf = nullptr;
+        return 0;
+    }
+    this->ddsurf = newDdsurf->constructor(this->holder_size, this->holder_size, this->surfDesc, 0);
+    return 1;
+}
 
 int dk2::SurfHashList2::_probablySort() {
     int handleCount = this->calcHandleCountToFitHolder();

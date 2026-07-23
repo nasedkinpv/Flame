@@ -7,7 +7,6 @@
 #include "dk2/SurfaceHolder.h"
 #include "dk2/MyCESurfHandle.h"
 #include "dk2/MyCESurfScale.h"
-#include "dk2/MyStringHashMap_MyCESurfHandle_entry.h"
 #include "dk2/MyScaledSurface.h"
 #include "dk2/Obj57BCB0.h"
 #include "dk2/Obj58EF60.h"
@@ -445,22 +444,6 @@ uint32_t resolveBridgeTextureIdGuarded(dk2::MyCESurfHandle *slotHandle,
                 auto *page = reinterpret_cast<dk2::CEngineDDSurface *>(
                         handle->holder_parent->surf);
                 auto *pageTex = reinterpret_cast<gog::FakeTexture *>(page->devTex);
-                // wip: terrain-HD investigation (2026-07-24e) -- cross-reference
-                // this bridgeId with the host's composePage log by name.
-                {
-                    static int wipLeft = 30;
-                    const char *dbgName = dk2::MyStringHashMap_MyCESurfHandle_instance
-                            .entries.buf[handle->mapIdx].name;
-                    if (wipLeft > 0 && (strstr(dbgName, "Rock") || strstr(dbgName, "T_") ||
-                                        strstr(dbgName, "Path"))) {
-                        --wipLeft;
-                        patch::log::dbg("resolveBridgeTextureId: \"%s\" fakeTex=%p "
-                                        "bridgeId=%u ddSurf=%p",
-                                        dbgName, (void *) pageTex,
-                                        pageTex && isOurFakeTexture(pageTex) ? pageTex->bridgeId() : 0,
-                                        (void *) page->ddSurf);
-                    }
-                }
                 if (pageTex && isOurFakeTexture(pageTex)) {
                     ++g_resolveStats.fakeHit;
                     *bridgeIdOut = pageTex->bridgeId();
