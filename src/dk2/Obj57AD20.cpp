@@ -700,14 +700,23 @@ bool retainedEntryMesh(const MeshEntry &entry,
         std::vector<DK2MMeshVertex> vertices;
         std::vector<uint16_t> indices;
     };
-    static CacheEntry cache[16384] = {};
+    // The entry buffers are pool-allocated in a contiguous region, so raw
+    // address bits cluster and the old 16384-slot cache saturated its 64-probe
+    // window for ~27% of lookups (measured 1.26M saturation fails), dropping
+    // that much static geometry back to CPU. Larger table (18% load at ~12k
+    // unique templates) plus a multiplicative bit-mix that spreads clustered
+    // pointers across the whole table.
+    constexpr uint32_t kCacheSlots = 65536;
+    constexpr uint32_t kCacheMask = kCacheSlots - 1;
+    static CacheEntry cache[kCacheSlots] = {};
     static std::vector<ContentEntry> contents;
     static std::unordered_multimap<uint64_t, uint32_t> contentLookup;
-    uintptr_t hash = reinterpret_cast<uintptr_t>(entry.vertices) >> 4;
-    hash ^= reinterpret_cast<uintptr_t>(entry.triangleIndices) >> 3;
-    uint32_t slot = static_cast<uint32_t>(hash) & 16383u;
+    uint64_t hash = (reinterpret_cast<uintptr_t>(entry.vertices) >> 4) * 0x9E3779B97F4A7C15ull;
+    hash ^= (reinterpret_cast<uintptr_t>(entry.triangleIndices) >> 3) * 0xC2B2AE3D27D4EB4Full;
+    hash ^= hash >> 29;
+    uint32_t slot = static_cast<uint32_t>(hash) & kCacheMask;
     CacheEntry *available = nullptr;
-    for (uint32_t probe = 0; probe < 64; ++probe, slot = (slot + 1) & 16383u) {
+    for (uint32_t probe = 0; probe < 64; ++probe, slot = (slot + 1) & kCacheMask) {
         CacheEntry &candidate = cache[slot];
         if (!candidate.vertices) {
             available = &candidate;
