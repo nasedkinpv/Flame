@@ -409,6 +409,21 @@ struct ResolveStats {
 };
 ResolveStats g_resolveStats = {};
 
+// sub_57B6D0/sub_57B0E0 index into MyEntryBuf via entry.surfaceIndex, which is
+// only valid if `entry` itself (read out of Obj57AD20::f4 by entryIndex) has
+// the layout those functions assume -- the same "level-load crash showed
+// entry.vertices holding float-looking garbage" issue documented below at
+// copyEntryGuarded, but hit before any of that code's guards run, since
+// MyEntryBuf_MyScaledSurface_getByIdx (untranslated original x86, 0x57C780)
+// faults directly on an out-of-range index rather than returning null.
+dk2::MyScaledSurface *getSurfaceByIdxGuarded(int surfaceIndex) {
+    __try {
+        return dk2::MyEntryBuf_MyScaledSurface_getByIdx(surfaceIndex);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
 uint32_t resolveBridgeTextureIdGuarded(dk2::MyCESurfHandle *slotHandle,
                                        uint32_t *bridgeIdOut, void **bridgeSurfaceOut) {
     __try {
@@ -1283,7 +1298,8 @@ int *dk2::Obj57AD20::sub_57B0E0(
         int fieldOriginY,
         float scale) {
     auto &entry = reinterpret_cast<MeshEntry *>(f4)[entryIndex];
-    MyScaledSurface *surface = MyEntryBuf_MyScaledSurface_getByIdx(entry.surfaceIndex);
+    MyScaledSurface *surface = getSurfaceByIdxGuarded(entry.surfaceIndex);
+    if (surface == nullptr) return applyIndxs_sub_58AC20();
     __renderFun_setSceneObject2E(scene, 1, nullptr, nullptr, scale, a3 == 0);
 
     Vec3f ambient{
@@ -1355,7 +1371,8 @@ int *dk2::Obj57AD20::sub_57B6D0(
         int,
         float scale) {
     auto &entry = reinterpret_cast<MeshEntry *>(f4)[entryIndex];
-    MyScaledSurface *surface = MyEntryBuf_MyScaledSurface_getByIdx(entry.surfaceIndex);
+    MyScaledSurface *surface = getSurfaceByIdxGuarded(entry.surfaceIndex);
+    if (surface == nullptr) return applyIndxs_sub_58AC20();
     __renderFun_setSceneObject2E(scene, 1, nullptr, nullptr, scale, a3 == 0);
 
     const Vec3f ambient{
