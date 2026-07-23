@@ -1134,8 +1134,6 @@ void emitInline(const InlineTarget &target, const DK2MMeshVertex *vertices,
 // shows both were added days apart, presumably by concurrent work unaware of
 // each other); removed here to fix the resulting LNK2005 duplicate-definition.
 
-}  // namespace dk2
-
 
 // DKII 0x0057AC10: computes this->f2C, the per-object light-selection mask,
 // by testing the object's bounding sphere (this->vec/this->f20, populated by
