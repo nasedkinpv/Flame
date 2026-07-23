@@ -10,6 +10,8 @@
 #include "dk2/CEngineDDSurface.h"
 #include "dk2/MyStringHashMap_MyCESurfHandle_entry.h"
 #include <metal_bridge/MetalBridgeProducer.h>
+#include "patches/logging.h"
+#include <cstring>
 
 namespace {
 
@@ -22,6 +24,20 @@ const void *atlasPageKey(dk2::CEngineSurfaceBase *page) {
 }
 
 void reportHardwareAtlasRect(dk2::MyCESurfHandle *handle) {
+    // wip: terrain-HD investigation (2026-07-24c) -- see which gate a
+    // terrain-looking handle fails here, if any.
+    if (handle) {
+        const char *dbgName =
+            dk2::MyStringHashMap_MyCESurfHandle_instance.entries.buf[handle->mapIdx].name;
+        static int wipLeft = 30;
+        if (wipLeft > 0 && (std::strstr(dbgName, "Rock") || std::strstr(dbgName, "T_") ||
+                            std::strstr(dbgName, "Path"))) {
+            --wipLeft;
+            patch::log::dbg("reportHardwareAtlasRect: \"%s\" holder_parent=%p w=%u h=%u",
+                            dbgName, (void *) handle->holder_parent,
+                            (unsigned) handle->surfWidth8, (unsigned) handle->surfHeight8);
+        }
+    }
     if (!handle || !handle->holder_parent || !handle->surfWidth8 || !handle->surfHeight8) return;
     const char *name =
         dk2::MyStringHashMap_MyCESurfHandle_instance.entries.buf[handle->mapIdx].name;
