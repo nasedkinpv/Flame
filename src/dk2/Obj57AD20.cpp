@@ -915,19 +915,21 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                 &retained)) {
             return deTally(6);
         }
-        static float positions[256 * 3];
-        if (!copyEntryPositionsGuarded(entry, vertexCount, positions)) {
-            return deTally(7);
-        }
-        static const float identity[12] = {
-            1, 0, 0, 0,
-            0, 1, 0, 0,
-            0, 0, 1, 0};
-        // MeshEntry storage is reused while the camera walks the static
-        // scene. Keep topology/attributes retained, but stream the current
-        // positions so an address-cache hit cannot resurrect old terrain.
-        dk2::meshgpu::emitDeformed(
-            target, retained.meshId, positions, vertexCount, identity, lights,
+        // Static geometry (this whole path is reached only from the static
+        // mesh/heightfield renderers 0x586150/0x587010): the retained template
+        // is stored object-space, relative to `retained.origin` (its world
+        // placement). Draw it with a translate-by-origin transform so the GPU
+        // reconstructs the same absolute position it would have streamed -
+        // WITHOUT the per-frame copyEntryPositionsGuarded. That per-draw
+        // position copy was the CPU marshalling (~16.5ms/frame at zoom-out,
+        // measured 99% retained-cache hits over 11k unique templates) that
+        // Rosetta paid every frame even though static positions never change.
+        const float world[12] = {
+            1, 0, 0, retained.origin.x,
+            0, 1, 0, retained.origin.y,
+            0, 0, 1, retained.origin.z};
+        dk2::meshgpu::emitRetained(
+            target, retained.meshId, world, lights,
             ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
         return deTally(9);
     }
