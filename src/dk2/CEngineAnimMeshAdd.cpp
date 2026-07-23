@@ -228,8 +228,9 @@
 //   0x579FD0 SceneObject2EList::objects2EToDraw_enlarge (as needed, via the
 //     same enlarge-then-append idiom as CEngineStaticMeshAdd.cpp)
 //   0x58EC70 (undeclared elsewhere in this repo; populates f85_count and the
-//     per-light gap_8A[] byte flags used by part 13 -- called once per mesh,
-//     TODO(verify) exact 4-arg signature, see the local declaration below)
+//     per-light gap_8A[] byte flags used by part 13 -- called once per mesh;
+//     signature CONFIRMED 2026-07-23 against its own body, see the local
+//     declaration below -- the prior guess had the wrong arg types/order)
 //   0x5855E0 dk2::CEngineAnimMesh::sub_5855E0 (EngineAnimShadows.cpp) x0-N
 //     per mesh (see part 13 above)
 //
@@ -243,9 +244,9 @@
 //     (part 7);
 //   - the literal 0x741-path's lod__triangleCount/numVertsEx source fields
 //     (part 12c, second bullet);
-//   - sub_58EC70's exact 4-argument signature (declared locally, opaque call
-//     only -- this repo has no other translation of it to cross-check
-//     against).
+//   - sub_58EC70's field_7C+8/+9 gate bytes and its four global thresholds
+//     (0x780958/0x66FEB4/0x66FED8/0x780A60) -- the argument signature itself
+//     is now confirmed, see the local declaration below.
 
 namespace {
 
@@ -287,11 +288,28 @@ struct SceneAddRequest {
 // 0x0058EC70 -- opaque helper, not otherwise translated in this repo.
 // thiscall(this = &mesh->field_7C), populating mesh->f85_count and the
 // per-light byte flags at mesh->gap_8A[0..f85_count) (read back
-// immediately after this call, and again per-light in part 13). Args
-// TODO(verify): reconstructed from the call site as (radius-like float,
-// two further mesh-relative ints, light-collection pointer) but not
-// independently confirmed against 0x58EC70's own body beyond its prologue.
-using Sub58EC70Fun = int(__thiscall *)(void *, float, int32_t, int32_t, int32_t *);
+// immediately after this call, and again per-light in part 13).
+//
+// CORRECTED 2026-07-23: the previous signature here -- (float, int32_t,
+// int32_t, int32_t*) -- was an unverified guess reconstructed only from the
+// call site, and was WRONG in both type and order. Verified this time
+// against the function's own body (disasm from 0x58EC70 through its ret 0x10
+// epilogue, all four stack-arg slots traced):
+//   arg1 [esp+0x88]: a POINTER to the same light/sphere-collection structure
+//     sub_57BBF0 reads (count+base at +0/+4, entry pointers at +0x38; each
+//     entry has a flags dword at +4 and a float x,y,z at +8/+0xC/+0x10) --
+//     NOT a float. The previous code passed `reductionFactor` (a float bit
+//     pattern) into this slot, which the callee immediately dereferences as
+//     a pointer -- a real crash/memory-corruption bug whenever the early-out
+//     byte at field_7C+8 is nonzero and this branch actually runs (g_shadowLevel > 0).
+//   args 2-4 [esp+0x8C/0x90/0x94]: three floats, the query position (x,y,z) --
+//     subtracted from each entry's center to form a squared distance, tested
+//     against a fixed global threshold (not a per-entry radius like
+//     sub_57BBF0) filtered by (entry->flags & 0x10).
+// TODO(verify) still open: the exact meaning of the field_7C+8/+9 gate bytes
+// and the four global threshold addresses (0x780958/0x66FEB4/0x66FED8/
+// 0x780A60) -- narrower and lower-risk than the argument bug above.
+using Sub58EC70Fun = int(__thiscall *)(void *, int32_t *, float, float, float);
 const auto sub_58EC70 = reinterpret_cast<Sub58EC70Fun>(0x0058EC70);
 
 }  // namespace
@@ -535,7 +553,7 @@ void dk2::CEngineAnimMesh::appendToSceneObject2EList(int requestArg) {
         return;
     }
 
-    sub_58EC70(&field_7C, reductionFactor, field_68, lightMask, collection);
+    sub_58EC70(&field_7C, collection, worldPos.x, worldPos.y, worldPos.z);
     if (f85_count == 0) {
         return;
     }
