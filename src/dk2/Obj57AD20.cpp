@@ -361,6 +361,19 @@ bool prepareFrameLights(uint32_t *lightData, uint32_t mask,
         gog::metal_bridge::lightsSet(scratch.data(), static_cast<uint32_t>(scratch.size()),
                                      0.0f, 0.0f, 0.0f, lut);
     }
+    // wip: bring-up instrumentation (menu flicker investigation, removed
+    // once root-caused) - continuous (not "first N distinct") sampling of
+    // frame/mask/light-count, to see values changing call-to-call rather
+    // than just discovering distinct values ever seen.
+    {
+        static uint32_t calls = 0;
+        if ((++calls % 5) == 0) {
+            patch::log::dbg(
+                "prepareFrameLights: frame=%u mask=0x%08X total=%d "
+                "selected=%u scratchSize=%zu testAllLights=%d",
+                stamp, mask, total, out->count, scratch.size(), testAllLights);
+        }
+    }
     return true;
 }
 
