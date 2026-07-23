@@ -55,7 +55,7 @@ add_library(${TARGET} SHARED
         dk2/Pos2i.cpp
         dk2/AABB.cpp
         dk2/asm_fast_sqrt.cpp
-        dk2/sub_57BBF0.cpp
+        shared/dk2_core/sub_57BBF0.cpp
         dk2/RenderData.cpp
         dk2/CursorDrawer.cpp
         dk2/DrawTexToBuf.cpp

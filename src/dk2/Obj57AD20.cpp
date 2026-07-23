@@ -1194,7 +1194,7 @@ void emitInline(const InlineTarget &target, const DK2MMeshVertex *vertices,
 }  // namespace dk2::meshgpu
 
 
-// dk2::sub_57BBF0 (DKII 0x0057BBF0) lives in sub_57BBF0.cpp - see its header
+// dk2::sub_57BBF0 (DKII 0x0057BBF0) lives in src/shared/dk2_core/sub_57BBF0.cpp - see its header
 // comment for the verified algorithm and a difftest. This file used to carry
 // an independent SIMD reimplementation of the same address (a `git log`
 // shows both were added days apart, presumably by concurrent work unaware of
@@ -1225,7 +1225,7 @@ void emitInline(const InlineTarget &target, const DK2MMeshVertex *vertices,
 // distance, so it could rarely over-light in those rare fallback frames.
 //
 // settings.toml [game] light_selection_gpu (default on) gates this: when
-// off, call the already-translated dk2::sub_57BBF0 (src/dk2/sub_57BBF0.cpp) -
+// off, call the already-translated dk2::sub_57BBF0 (src/shared/dk2_core/sub_57BBF0.cpp) -
 // the real geometric sphere-cull test - exactly like CEngineStaticMeshAdd.cpp
 // does for its own copy of this same call (mask=1, collection=a1, position=
 // vec, radius=f20; see that file's comment for the verified call site).

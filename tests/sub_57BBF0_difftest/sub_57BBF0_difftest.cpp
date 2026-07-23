@@ -13,7 +13,7 @@
 //   clang++ -arch x86_64 -O2 -std=c++17 -ffp-contract=off \
 //       -o /tmp/sub57bbf0_difftest tests/sub_57BBF0_difftest/sub_57BBF0_difftest.cpp
 //   /tmp/sub57bbf0_difftest
-#include "../../src/dk2/sub_57BBF0.cpp"
+#include "../../src/shared/dk2_core/sub_57BBF0.cpp"
 
 #include <cassert>
 #include <cstdint>
