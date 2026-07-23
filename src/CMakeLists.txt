@@ -70,6 +70,7 @@ add_library(${TARGET} SHARED
         dk2/EngineShadows.cpp
         dk2/EngineAnimShadows.cpp
         dk2/CEngineStaticMeshAdd.cpp
+        dk2/CEngineStaticHeightFieldAdd.cpp
         dk2/Shadows.cpp
         dk2/CreateMeshes.cpp
         dk2/MyComputerPlayer_drop_condition.h

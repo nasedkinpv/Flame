@@ -448,6 +448,15 @@
 # implementation, but leave the original dispatcher untouched for production.
 #00582CE0 void CEngineDynamicMesh::fun_582CE0(int, SceneObject2E *)
 
+# CEngineStaticHeightField
+# 817 bytes -- smaller than the ~1.5-2.3KB bodies flagged unsafe elsewhere in
+# this file (5836A0/586190), but larger than the small dispatchers used to
+# route around that Wine 11 WOW64 self-modification issue. Untested live;
+# if this destabilizes WOW64 the same way, fall back to routing through a
+# small dispatcher instead of patching 587060 directly (see the
+# CEngineAnimMesh/Obj57AD20 entries above for the established pattern).
+00587060 int CEngineStaticHeightField::appendToSceneObject2EList(int)
+
 # MyScaledSurface
 0057C420 MyScaledSurface *MyScaledSurface::constructor(MyDblNamedSurface *, int)
 
