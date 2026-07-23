@@ -751,7 +751,17 @@ bool retainedEntryMesh(const MeshEntry &entry,
             reuseReport();
             return true;
         }
+        // Same address+counts but a DIFFERENT signature: the buffer's content
+        // changed in place. If this is ~0 during play (digging/building) and
+        // only fires on level/resource rebuild, the signature walk is
+        // redundant per-frame and describeEntryGuarded can be skipped on an
+        // address hit. Count it to decide.
         available = &candidate;  // address reuse after a level/resource rebuild
+        static uint32_t g_addrReuse = 0;
+        if ((++g_addrReuse % 64) == 1)
+            patch::log::dbg("retained: same-address-DIFFERENT-content=%u "
+                            "(if this climbs during play, signature is needed)",
+                            g_addrReuse);
         break;
     }
     if (!available) { g_reFailSat++; reFailReport(); return false; }
