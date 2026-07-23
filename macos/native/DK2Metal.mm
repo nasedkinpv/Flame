@@ -1280,7 +1280,33 @@ const CachedPng *packPng(NSString *dir, const char *name) {
     return &cache.emplace(std::move(key), std::move(png)).first->second;
 }
 
+// Material class per bridge texture id, learned from the atlas-map resource
+// names (T_Water_Bed*/Water0*/Torture_Trough_Water = water; Lava0*/T_Lava_Bed*
+// = lava, but *SOLID cooled lava is plain rock). Any page carrying a
+// water/lava rect flags the whole texture id: floor tiles composite one
+// dominant liquid per page, so this is a good-enough per-draw classifier and
+// avoids per-fragment UV-rect tests.
+std::unordered_map<uint32_t, uint32_t> &materialClasses() {
+    static std::unordered_map<uint32_t, uint32_t> m;
+    return m;
+}
+uint32_t materialClassFor(uint32_t textureId) {
+    auto it = materialClasses().find(textureId);
+    return it == materialClasses().end() ? 0u : it->second;
+}
+static bool nameContainsCI(const char *hay, const char *needle) {
+    for (const char *h = hay; *h; ++h) {
+        const char *a = h, *b = needle;
+        while (*a && *b && std::tolower((unsigned char)*a) == std::tolower((unsigned char)*b)) { ++a; ++b; }
+        if (!*b) return true;
+    }
+    return false;
+}
+
 bool noteRect(const DK2MPageAtlasMapCommand &map) {
+    if (nameContainsCI(map.name, "water")) materialClasses()[map.textureId] |= 1u;
+    else if (nameContainsCI(map.name, "lava") && !nameContainsCI(map.name, "solid"))
+        materialClasses()[map.textureId] |= 2u;
     PageState &st = pages()[map.textureId];
     for (auto &r : st.rects) {
         if (r.x == map.x && r.y == map.y) {  // slot re-composited
@@ -1910,6 +1936,10 @@ struct DrawUniform {
     // but disable Z writes, so ZENABLE alone is not a scene/UI boundary.
     // Host-only bookkeeping, never comes from the wire protocol.
     uint32_t worldGeometry;
+    // Modern material overlays (see DK2Shaders.metal dk2_water_overlay).
+    // materialFlags bit0=water bit1=lava; waterTime = seconds since launch.
+    uint32_t materialFlags;
+    float waterTime;
 };
 
 // Per-slot legacy DRAW_INDEXED scratch. 2 MiB (~74k vertices) overflowed
@@ -1945,7 +1975,7 @@ constexpr uint32_t kD3DRenderStateCullMode = 22;
 constexpr uint32_t kD3DRenderStateZFunc = 23;
 constexpr uint32_t kD3DRenderStateAlphaBlendEnable = 27;
 constexpr uint32_t kD3DRenderStateTextureFactor = 60;
-static_assert(sizeof(DrawUniform) == 148);
+static_assert(sizeof(DrawUniform) == 156);  // +materialFlags,+waterTime
 
 // Subtle bloom on lava/fire/torches: threshold-extract bright pixels, blur at
 // half resolution, add back at low intensity. Backed by settings.toml
@@ -2643,6 +2673,7 @@ bool inputLogEnabled() {
     uint64_t _appliedDrawableSize;
     uint32_t _lastBridgeFrame;
     BOOL _hdTexturesLive;
+    float _materialClock;  // seconds since first frame, drives water/lava shaders
 }
 
 - (instancetype)initWithLayer:(CAMetalLayer *)layer {
@@ -3339,6 +3370,11 @@ static void *renderWorker(void *context) {
             }
         }
         const FrameSnapshot *snapshot = _bridge ? _bridge->poll() : nullptr;
+        {
+            static const auto materialStart = TelemetryClock::now();
+            _materialClock = std::chrono::duration<float>(
+                TelemetryClock::now() - materialStart).count();
+        }
         const BOOL hdTexturesLive =
             dk2cfg::gHdTexturesLive.load(std::memory_order_relaxed) ? YES : NO;
         if (hdTexturesLive != _hdTexturesLive) {
@@ -4965,6 +5001,10 @@ static void *renderWorker(void *context) {
                         uniform.screenWidth = static_cast<float>(snapshot->width);
                         uniform.screenHeight = static_cast<float>(snapshot->height);
                         uniform.worldGeometry = 0;
+                        // Modern water/lava overlay: tag the draw by the atlas
+                        // material class of its stage-0 texture (see respack).
+                        uniform.materialFlags = respack::materialClassFor(currentStage0TextureId);
+                        uniform.waterTime = _materialClock;
                         uniform.textureIndex = currentTextureBinding.slot;
                         // v14 shadow decal: sample the page's shadow twin
                         // instead of the page. Fall back to the page slot on

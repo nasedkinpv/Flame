@@ -70,6 +70,10 @@ struct DK2DrawUniform {
     float bumpEnvLOffset1;
     // Host bookkeeping kept in the legacy uniform layout.
     uint worldGeometry;
+    // Material class + animation clock for host-side effect overlays (water,
+    // lava). materialFlags bit 0 = water, bit 1 = lava; waterTime = seconds.
+    uint materialFlags;
+    float waterTime;
 };
 
 struct DK2RasterVertex {
@@ -114,6 +118,8 @@ struct DK2RasterVertex {
     float bumpEnvLScale1 [[flat]];
     float bumpEnvLOffset1 [[flat]];
     uint meshFlags [[flat]];   // DK2M_DRAW_MESH_* for mesh-path draws, else 0
+    uint materialFlags [[flat]];  // 1=water 2=lava (host effect overlays)
+    float waterTime [[flat]];
 };
 
 DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffuse,
@@ -168,6 +174,8 @@ DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffu
     result.bumpEnvLScale1 = draw.bumpEnvLScale1;
     result.bumpEnvLOffset1 = draw.bumpEnvLOffset1;
     result.meshFlags = 0u;
+    result.materialFlags = draw.materialFlags;
+    result.waterTime = draw.waterTime;
     return result;
 }
 
@@ -362,6 +370,8 @@ vertex DK2RasterVertex dk2_vertex_mesh(device const DK2MeshVertexIn *vertices [[
     result.bumpEnvMat1_11 = 1.0f;
     result.bumpEnvLScale1 = 1.0f;
     result.bumpEnvLOffset1 = 0.0f;
+    result.materialFlags = 0u;   // world-mesh path is not water/lava tagged
+    result.waterTime = 0.0f;
     result.meshFlags = draw.flags;
     return result;
 }
@@ -515,6 +525,71 @@ fragment float4 dk2_shadow_resolve_fragment(
         : float4(coverage, coverage, coverage, 1.0);
 }
 
+// Value noise + fbm for caustics/glints (cheap, tileable enough for water).
+static inline float dk2_hash21(float2 p) {
+    p = fract(p * float2(123.34f, 456.21f));
+    p += dot(p, p + 45.32f);
+    return fract(p.x * p.y);
+}
+static inline float dk2_vnoise(float2 p) {
+    float2 i = floor(p);
+    float2 f = fract(p);
+    float2 u = f * f * (3.0f - 2.0f * f);
+    float a = dk2_hash21(i);
+    float b = dk2_hash21(i + float2(1.0f, 0.0f));
+    float c = dk2_hash21(i + float2(0.0f, 1.0f));
+    float d = dk2_hash21(i + float2(1.0f, 1.0f));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// Modern water/lava overlay on top of the engine-animated base colour (the
+// engine already scrolls a UV sine, so we do NOT re-do the ripple - we add
+// what it cannot: a procedural surface normal for sun glints, animated
+// caustic veins, a depth tint and, for lava, emissive throb). No world
+// normal is available on legacy floor tiles, and the camera is near top-down,
+// so the normal is reconstructed from two scrolling noise layers around +Z.
+static inline float4 dk2_water_overlay(float4 base, float2 uv, float2 screenUv,
+                                       float t, bool lava) {
+    // two scrolling noise fields -> height, differentiated -> surface normal
+    const float2 w1 = uv * 7.0f + float2(t * 0.06f, t * 0.045f);
+    const float2 w2 = uv * 13.0f - float2(t * 0.05f, t * 0.08f);
+    const float e = 0.06f;
+    float hC = dk2_vnoise(w1) * 0.6f + dk2_vnoise(w2) * 0.4f;
+    float hX = dk2_vnoise(w1 + float2(e, 0)) * 0.6f + dk2_vnoise(w2 + float2(e, 0)) * 0.4f;
+    float hY = dk2_vnoise(w1 + float2(0, e)) * 0.6f + dk2_vnoise(w2 + float2(0, e)) * 0.4f;
+    const float bump = lava ? 2.2f : 1.4f;
+    float3 N = normalize(float3((hC - hX) * bump / e, (hC - hY) * bump / e, 1.0f));
+
+    const float3 V = float3(0.0f, 0.0f, 1.0f);              // near top-down
+    const float3 L = normalize(float3(0.45f, 0.35f, 0.82f)); // fake keeper sun
+    const float3 H = normalize(L + V);
+
+    // fresnel is subtle top-down; drives depth tint + a rim of sky/heat colour
+    float fres = pow(1.0f - saturate(dot(N, V)), 3.0f);
+    // tight sun/heat glint riding the reconstructed normal
+    float spec = pow(saturate(dot(N, H)), lava ? 40.0f : 140.0f);
+    // caustic veins: sharpened, counter-scrolling noise
+    float caust = pow(saturate(dk2_vnoise(uv * 9.0f - float2(t * 0.11f, t * 0.07f))), 5.0f);
+
+    float3 col = base.rgb;
+    if (lava) {
+        const float3 hot = float3(1.6f, 0.55f, 0.12f);
+        const float3 deep = float3(0.35f, 0.05f, 0.02f);
+        float throb = 0.5f + 0.5f * sin(t * 1.7f + hC * 6.28318f);
+        col = mix(deep, col, 0.6f);
+        col += hot * (caust * 0.9f + throb * 0.15f);       // emissive veins + throb
+        col += spec * float3(1.7f, 1.0f, 0.5f);            // molten glint
+        col += fres * float3(0.5f, 0.15f, 0.05f);
+    } else {
+        const float3 deep = float3(0.05f, 0.20f, 0.30f);
+        col = mix(base.rgb, deep, 0.30f + 0.30f * fres);   // deepen with view
+        col += spec * float3(1.0f, 0.98f, 0.92f) * 1.4f;   // sun sparkle
+        col += caust * float3(0.12f, 0.30f, 0.34f) * 0.5f; // caustic shimmer
+        col += fres * float3(0.10f, 0.16f, 0.20f);         // sky rim
+    }
+    return float4(col, base.a);
+}
+
 fragment float4 dk2_fragment(DK2RasterVertex input [[stage_in]],
                              array<texture2d<float>, 128> textures [[texture(0)]],
                              sampler textureSampler [[sampler(0)]]) {
@@ -592,6 +667,14 @@ fragment float4 dk2_fragment(DK2RasterVertex input [[stage_in]],
             dk2_alpha_op(input.alphaOp2, alphaArg1_2, alphaArg2_2,
                          input.color, textureColor2, factor, current));
         if (pendingLuminance >= 0.0) current.rgb *= pendingLuminance;
+    }
+
+    // Modern water/lava overlay (see dk2_water_overlay). materialFlags is set
+    // host-side for draws sampling a water-/lava-named atlas region.
+    if ((input.materialFlags & 3u) != 0u) {
+        current = dk2_water_overlay(current, input.texCoord, input.position.xy,
+                                    input.waterTime,
+                                    (input.materialFlags & 2u) != 0u);
     }
 
     return current;
