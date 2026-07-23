@@ -21,11 +21,22 @@ readonly SIGNING_IDENTITY="${DK2_CODESIGN_IDENTITY:--}"
 /bin/cp "${SCRIPT_DIR}/native/Info.plist" "${APP}/Contents/Info.plist"
 /bin/cp "${SCRIPT_DIR}/AppIcon.icns" "${APP}/Contents/Resources/AppIcon.icns"
 
-/usr/bin/xcrun --sdk macosx metal \
-  -c "${SCRIPT_DIR}/native/DK2Shaders.metal" \
-  -o "${BUILD_ROOT}/DK2Shaders.air"
+readonly -a SHADER_MODULES=(
+  DK2LegacyShaders
+  DK2MeshShader
+  DK2ShadowShaders
+  DK2WaterShader
+  DK2BloomShaders
+)
+air_files=()
+for module in "${SHADER_MODULES[@]}"; do
+  /usr/bin/xcrun --sdk macosx metal \
+    -c "${SCRIPT_DIR}/native/${module}.metal" \
+    -o "${BUILD_ROOT}/${module}.air"
+  air_files+=("${BUILD_ROOT}/${module}.air")
+done
 /usr/bin/xcrun --sdk macosx metallib \
-  "${BUILD_ROOT}/DK2Shaders.air" \
+  "${air_files[@]}" \
   -o "${APP}/Contents/Resources/DK2Shaders.metallib"
 
 /usr/bin/xcrun --sdk macosx clang++ \
