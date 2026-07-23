@@ -310,6 +310,31 @@ void dk2::draw3dScene() {
         const uint64_t meshStarted = measure ? sceneProfileTicks() : 0;
         gog::metal_bridge::shadowDecalScope(anyShadow && allShadow);
         for (SceneObject2E *i = cur->pObj2E; i; i = i->next) {
+            // bring-up: bucket every dispatched object by its emitter mode so
+            // we can see WHAT the draw3d "mesh" cost is spent on. modes:
+            // <1000 plain, 1000..1999 blend, >=2000 shadow/anim-add, and the
+            // mesh vtable pointer distinguishes the class.
+            static uint32_t hist[4] = {0};   // 0:<1000 1:1000-1999 2:>=2000 3:other
+            static uint32_t vtblSeen[8] = {0};
+            static uintptr_t vtblAddr[8] = {0};
+            static uint32_t histCalls = 0;
+            const uint16_t m = (uint16_t) i->f2C_;
+            hist[m < 1000 ? 0 : m < 2000 ? 1 : 2]++;
+            const uintptr_t vt = *reinterpret_cast<uintptr_t *>(i->mesh);
+            for (int k = 0; k < 8; ++k) {
+                if (vtblAddr[k] == vt) { vtblSeen[k]++; break; }
+                if (!vtblAddr[k]) { vtblAddr[k] = vt; vtblSeen[k] = 1; break; }
+            }
+            if ((++histCalls % 20000) == 0) {
+                patch::log::dbg("draw3d obj hist/20000: <1000=%u 1000-1999=%u >=2000=%u",
+                                hist[0], hist[1], hist[2]);
+                patch::log::dbg("draw3d obj vtbl: %p=%u %p=%u %p=%u %p=%u %p=%u",
+                                (void*)vtblAddr[0], vtblSeen[0], (void*)vtblAddr[1], vtblSeen[1],
+                                (void*)vtblAddr[2], vtblSeen[2], (void*)vtblAddr[3], vtblSeen[3],
+                                (void*)vtblAddr[4], vtblSeen[4]);
+                for (auto &h : hist) h = 0;
+                for (int k = 0; k < 8; ++k) { vtblSeen[k] = 0; vtblAddr[k] = 0; }
+            }
             i->mesh->v___addRenderObj((unsigned __int16) i->f2C_, i);
         }
         const uint64_t submitStarted = measure ? sceneProfileTicks() : 0;
