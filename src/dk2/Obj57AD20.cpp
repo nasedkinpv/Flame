@@ -790,7 +790,26 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                     const dk2::Vec3f &ambient, uint32_t *lightData,
                     uint32_t lightMask,
                     dk2::Obj58EF60 *sampler = nullptr) {
-    if (!entry.triangleCount || !entry.vertices || !entry.triangleIndices) return false;
+    // bring-up: why do terrain/static entries fall back to CPU? Count every
+    // exit by reason, dump every 4096 calls. reasons: 0=empty 1=badcache
+    // 2=unreadable/>256 3=copyfail 4=no-texid 5=lightfail 6=retainfail
+    // 7=posfail 8=SUCCESS(inline) 9=SUCCESS(deformed)
+    static uint32_t deReason[10] = {0};
+    static uint32_t deCalls = 0;
+    auto deTally = [&](int r) -> bool {
+        ++deReason[r];
+        if ((++deCalls % 4096) == 0) {
+            patch::log::dbg("drawEntryOnGpu/4096: empty=%u badcache=%u unreadable=%u "
+                            "copyfail=%u no-texid=%u lightfail=%u retainfail=%u "
+                            "posfail=%u ok-inline=%u ok-deformed=%u",
+                            deReason[0], deReason[1], deReason[2], deReason[3],
+                            deReason[4], deReason[5], deReason[6], deReason[7],
+                            deReason[8], deReason[9]);
+            for (uint32_t &c : deReason) c = 0;
+        }
+        return r >= 8;  // true only on the two success reasons
+    };
+    if (!entry.triangleCount || !entry.vertices || !entry.triangleIndices) return deTally(0);
     const uint32_t indexCount = static_cast<uint32_t>(entry.triangleCount) * 3u;
     // The UV scale/offset tables are per scene-object STAGE SLOT: find the
     // slot our surface's handle occupies instead of assuming slot 0
@@ -822,7 +841,7 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     // remember, and fall back instantly afterwards.
     static std::vector<const void *> badEntries;
     for (const void *bad : badEntries) {
-        if (bad == entry.vertices) return false;
+        if (bad == entry.vertices) return deTally(1);
     }
     uint32_t vertexCount = 0;
     uint64_t signature = 0;
@@ -836,14 +855,14 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                             "falling back to CPU emission",
                             entry.vertices, entry.triangleIndices);
         }
-        return false;
+        return deTally(2);
     }
     static DK2MMeshVertex vertices[256];
     static uint16_t indices[765];
     if (sampler) {
         if (!copyEntryGuarded(entry, indexCount, &vertexCount, vertices, 256,
                               indices, uvScale, uS, vS, uO, vO)) {
-            return false;
+            return deTally(3);
         }
         // extended path: vector-field displacement stays on the CPU, exactly
         // as the legacy emitter samples it before transforming
@@ -859,10 +878,10 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     const uint32_t alphaTerm = *reinterpret_cast<const uint32_t *>(0x00779380);
     const uint32_t tint = (alphaTerm & 0xFF000000u) | 0x00FFFFFFu;
     const uint32_t textureId = resolveBridgeTextureId(slotHandle);
-    if (!textureId) return false;
+    if (!textureId) return deTally(4);
     emitMeshCamera();
     dk2::meshgpu::LightSelection lights = {};
-    if (!prepareFrameLights(lightData, lightMask, &lights)) return false;
+    if (!prepareFrameLights(lightData, lightMask, &lights)) return deTally(5);
     // Colours are plain 0..255 floats everywhere (probe confirmed zeros for
     // both vertex colour and ambient); the "bias" constants in the engine's
     // encoding helpers are themselves negative magic numbers, so nothing here
@@ -875,16 +894,17 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
         dk2::meshgpu::emitInline(
             target, vertices, vertexCount, indices, indexCount, lights,
             ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
+        return deTally(8);
     } else {
         RetainedEntryMesh retained;
         if (!retainedEntryMesh(
                 entry, indexCount, vertexCount, signature, uvScale,
                 &retained)) {
-            return false;
+            return deTally(6);
         }
         static float positions[256 * 3];
         if (!copyEntryPositionsGuarded(entry, vertexCount, positions)) {
-            return false;
+            return deTally(7);
         }
         static const float identity[12] = {
             1, 0, 0, 0,
@@ -896,6 +916,7 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
         dk2::meshgpu::emitDeformed(
             target, retained.meshId, positions, vertexCount, identity, lights,
             ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
+        return deTally(9);
     }
     return true;
 }
