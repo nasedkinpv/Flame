@@ -13,6 +13,7 @@
 #include "dk2/SurfHashListItem.h"
 #include <metal_bridge/MetalBridgeProducer.h>
 #include "patches/logging.h"
+#include <cstring>
 
 namespace {
 
@@ -144,11 +145,33 @@ int dk2::SurfHashList2::_probablySort() {
     int handleCount_ = handleCount;
     for (MyCESurfHandle *f4_surfh_first = this->surfh_first; f4_surfh_first; f4_surfh_first = f4_surfh_first->nextByHashList) {
         MyCESurfHandle *curReducted = f4_surfh_first;
+        int wipSteps = 0;
         for (int handleLeft = handleCount_;
              (handleLeft > 0 || (curReducted->reductionLevel_andFlags & 7) < MyDirectDraw_instance_devTexture.reductionLevel)
              && curReducted->nextByReduction;
              --handleLeft) {
             curReducted = curReducted->nextByReduction;
+            ++wipSteps;
+        }
+        // wip: terrain-HD investigation (2026-07-24g) -- how many steps down
+        // the reduction chain do we actually walk, and what's the before/
+        // after size?
+        {
+            static int wipLeft = 30;
+            const char *dbgName = MyStringHashMap_MyCESurfHandle_instance
+                    .entries.buf[f4_surfh_first->mapIdx].name;
+            if (wipLeft > 0 && (std::strstr(dbgName, "Rock") || std::strstr(dbgName, "T_") ||
+                                std::strstr(dbgName, "Path"))) {
+                --wipLeft;
+                patch::log::dbg("curReduction walk: \"%s\" devReductionLevel=%d handleCount_=%d "
+                                "steps=%d beforeTag=%u beforeW=%u afterTag=%u afterW=%u",
+                                dbgName, MyDirectDraw_instance_devTexture.reductionLevel,
+                                handleCount_, wipSteps,
+                                (unsigned)(f4_surfh_first->reductionLevel_andFlags & 7),
+                                (unsigned) f4_surfh_first->surfWidth8,
+                                (unsigned)(curReducted->reductionLevel_andFlags & 7),
+                                (unsigned) curReducted->surfWidth8);
+            }
         }
         f4_surfh_first->curReduction = curReducted;
         double f28_padNorm_width = curReducted->padNorm_width;
