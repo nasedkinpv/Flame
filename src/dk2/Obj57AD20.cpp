@@ -1297,6 +1297,12 @@ int *dk2::Obj57AD20::sub_57B0E0(
         int fieldOriginX,
         int fieldOriginY,
         float scale) {
+    // Same entryIndex==-1 sentinel risk as the sub_57B6D0 sibling (see its
+    // comment) -- guarded here too, though not yet directly observed to
+    // crash via this specific function.
+    if (entryIndex < 0 || static_cast<uint32_t>(entryIndex) >= sprsCount) {
+        return applyIndxs_sub_58AC20();
+    }
     auto &entry = reinterpret_cast<MeshEntry *>(f4)[entryIndex];
     MyScaledSurface *surface = getSurfaceByIdxGuarded(entry.surfaceIndex);
     if (surface == nullptr) return applyIndxs_sub_58AC20();
@@ -1370,6 +1376,15 @@ int *dk2::Obj57AD20::sub_57B6D0(
         int,
         int,
         float scale) {
+    // entryIndex arrives as -1 from at least one original x86 caller
+    // (CDefaultPlayerInterface's per-frame UI render -- confirmed via a
+    // live CrashInfo stack trace: DKII:CDefaultPlayerInterface::fun_403FB0
+    // -> sub_42F040 -> here, with edi=entryIndex=0xFFFFFFFF). Bounds-check
+    // against sprsCount before indexing f4, same rationale as the
+    // getSurfaceByIdxGuarded guard just below.
+    if (entryIndex < 0 || static_cast<uint32_t>(entryIndex) >= sprsCount) {
+        return applyIndxs_sub_58AC20();
+    }
     auto &entry = reinterpret_cast<MeshEntry *>(f4)[entryIndex];
     MyScaledSurface *surface = getSurfaceByIdxGuarded(entry.surfaceIndex);
     if (surface == nullptr) return applyIndxs_sub_58AC20();
