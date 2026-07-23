@@ -12,6 +12,7 @@
 #include "dk2/MyCEngineSurfDesc.h"
 #include "dk2/SurfHashListItem.h"
 #include <metal_bridge/MetalBridgeProducer.h>
+#include "patches/logging.h"
 
 namespace {
 
@@ -130,6 +131,16 @@ char dk2::SurfHashList2::constructor(MyCEngineSurfDesc *desc, int minHolders, in
 
 int dk2::SurfHashList2::_probablySort() {
     int handleCount = this->calcHandleCountToFitHolder();
+    // wip: terrain-HD investigation (2026-07-24f) -- see what global
+    // reduction-chain-walk depth calcHandleCountToFitHolder actually settles
+    // on now, with the bumped holder_count/holder_size.
+    {
+        static int wipTicks = 0;
+        if ((wipTicks++ % 60) == 0) {
+            patch::log::dbg("calcHandleCountToFitHolder: %d (holder_count=%u holder_size=%d)",
+                            handleCount, this->holder_count, this->holder_size);
+        }
+    }
     int handleCount_ = handleCount;
     for (MyCESurfHandle *f4_surfh_first = this->surfh_first; f4_surfh_first; f4_surfh_first = f4_surfh_first->nextByHashList) {
         MyCESurfHandle *curReducted = f4_surfh_first;
