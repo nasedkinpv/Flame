@@ -50,6 +50,25 @@ void dk2::MyCESurfHandle::resolveSurface() {
             if (!this->cesurf) {
                 int EntryIdx = ((MyStringHashMap *)&MyStringHashMap_MyCESurfHandle_instance)->getEntryIdx(f0_name);
                 MyStringHashMap_MyCESurfHandle_instance.entries.buf[EntryIdx].value->loadPrescaled();
+            } else {
+                // Named HD lookup for handles that never go through a shared
+                // atlas holder page (world/terrain/room textures resolved
+                // directly here, confirmed live: paint()/expandPut() never
+                // see these names). Reuses the existing reportAtlasRect/
+                // respack machinery -- a single (0,0,w,h) rect covering the
+                // whole surface -- instead of the host's fallback
+                // content-hash lookup, which mis-marks a texture_id
+                // "dynamic" (HD disabled) after 8 misses; that happened here
+                // because now-live CEngineStaticMesh/CEngineStaticHeightField
+                // registration causes far more texture_id reuse/churn than
+                // before. f0_name is already the canonical base name (no
+                // MM<n> suffix -- that's only ever added to build texName
+                // above), matching what reportAtlasRect's own canonicalizer
+                // expects.
+                gog::metal_bridge::reportAtlasRect(
+                        atlasPageKey(this->cesurf), f0_name, 0, 0,
+                        static_cast<uint32_t>(this->surfWidth8),
+                        static_cast<uint32_t>(this->surfHeight8));
             }
         }
         return;
@@ -82,6 +101,14 @@ void dk2::MyCESurfHandle::resolveSurface() {
     this->createReduction();
     if (!f24_reductionLevel || !this->nextByReduction) {
         this->cesurf = (CEngineSurface*) MyTextures_instance.loadCompressed(texName);
+        // Same named-HD-lookup registration as the other resolveSurface()
+        // success path above.
+        if (this->cesurf) {
+            gog::metal_bridge::reportAtlasRect(
+                    atlasPageKey(this->cesurf), f0_name, 0, 0,
+                    static_cast<uint32_t>(this->surfWidth8),
+                    static_cast<uint32_t>(this->surfHeight8));
+        }
     }
 }
 
