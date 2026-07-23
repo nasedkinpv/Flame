@@ -65,6 +65,17 @@ void dk2::MyCESurfHandle::resolveSurface() {
                 // MM<n> suffix -- that's only ever added to build texName
                 // above), matching what reportAtlasRect's own canonicalizer
                 // expects.
+                // wip: verify the fix actually fires for terrain (2026-07-24b)
+                static int wipLogsLeft = 20;
+                if (wipLogsLeft > 0 && (std::strstr(f0_name, "Rock") ||
+                                        std::strstr(f0_name, "T_") ||
+                                        std::strstr(f0_name, "Path"))) {
+                    --wipLogsLeft;
+                    patch::log::dbg("resolveSurface reportAtlasRect: \"%s\" %ux%u pageKey=%p",
+                                    f0_name, static_cast<uint32_t>(this->surfWidth8),
+                                    static_cast<uint32_t>(this->surfHeight8),
+                                    atlasPageKey(this->cesurf));
+                }
                 gog::metal_bridge::reportAtlasRect(
                         atlasPageKey(this->cesurf), f0_name, 0, 0,
                         static_cast<uint32_t>(this->surfWidth8),
@@ -104,6 +115,15 @@ void dk2::MyCESurfHandle::resolveSurface() {
         // Same named-HD-lookup registration as the other resolveSurface()
         // success path above.
         if (this->cesurf) {
+            static int wipLogsLeft2 = 20;
+            if (wipLogsLeft2 > 0 && (std::strstr(f0_name, "Rock") ||
+                                     std::strstr(f0_name, "T_") ||
+                                     std::strstr(f0_name, "Path"))) {
+                --wipLogsLeft2;
+                patch::log::dbg("resolveSurface(2nd branch) reportAtlasRect: \"%s\" %ux%u",
+                                f0_name, static_cast<uint32_t>(this->surfWidth8),
+                                static_cast<uint32_t>(this->surfHeight8));
+            }
             gog::metal_bridge::reportAtlasRect(
                     atlasPageKey(this->cesurf), f0_name, 0, 0,
                     static_cast<uint32_t>(this->surfWidth8),
