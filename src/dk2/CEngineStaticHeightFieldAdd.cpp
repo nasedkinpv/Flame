@@ -153,13 +153,17 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
                         g_hfStats.nullHandle, g_hfStats.zeroTriangles, g_hfStats.appended,
                         SceneObject2EList_instance.maxCount, SceneObject2E_count);
     }
+    // wip: temporary re-bypass (2026-07-24i), JUST to get the metric log
+    // below to actually execute (guard1 blocks ~100% of live calls) -- not
+    // proposing this as the fix, purely for data collection. Remove after.
+    constexpr bool wipBypassGuards = true;
     // Both guards must pass (single combined condition, unlike the
     // static-mesh sibling's two sequential early returns).
-    if ((a8 & 0x8) != 0 && *reinterpret_cast<const int32_t *>(0x00760B60) == 0) {
+    if (!wipBypassGuards && (a8 & 0x8) != 0 && *reinterpret_cast<const int32_t *>(0x00760B60) == 0) {
         ++g_hfStats.guard1Bail;
         return 0;
     }
-    if ((a8 & 0x10) != 0 && *reinterpret_cast<const int32_t *>(0x00760B84) == 0) {
+    if (!wipBypassGuards && (a8 & 0x10) != 0 && *reinterpret_cast<const int32_t *>(0x00760B84) == 0) {
         ++g_hfStats.guard2Bail;
         return 0;
     }
