@@ -13,7 +13,6 @@
 #include "patches/logging.h"
 
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <emmintrin.h>
 
@@ -154,30 +153,13 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
                         g_hfStats.nullHandle, g_hfStats.zeroTriangles, g_hfStats.appended,
                         SceneObject2EList_instance.maxCount, SceneObject2E_count);
     }
-    // wip: quick experiment (2026-07-24) -- 0x760B60 is only ever written by
-    // the not-yet-translated FUN_00575a00 (per-frame camera/viewport setup),
-    // and only inside an `if (32.0 < groundFootprintWidth/Height)` block --
-    // meaning it FREEZES at its last value once the camera is zoomed in
-    // close enough that the visible ground footprint drops under 32 world
-    // units in either axis. That froze-at-0 value is exactly what guard1
-    // bails on below (measured: guard1Bail/calls ~100% this session), so
-    // terrain's LOD/handle never gets re-picked while zoomed in tight --
-    // matching the reported "terrain doesn't get sharper on zoom" symptom.
-    // Bypassing both guards here to test the hypothesis live before
-    // committing to translating FUN_00575a00 to find the real close-zoom
-    // refresh path (env-gated, default OFF -- opt in with
-    // DK2_HEIGHTFIELD_BYPASS_GUARDS=1).
-    static const bool bypassGuards = [] {
-        const char *v = std::getenv("DK2_HEIGHTFIELD_BYPASS_GUARDS");
-        return v && std::strcmp(v, "0") != 0;
-    }();
     // Both guards must pass (single combined condition, unlike the
     // static-mesh sibling's two sequential early returns).
-    if (!bypassGuards && (a8 & 0x8) != 0 && *reinterpret_cast<const int32_t *>(0x00760B60) == 0) {
+    if ((a8 & 0x8) != 0 && *reinterpret_cast<const int32_t *>(0x00760B60) == 0) {
         ++g_hfStats.guard1Bail;
         return 0;
     }
-    if (!bypassGuards && (a8 & 0x10) != 0 && *reinterpret_cast<const int32_t *>(0x00760B84) == 0) {
+    if ((a8 & 0x10) != 0 && *reinterpret_cast<const int32_t *>(0x00760B84) == 0) {
         ++g_hfStats.guard2Bail;
         return 0;
     }

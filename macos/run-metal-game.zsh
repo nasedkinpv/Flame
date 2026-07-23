@@ -41,15 +41,9 @@ FS_ARG=()
 # starts). Toggle: DK2_METAL_HUD=0 to disable.
 HUD_ARG=()
 [[ "${DK2_METAL_HUD:-1}" == 1 ]] && HUD_ARG=("--runner-env=MTL_HUD_ENABLED=1")
-# wip: throwaway passthrough for the heightfield-guard-bypass experiment
-# (2026-07-24) -- same open/--runner-env limitation as MTL_HUD_ENABLED above.
-# Remove once the terrain-LOD-on-zoom investigation is resolved.
-BYPASS_ARG=()
-[[ -n "${DK2_HEIGHTFIELD_BYPASS_GUARDS:-}" ]] && BYPASS_ARG=("--runner-env=DK2_HEIGHTFIELD_BYPASS_GUARDS=${DK2_HEIGHTFIELD_BYPASS_GUARDS}")
 exec open -W -n "${APP}" --args \
   "${FS_ARG[@]}" \
   "${HUD_ARG[@]}" \
-  "${BYPASS_ARG[@]}" \
   "--bridge-file=${BRIDGE_FILE}" \
   "--game-runner=${RUNNER}" \
   "--runner-env=DK2_LEVEL=${LEVEL}" \

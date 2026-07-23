@@ -15,7 +15,6 @@
 #include "dk2/MyStringHashMap_entry.h"
 #include <metal_bridge/MetalBridgeProducer.h>
 #include "dk2/CEngineDDSurface.h"
-#include <cstring>
 
 // See MyCESurfHandle.cpp: report atlas rects under the key the page will
 // upload its texture with (DD surface for legacy pages, engine surface for
@@ -431,19 +430,6 @@ void dk2::SurfHashList::expandPut(MyCESurfHandle *surfh, SurfHashListItem *item)
         // named-atlas map for the host's HD resource pack (see
         // reportAtlasRect: no-op when the bridge is disabled)
         if (surfh->cesurf) {
-            // wip: terrain-HD-on-zoom investigation (2026-07-24) -- log the
-            // first few terrain-looking names that actually reach this call,
-            // to confirm or refute whether terrain goes through this path at
-            // all. Remove once resolved.
-            static int terrainNameLogsLeft = 20;
-            if (terrainNameLogsLeft > 0 &&
-                (std::strstr(surfName, "Rock") || std::strstr(surfName, "rock") ||
-                 std::strstr(surfName, "T_") || std::strstr(surfName, "Path"))) {
-                --terrainNameLogsLeft;
-                patch::log::dbg("reportAtlasRect terrain-name: \"%s\" %ux%u",
-                                surfName, static_cast<uint32_t>(surfh->cesurf->width),
-                                static_cast<uint32_t>(surfh->cesurf->height));
-            }
             gog::metal_bridge::reportAtlasRect(
                     atlasPageKey(holder->surf), surfName,
                     (uint8_t) item->x, (uint8_t) item->y,

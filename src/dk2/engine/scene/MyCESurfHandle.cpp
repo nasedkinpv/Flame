@@ -251,23 +251,6 @@ void ensureCrcSliced() {
 }
 
 dk2::MyCESurfHandle *dk2::MyCESurfHandle::paint(MySurface *surf, char computeCrc) {
-    // wip: terrain-HD-on-zoom investigation (2026-07-24) -- confirm whether
-    // terrain-looking handles ever reach paint() at all, and whether they
-    // have a holder_parent assigned by the time they get here. Remove once
-    // resolved.
-    {
-        static int terrainPaintLogsLeft = 20;
-        if (terrainPaintLogsLeft > 0) {
-            const char *dbgName =
-                    MyStringHashMap_MyCESurfHandle_instance.entries.buf[this->mapIdx].name;
-            if (std::strstr(dbgName, "Rock") || std::strstr(dbgName, "rock") ||
-                std::strstr(dbgName, "T_") || std::strstr(dbgName, "Path")) {
-                --terrainPaintLogsLeft;
-                patch::log::dbg("MyCESurfHandle::paint terrain-name: \"%s\" holder=%p",
-                                dbgName, (void *) this->holder_parent);
-            }
-        }
-    }
     if (!this->cesurf) this->create();
     MySurfDesc desc;
     memcpy(&desc, reinterpret_cast<const uint8_t *>(this->cesurf->fC_desc) + 0x2D, sizeof(desc));
