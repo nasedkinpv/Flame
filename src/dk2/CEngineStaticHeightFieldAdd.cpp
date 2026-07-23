@@ -252,6 +252,20 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     if (metric < 0.5f) lodLevel = 2;
     if (metric < 0.25f) lodLevel = 3;
 
+    // wip: terrain-HD investigation (2026-07-24h) -- the actual computed LOD
+    // metric/level for this heightfield chunk, to see what's really driving
+    // the tag=3/16px handles observed downstream in SurfHashList2.
+    {
+        static int wipLeft = 40;
+        if (wipLeft > 0) {
+            --wipLeft;
+            patch::log::dbg("heightfield LOD pick: field_10=%u f20=%f reductionFactor=%f "
+                            "baseHandleW=%u metric=%f lodLevel=%d",
+                            field_10, pObj57AD20->f20, reductionFactor,
+                            (unsigned) baseHandle->surfWidth8, metric, lodLevel);
+        }
+    }
+
     // TODO(verify): defensive index adjustment for prob_height < 1 --
     // mirrored as-is from the decompile; looks unreachable for a real
     // heightfield surface (prob_height should always be >= 1), not
