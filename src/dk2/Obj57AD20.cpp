@@ -75,22 +75,12 @@ struct MeshEntry {
     uint8_t padding[3];
 };
 
-struct SpatialSphere {
-    uint32_t unused;
-    uint32_t flags;
-    dk2::Vec3f center;
-    uint8_t padding[0x0C];
-    float radius;
-};
 #pragma pack(pop)
 
 static_assert(sizeof(MeshVertex) == 0x28);
 static_assert(offsetof(MeshVertex, position) == 0x00);
 static_assert(offsetof(MeshVertex, color) == 0x1C);
 static_assert(sizeof(MeshEntry) == 0x14);
-static_assert(offsetof(SpatialSphere, flags) == 0x04);
-static_assert(offsetof(SpatialSphere, center) == 0x08);
-static_assert(offsetof(SpatialSphere, radius) == 0x20);
 
 using VertexFun = int (__cdecl *)(uint32_t, dk2::Vec3f *);
 using TriangleFun = int (__cdecl *)(uint32_t, uint32_t, uint32_t);
@@ -1138,97 +1128,11 @@ void emitInline(const InlineTarget &target, const DK2MMeshVertex *vertices,
 }  // namespace dk2::meshgpu
 
 
-namespace dk2 {
-
-int __fastcall sub_57BBF0(
-        int32_t *opaqueCollection, void *,
-        float x, float y, float z, float radius, int mask) {
-    const int32_t first = opaqueCollection[0];
-    int32_t begin = 0;
-    int32_t end = first + opaqueCollection[1];
-    uint32_t resultBit = 1;
-    if ((mask & 1) != 0) {
-        begin = first;
-        resultBit <<= static_cast<uint32_t>(first) & 31;
-    }
-    if ((mask & 0x20) != 0) {
-        end = first;
-    }
-    if (begin >= end) {
-        return 0;
-    }
-
-    const auto spheres = reinterpret_cast<const SpatialSphere *const *>(
-            reinterpret_cast<const uint8_t *>(opaqueCollection) + 0x38);
-    const __m128 px = _mm_set1_ps(x);
-    const __m128 py = _mm_set1_ps(y);
-    const __m128 pz = _mm_set1_ps(z);
-    const __m128 queryRadius = _mm_set1_ps(radius);
-    uint32_t result = 0;
-
-    const int32_t candidateCount = end - begin;
-    if (candidateCount <= 3) {
-        uint32_t bit = resultBit;
-        const uint32_t queryMask = static_cast<uint32_t>(mask);
-        for (int32_t i = begin; i < end; ++i, bit <<= 1) {
-            const SpatialSphere *item = spheres[i];
-            if ((item->flags & queryMask) != queryMask) continue;
-            const __m128 dx = _mm_sub_ss(_mm_set_ss(x), _mm_set_ss(item->center.x));
-            const __m128 dy = _mm_sub_ss(_mm_set_ss(y), _mm_set_ss(item->center.y));
-            const __m128 dz = _mm_sub_ss(_mm_set_ss(z), _mm_set_ss(item->center.z));
-            const __m128 distanceSquared = _mm_add_ss(
-                    _mm_add_ss(_mm_mul_ss(dx, dx), _mm_mul_ss(dy, dy)),
-                    _mm_mul_ss(dz, dz));
-            const __m128 radiusSum = _mm_add_ss(
-                    _mm_set_ss(radius), _mm_set_ss(item->radius));
-            if ((_mm_movemask_ps(_mm_sub_ss(
-                    distanceSquared, _mm_mul_ss(radiusSum, radiusSum))) & 1) != 0) {
-                result |= bit;
-            }
-        }
-        return static_cast<int>(result);
-    }
-
-    for (int32_t i = begin; i < end; i += 4) {
-        const int32_t remaining = end - i;
-        const int32_t laneCount = remaining < 4 ? remaining : 4;
-        const SpatialSphere *items[4];
-        for (int lane = 0; lane < 4; ++lane) {
-            items[lane] = spheres[i + (lane < laneCount ? lane : 0)];
-        }
-
-        uint32_t eligible = 0;
-        const uint32_t queryMask = static_cast<uint32_t>(mask);
-        for (int lane = 0; lane < laneCount; ++lane) {
-            if ((items[lane]->flags & queryMask) == queryMask) {
-                eligible |= 1u << lane;
-            }
-        }
-        if (eligible != 0) {
-            const __m128 dx = _mm_sub_ps(px, _mm_set_ps(
-                    items[3]->center.x, items[2]->center.x,
-                    items[1]->center.x, items[0]->center.x));
-            const __m128 dy = _mm_sub_ps(py, _mm_set_ps(
-                    items[3]->center.y, items[2]->center.y,
-                    items[1]->center.y, items[0]->center.y));
-            const __m128 dz = _mm_sub_ps(pz, _mm_set_ps(
-                    items[3]->center.z, items[2]->center.z,
-                    items[1]->center.z, items[0]->center.z));
-            const __m128 distanceSquared = _mm_add_ps(
-                    _mm_add_ps(_mm_mul_ps(dx, dx), _mm_mul_ps(dy, dy)),
-                    _mm_mul_ps(dz, dz));
-            const __m128 radiusSum = _mm_add_ps(queryRadius, _mm_set_ps(
-                    items[3]->radius, items[2]->radius,
-                    items[1]->radius, items[0]->radius));
-            const uint32_t overlaps = static_cast<uint32_t>(_mm_movemask_ps(
-                    _mm_sub_ps(distanceSquared, _mm_mul_ps(radiusSum, radiusSum))))
-                    & eligible;
-            result |= overlaps * resultBit;
-        }
-        resultBit <<= 4;
-    }
-    return static_cast<int>(result);
-}
+// dk2::sub_57BBF0 (DKII 0x0057BBF0) lives in sub_57BBF0.cpp - see its header
+// comment for the verified algorithm and a difftest. This file used to carry
+// an independent SIMD reimplementation of the same address (a `git log`
+// shows both were added days apart, presumably by concurrent work unaware of
+// each other); removed here to fix the resulting LNK2005 duplicate-definition.
 
 }  // namespace dk2
 

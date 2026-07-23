@@ -209,9 +209,6 @@
 # covers the five active mesh callers too.
 00575D70 int __cdecl Vec3f_static_sub_575D70(Vec3f *, float, uint32_t *)
 00575F10 Vec3f *__cdecl Vec3f_static_sub_575F10(Vec3f *, float, Vec3f *, float *)
-# Spatial sphere/light overlap query.  Four candidates are evaluated per SSE2
-# pass while retaining the original mask/range and raw sign-bit semantics.
-0057BBF0 int __fastcall sub_57BBF0(int32_t *, void *, float, float, float, float, int)
 0057BCB0 Obj57BCB0 *Obj57BCB0::constructor(uint32_t *, int)
 0057BD70 int __thiscall sub_57BD70(int *, uint32_t *, int, float, int, int, int, int, int, int, int, int, float, float, float)
 0057BF00 float *Obj57BCB0::sub_57BF00(float *, float *, float *)
