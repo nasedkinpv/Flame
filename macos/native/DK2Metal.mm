@@ -1300,6 +1300,8 @@ uint32_t materialClassFor(uint32_t textureId) {
     auto it = materialClasses().find(textureId);
     return it == materialClasses().end() ? 0u : it->second;
 }
+// Fast reject: does this page carry ANY water/lava rect at all?
+bool pageHasLiquid(uint32_t textureId) { return materialClassFor(textureId) != 0u; }
 static bool nameContainsCI(const char *hay, const char *needle) {
     for (const char *h = hay; *h; ++h) {
         const char *a = h, *b = needle;
@@ -1327,6 +1329,28 @@ bool noteRect(const DK2MPageAtlasMapCommand &map) {
     st.rects.push_back(map);
     st.dirty = true;
     return true;
+}
+
+// Per-draw classifier: only the fragments whose atlas UV falls inside a
+// water/lava-named rect of the page are liquid. The whole-page flag was wrong -
+// atlas pages pack many materials (floor, treasury, walls) alongside the odd
+// water/lava rect, so flagging the page painted all of them and hid the terrain.
+// (u,v) is the draw's representative atlas UV; rects are page pixels over st.w/h.
+uint32_t materialClassForUV(uint32_t textureId, float u, float v) {
+    auto it = pages().find(textureId);
+    if (it == pages().end()) return 0u;
+    const PageState &st = it->second;
+    if (!st.w || !st.h) return 0u;
+    for (const auto &r : st.rects) {
+        const uint32_t cls =
+            nameContainsCI(r.name, "water") ? 1u
+            : (nameContainsCI(r.name, "lava") && !nameContainsCI(r.name, "solid")) ? 2u : 0u;
+        if (!cls) continue;
+        const float x0 = float(r.x) / st.w, x1 = float(r.x + r.w) / st.w;
+        const float y0 = float(r.y) / st.h, y1 = float(r.y + r.h) / st.h;
+        if (u >= x0 && u < x1 && v >= y0 && v < y1) return cls;
+    }
+    return 0u;
 }
 
 // Composes the 4x page from stored 1x pixels + pack PNGs. nil when no pack
@@ -5007,12 +5031,26 @@ static void *renderWorker(void *context) {
                         uniform.screenWidth = static_cast<float>(snapshot->width);
                         uniform.screenHeight = static_cast<float>(snapshot->height);
                         uniform.worldGeometry = 0;
-                        // Modern water/lava overlay: tag the draw by the atlas
-                        // material class of its stage-0 texture (see respack),
-                        // gated by the live water_shader setting.
-                        uniform.materialFlags =
-                            dk2cfg::gWaterShaderLive.load(std::memory_order_relaxed)
-                                ? respack::materialClassFor(currentStage0TextureId) : 0u;
+                        // Modern water/lava overlay: tag the draw only if its
+                        // atlas UV actually lands in a water/lava rect of the
+                        // page (pages pack many materials, so the page flag alone
+                        // painted terrain too). Centroid UV suffices - batches
+                        // group by shared holder, i.e. one atlas region per draw.
+                        uniform.materialFlags = 0u;
+                        if (dk2cfg::gWaterShaderLive.load(std::memory_order_relaxed) &&
+                            currentStage0TextureId && draw.vertex_count &&
+                            respack::pageHasLiquid(currentStage0TextureId)) {
+                            float su = 0.0f, sv = 0.0f;
+                            for (uint32_t vi = 0; vi < draw.vertex_count; ++vi) {
+                                const float *uv = reinterpret_cast<const float *>(
+                                    rawVertices + static_cast<size_t>(vi) * bridgeVertexSize + 20);
+                                su += uv[0];
+                                sv += uv[1];
+                            }
+                            const float inv = 1.0f / static_cast<float>(draw.vertex_count);
+                            uniform.materialFlags = respack::materialClassForUV(
+                                currentStage0TextureId, su * inv, sv * inv);
+                        }
                         uniform.waterTime = _materialClock;
                         uniform.textureIndex = currentTextureBinding.slot;
                         // v14 shadow decal: sample the page's shadow twin

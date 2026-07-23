@@ -599,38 +599,42 @@ static inline float dk2_fbm(float2 p) {
 // level. Only base.a (tile/shore shape) is kept from the engine texture.
 static inline float4 dk2_water_overlay(float4 base, float2 worldXY,
                                        float t, bool lava) {
-    const float kScale = 0.020f;              // world units -> ripple size (tune)
+    // Ground the effect in the engine's own shading: keep the tile's luminance
+    // (torch glow, cell lighting, shadow) so the water sits in the scene instead
+    // of being a flat pasted sheet. Only the hue is replaced. No fake "sun" -
+    // this is a dungeon; ripple crests catch the ambient/scene light instead.
+    const float lum = dot(base.rgb, float3(0.299f, 0.587f, 0.114f));
+
+    // World-anchored ripple field: two slow scrolling fbm layers -> height ->
+    // surface normal. kScale set from the measured world-unit scale.
+    const float kScale = 0.22f;
     const float2 p = worldXY * kScale;
-    const float flow = lava ? 0.35f : 1.0f;   // lava creeps, water flows
+    const float flow = lava ? 0.3f : 1.0f;    // lava creeps, water flows
     const float2 a = p        + float2(0.030f, 0.021f) * t * flow;
     const float2 b = p * 1.7f - float2(0.019f, 0.034f) * t * flow;
-
     const float e = 0.15f;
-    const float h  = dk2_fbm(a)            * 0.6f + dk2_fbm(b)            * 0.4f;
+    const float h  = dk2_fbm(a)                * 0.6f + dk2_fbm(b)                * 0.4f;
     const float hx = dk2_fbm(a + float2(e, 0)) * 0.6f + dk2_fbm(b + float2(e, 0)) * 0.4f;
     const float hy = dk2_fbm(a + float2(0, e)) * 0.6f + dk2_fbm(b + float2(0, e)) * 0.4f;
-    const float slope = lava ? 1.6f : 2.4f;
+    const float slope = lava ? 1.4f : 2.2f;
     const float3 N = normalize(float3((h - hx) * slope / e, (h - hy) * slope / e, 1.0f));
-
-    const float3 V = float3(0.0f, 0.0f, 1.0f);               // near top-down
-    const float3 L = normalize(float3(0.4f, 0.5f, 0.75f));   // fixed sun
-    const float3 H = normalize(L + V);
-    const float spec = pow(saturate(dot(N, H)), lava ? 30.0f : 60.0f);  // broad, soft
-    const float fres = pow(1.0f - saturate(N.z), 3.0f);      // grazing lift
+    // View-independent crest term: bright on the steep flanks of wavelets. No
+    // camera/sun direction needed, so the tilt of the camera never breaks it.
+    const float crest = pow(saturate(1.0f - N.z), lava ? 1.5f : 2.2f);
 
     float3 col;
     if (lava) {
-        const float3 deep = float3(0.30f, 0.045f, 0.02f);
-        const float3 hot  = float3(1.7f, 0.62f, 0.14f);
-        col = mix(deep, hot, saturate(h + 0.15f));
-        col += spec * float3(2.0f, 1.1f, 0.45f);            // molten glint
-        col += fres * float3(0.5f, 0.16f, 0.05f);           // heat rim
+        const float3 cool = float3(0.32f, 0.05f, 0.02f);
+        const float3 hot  = float3(1.7f, 0.60f, 0.13f);
+        col = mix(cool, hot, saturate(h + 0.2f));
+        col *= 0.6f + lum * 0.8f;                            // grounded in scene
+        col += crest * float3(1.5f, 0.55f, 0.15f) * 0.7f;    // molten crest glow
     } else {
-        const float3 deep    = float3(0.03f, 0.15f, 0.22f);
-        const float3 shallow = float3(0.10f, 0.34f, 0.42f);
-        col = mix(deep, shallow, saturate(h + 0.2f));
-        col += spec * float3(1.0f, 0.97f, 0.9f) * 0.9f;     // soft sun
-        col = mix(col, float3(0.35f, 0.5f, 0.6f), fres * 0.25f); // sky rim
+        const float3 deep    = float3(0.04f, 0.14f, 0.19f);
+        const float3 shallow = float3(0.10f, 0.28f, 0.34f);
+        col = mix(deep, shallow, saturate(h + 0.3f));
+        col *= 0.35f + lum * 1.1f;                           // grounded in scene
+        col += crest * lum * float3(0.5f, 0.7f, 0.8f) * 0.6f; // ripple catches light
     }
     return float4(col, base.a);
 }
