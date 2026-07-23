@@ -571,21 +571,32 @@ static inline float4 dk2_water_overlay(float4 base, float2 uv, float2 screenUv,
     // caustic veins: sharpened, counter-scrolling noise
     float caust = pow(saturate(dk2_vnoise(uv * 9.0f - float2(t * 0.11f, t * 0.07f))), 5.0f);
 
-    float3 col = base.rgb;
+    // The engine base is a 3-frame slideshow (~300ms/frame) - jumpy and ugly.
+    // Drive the look PROCEDURALLY (continuous in t) and use the base only as a
+    // faint luminance modulation so shore edges / depth variation survive
+    // without the slideshow dominating.
+    const float baseLum = dot(base.rgb, float3(0.299f, 0.587f, 0.114f));
+    float3 col;
     if (lava) {
-        const float3 hot = float3(1.6f, 0.55f, 0.12f);
-        const float3 deep = float3(0.35f, 0.05f, 0.02f);
-        float throb = 0.5f + 0.5f * sin(t * 1.7f + hC * 6.28318f);
-        col = mix(deep, col, 0.6f);
-        col += hot * (caust * 0.9f + throb * 0.15f);       // emissive veins + throb
-        col += spec * float3(1.7f, 1.0f, 0.5f);            // molten glint
-        col += fres * float3(0.5f, 0.15f, 0.05f);
+        const float3 deep = float3(0.30f, 0.045f, 0.02f);
+        const float3 hot  = float3(1.7f, 0.65f, 0.15f);
+        float throb = 0.5f + 0.5f * sin(t * 1.6f + hC * 6.28318f);
+        // crust-vs-molten from continuous noise, not the base frame
+        float molten = pow(saturate(hC * 0.7f + caust + 0.15f), 2.0f);
+        col = mix(deep, hot, molten);
+        col *= 0.75f + 0.5f * baseLum;                     // keep bed variation
+        col += hot * throb * 0.20f;                        // slow emissive throb
+        col += spec * float3(2.0f, 1.2f, 0.5f);            // molten glint
+        col += fres * float3(0.6f, 0.2f, 0.06f);           // heat rim
     } else {
-        const float3 deep = float3(0.05f, 0.20f, 0.30f);
-        col = mix(base.rgb, deep, 0.30f + 0.30f * fres);   // deepen with view
-        col += spec * float3(1.0f, 0.98f, 0.92f) * 1.4f;   // sun sparkle
-        col += caust * float3(0.12f, 0.30f, 0.34f) * 0.5f; // caustic shimmer
-        col += fres * float3(0.10f, 0.16f, 0.20f);         // sky rim
+        const float3 deep    = float3(0.03f, 0.14f, 0.22f);
+        const float3 shallow = float3(0.10f, 0.34f, 0.42f);
+        // depth from continuous noise + a little of the base's brightness
+        float depth = saturate(0.35f + hC * 0.35f + baseLum * 0.30f);
+        col = mix(deep, shallow, depth);
+        col += spec * float3(1.0f, 0.98f, 0.92f) * 1.6f;   // continuous sun sparkle
+        col += caust * float3(0.14f, 0.34f, 0.38f) * 0.7f; // continuous caustics
+        col += fres * float3(0.12f, 0.18f, 0.22f);         // sky rim
     }
     return float4(col, base.a);
 }
