@@ -4665,18 +4665,14 @@ static void *renderWorker(void *context) {
                                 : 0u;
                             // Real D3DRENDERSTATE_CULLMODE the game had set
                             // for this draw (see DK2M_DRAW_MESH_CULL_NONE/
-                            // CULL_CCW) - override to two-sided only when the
-                            // game explicitly asked for CULL_NONE (e.g. a
-                            // selection-highlight/trap-marker decal); leave
-                            // the existing blend-based heuristic and winding
-                            // untouched otherwise (flipping winding here
-                            // regressed ordinary opaque geometry - columns
-                            // grew a phantom top surface).
+                            // CULL_CCW) - a two-sided decal (selection
+                            // highlight, trap markup) must stay two-sided
+                            // even though its blend flags look "opaque".
+                            // Raw D3DCULL values: 1=NONE, 2=CW, 3=CCW.
                             const uint32_t effectiveCull =
                                 (meshDraw.flags & DK2M_DRAW_MESH_CULL_NONE) ? 1u
-                                : (pipelineKind == 0 &&
-                                   !(meshDraw.flags & DK2M_DRAW_MESH_ALPHA_TEST))
-                                    ? 3u : 1u;
+                                : (meshDraw.flags & DK2M_DRAW_MESH_CULL_CCW) ? 3u
+                                : 2u;
                             const bool canInstance =
                                 pipelineKind == 0 && effectiveZWrite != 0;
                             const bool compatible = pendingMeshInstances.active &&
@@ -4840,18 +4836,15 @@ static void *renderWorker(void *context) {
                                 (meshDraw.flags & DK2M_DRAW_MESH_Z_WRITE) != 0;
                             [encoder setDepthStencilState:
                                 _depthStates[effectiveZFunction][effectiveZWrite]];
-                            // Override to two-sided only when the game
-                            // explicitly asked for CULL_NONE; otherwise keep
-                            // the original heuristic/winding unchanged.
-                            const bool meshDoubleSided =
-                                (meshDraw.flags & DK2M_DRAW_MESH_CULL_NONE) ||
-                                (meshDraw.flags & (DK2M_DRAW_MESH_ALPHA_BLEND |
-                                                   DK2M_DRAW_MESH_ADDITIVE |
-                                                   DK2M_DRAW_MESH_ALPHA_TEST |
-                                                   DK2M_DRAW_MESH_MULTIPLY)) != 0;
-                            [encoder setCullMode:meshDoubleSided
-                                ? MTLCullModeNone : MTLCullModeBack];
-                            [encoder setFrontFacingWinding:MTLWindingClockwise];
+                            // Real D3DRENDERSTATE_CULLMODE the game had set
+                            // for this draw - see DK2M_DRAW_MESH_CULL_NONE/
+                            // CULL_CCW.
+                            [encoder setCullMode:
+                                (meshDraw.flags & DK2M_DRAW_MESH_CULL_NONE)
+                                    ? MTLCullModeNone : MTLCullModeBack];
+                            [encoder setFrontFacingWinding:
+                                (meshDraw.flags & DK2M_DRAW_MESH_CULL_CCW)
+                                    ? MTLWindingClockwise : MTLWindingCounterClockwise];
                             if (boundArgumentTableBank != binding.bank) {
                                 boundArgumentTableBank = binding.bank;
                                 [encoder setArgumentTable:
@@ -4977,18 +4970,14 @@ static void *renderWorker(void *context) {
                             : (meshZEnabled &&
                                (inlineDraw.flags & DK2M_DRAW_MESH_Z_WRITE) != 0);
                         [encoder setDepthStencilState:_depthStates[effectiveZFunction][effectiveZWrite]];
-                        // Override to two-sided only when the game
-                        // explicitly asked for CULL_NONE; otherwise keep the
-                        // original heuristic/winding unchanged.
-                        const bool meshDoubleSided =
-                            (inlineDraw.flags & DK2M_DRAW_MESH_CULL_NONE) ||
-                            (inlineDraw.flags & (DK2M_DRAW_MESH_ALPHA_BLEND |
-                                                 DK2M_DRAW_MESH_ADDITIVE |
-                                                 DK2M_DRAW_MESH_ALPHA_TEST |
-                                                 DK2M_DRAW_MESH_MULTIPLY)) != 0;
-                        [encoder setCullMode:meshDebug || meshDoubleSided
-                            ? MTLCullModeNone : MTLCullModeBack];
-                        [encoder setFrontFacingWinding:MTLWindingClockwise];
+                        // Real D3DRENDERSTATE_CULLMODE the game had set for
+                        // this draw - see DK2M_DRAW_MESH_CULL_NONE/CULL_CCW.
+                        [encoder setCullMode:
+                            meshDebug || (inlineDraw.flags & DK2M_DRAW_MESH_CULL_NONE)
+                                ? MTLCullModeNone : MTLCullModeBack];
+                        [encoder setFrontFacingWinding:
+                            (inlineDraw.flags & DK2M_DRAW_MESH_CULL_CCW)
+                                ? MTLWindingClockwise : MTLWindingCounterClockwise];
                         if (boundArgumentTableBank != binding.bank) {
                             boundArgumentTableBank = binding.bank;
                             [encoder setArgumentTable:_argumentTables[slot][boundArgumentTableBank]

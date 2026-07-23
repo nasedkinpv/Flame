@@ -95,12 +95,15 @@ enum DK2MDrawMeshFlags {
     DK2M_DRAW_MESH_MULTIPLY = 1u << 4,     // ZERO/INVSRCCOLOR blend
     DK2M_DRAW_MESH_Z_ENABLE = 1u << 5,
     DK2M_DRAW_MESH_Z_WRITE = 1u << 6,
-    // Set when the game's real D3DRENDERSTATE_CULLMODE for this draw was
-    // D3DCULL_NONE (read from the guest's live render-state shadow copy at
-    // emit time, NOT re-derived from blend mode) - forces two-sided
-    // rendering host-side even though the draw's blend flags look "opaque"
-    // (e.g. a selection-highlight/trap-marker decal).
+    // The real D3DRENDERSTATE_CULLMODE the game had set for this draw
+    // (read from the guest's live render-state shadow copy at emit time,
+    // NOT re-derived from blend mode - a two-sided decal drawn with opaque
+    // blend flags must still render both faces). CULL_NONE set -> two-sided.
+    // Otherwise: CULL_CCW set -> D3DCULL_CCW (front = clockwise winding),
+    // clear -> D3DCULL_CW (front = counter-clockwise winding). Mirrors the
+    // legacy replay path's kD3DRenderStateCullMode handling in DK2Metal.mm.
     DK2M_DRAW_MESH_CULL_NONE = 1u << 7,
+    DK2M_DRAW_MESH_CULL_CCW = 1u << 8,
 };
 
 enum DK2MInputFlags {
