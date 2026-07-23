@@ -890,8 +890,25 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     }
     uint32_t vertexCount = 0;
     uint64_t signature = 0;
-    if (!describeEntryGuarded(
-            entry, indexCount, &vertexCount, &signature) || vertexCount > 256) {
+    // bring-up: quantify the per-draw describe cost (the suspected remaining
+    // marshalling after retained instancing removed the position copy).
+    LARGE_INTEGER deT0, deT1;
+    QueryPerformanceCounter(&deT0);
+    const bool describeOk = describeEntryGuarded(
+            entry, indexCount, &vertexCount, &signature);
+    QueryPerformanceCounter(&deT1);
+    {
+        static uint64_t descTicks = 0, restStart = 0; static uint32_t descN = 0;
+        static LARGE_INTEGER freq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f; }();
+        descTicks += (uint64_t)(deT1.QuadPart - deT0.QuadPart);
+        if ((++descN % 20000) == 0) {
+            patch::log::dbg("describeEntryGuarded avg: %llu ns/call over %u calls (=%llu us/20k)",
+                            descTicks * 1000000000ull / (freq.QuadPart * (uint64_t)descN),
+                            descN, descTicks * 1000000ull / freq.QuadPart);
+            descTicks = 0; descN = 0;
+        }
+    }
+    if (!describeOk || vertexCount > 256) {
         if (badEntries.size() < 4096) badEntries.push_back(entry.vertices);
         static bool loggedBadEntry = false;
         if (!loggedBadEntry) {
