@@ -4,6 +4,7 @@
 #include "dk2/MeshGpuEmit.h"
 #include "patches/logging.h"
 #include <metal_bridge/DK2BridgeProtocol.h>
+#include <metal_bridge/MetalBridgeProducer.h>
 #include <windows.h>
 #include "dk2/MyMeshResourceHolder.h"
 #include "dk2/MyScaledSurface.h"
@@ -265,6 +266,20 @@ bool drawAnimOnGpu(
     world[7] = mesh->field_4.y;
     world[11] = mesh->field_4.z;
     dk2::meshgpu::emitCamera();
+    // wip: bring-up instrumentation (menu light-ray flicker investigation,
+    // removed once root-caused) - gated on the additive blend flag (the
+    // ray effect), continuous, to see whether topology (meshId/vertexCount,
+    // i.e. the retainedAnimTopology cache) or the animation/frame inputs
+    // are what's changing frame to frame.
+    if (target.meshFlags & DK2M_DRAW_MESH_ADDITIVE) {
+        patch::log::dbg(
+            "drawAnimOnGpu ADDITIVE: meshId=%u vertexCount=%u animation=%d "
+            "frame=%f frameIndex=%u resource=%p indices=%p frameCounter=%u",
+            topology->meshId, topology->vertexCount, animation, frame,
+            frameIndex, static_cast<void *>(resource),
+            static_cast<const void *>(indices),
+            gog::metal_bridge::frameCounter());
+    }
     dk2::meshgpu::emitDeformed(
         target, topology->meshId, positions, topology->vertexCount,
         world, lights, ambient.x / 255.0f, ambient.y / 255.0f,
