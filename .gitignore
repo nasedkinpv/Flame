@@ -53,6 +53,7 @@ venv.bak/
 /flame/
 /.hd/
 /.claude/
+/.ralph/
 **/genlib/*.exp
 **/genlib/*.lib
 **/genlib/*.def

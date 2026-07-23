@@ -120,11 +120,43 @@ struct DK2RasterVertex {
     uint meshFlags [[flat]];   // DK2M_DRAW_MESH_* for mesh-path draws, else 0
     uint materialFlags [[flat]];  // 1=water 2=lava (host effect overlays)
     float waterTime [[flat]];
+    float2 worldPos;   // reconstructed world XZ on the Y=0 plane (water domain)
 };
+
+// Column-major world->clip camera, shared with the mesh path (defined again
+// below for the mesh shaders). Declared here so the legacy vertex path can
+// unproject screen fragments back to world space for the water effect.
+struct DK2MeshCamera {
+    float4x4 viewProj;
+    float zMul2, zAdd2;
+    float zAdd3, zMul3F;
+    float farThreshold;
+    float depthCap;
+    float pad0, pad1;
+};
+
+// Solve for the world XZ that projects to a given NDC on the water plane Y=0.
+// Only rows x/y/w of viewProj are used (row z is the piecewise-depth far branch
+// and unreliable), so this is robust: two linear equations, two unknowns.
+static float2 dk2_unproject_ground(constant DK2MeshCamera &camera, float2 ndc) {
+    const float4 A = camera.viewProj[0];  // world x column
+    const float4 C = camera.viewProj[2];  // world z column
+    const float4 D = camera.viewProj[3];  // translation column
+    // (A.x - ndc.x*A.w) wx + (C.x - ndc.x*C.w) wz = ndc.x*D.w - D.x
+    const float a00 = A.x - ndc.x * A.w, a01 = C.x - ndc.x * C.w;
+    const float a10 = A.y - ndc.y * A.w, a11 = C.y - ndc.y * C.w;
+    const float b0 = ndc.x * D.w - D.x;
+    const float b1 = ndc.y * D.w - D.y;
+    const float det = a00 * a11 - a01 * a10;
+    if (abs(det) < 1e-12f) return float2(0.0f);
+    const float inv = 1.0f / det;
+    return float2((b0 * a11 - a01 * b1) * inv, (a00 * b1 - b0 * a10) * inv);
+}
 
 DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffuse,
                                 float2 texCoord, float2 texCoord1, float2 texCoord2,
-                                thread const DK2DrawUniform &draw) {
+                                thread const DK2DrawUniform &draw,
+                                constant DK2MeshCamera &camera) {
     const float reciprocalW = abs(rhw) > 0.000001f ? rhw : 1.0f;
     const float clipW = 1.0f / reciprocalW;
     DK2RasterVertex result;
@@ -176,22 +208,31 @@ DK2RasterVertex dk2_make_vertex(float x, float y, float z, float rhw, uint diffu
     result.meshFlags = 0u;
     result.materialFlags = draw.materialFlags;
     result.waterTime = draw.waterTime;
+    // World XZ for water/lava draws only (2x2 solve is wasted on everything
+    // else). The ground-plane assumption pans correctly with the camera.
+    result.worldPos = draw.materialFlags != 0u
+        ? dk2_unproject_ground(camera,
+              float2(x * 2.0f / draw.screenWidth - 1.0f,
+                     1.0f - y * 2.0f / draw.screenHeight))
+        : float2(0.0f);
     return result;
 }
 
 vertex DK2RasterVertex dk2_vertex_1c(device const DK2Vertex1C *vertices [[buffer(0)]],
                                      device const DK2DrawUniform *draws [[buffer(1)]],
+                                     constant DK2MeshCamera &camera [[buffer(3)]],
                                      uint vertexID [[vertex_id]],
                                      uint drawID [[instance_id]]) {
     const DK2Vertex1C inputVertex = vertices[vertexID];
     const DK2DrawUniform draw = draws[drawID];
     const float2 uv = float2(inputVertex.u, inputVertex.v);
     return dk2_make_vertex(inputVertex.x, inputVertex.y, inputVertex.z, inputVertex.rhw,
-                           inputVertex.diffuse, uv, uv, uv, draw);
+                           inputVertex.diffuse, uv, uv, uv, draw, camera);
 }
 
 vertex DK2RasterVertex dk2_vertex_2c(device const DK2Vertex2C *vertices [[buffer(0)]],
                                      device const DK2DrawUniform *draws [[buffer(1)]],
+                                     constant DK2MeshCamera &camera [[buffer(3)]],
                                      uint vertexID [[vertex_id]],
                                      uint drawID [[instance_id]]) {
     const DK2Vertex2C inputVertex = vertices[vertexID];
@@ -201,7 +242,7 @@ vertex DK2RasterVertex dk2_vertex_2c(device const DK2Vertex2C *vertices [[buffer
                            float2(inputVertex.texCoord[0][0], inputVertex.texCoord[0][1]),
                            float2(inputVertex.texCoord[1][0], inputVertex.texCoord[1][1]),
                            float2(inputVertex.texCoord[2][0], inputVertex.texCoord[2][1]),
-                           draw);
+                           draw, camera);
 }
 
 float4 dk2_unpack_color(uint value) {
@@ -236,15 +277,6 @@ struct DK2MeshDrawUniform {
     uint lightCount;
     ushort lightIndices[24];
     uint lightPad0, lightPad1, lightPad2;
-};
-
-struct DK2MeshCamera {
-    float4x4 viewProj;   // column-major world -> clip
-    float zMul2, zAdd2;      // near-branch linear depth
-    float zAdd3, zMul3F;     // far-branch hyperbolic depth
-    float farThreshold;      // branch switch (view z above -> far branch)
-    float depthCap;          // maximum depth value
-    float pad0, pad1;
 };
 
 struct DK2MeshLightsHeader {
@@ -548,12 +580,14 @@ static inline float dk2_vnoise(float2 p) {
 // caustic veins, a depth tint and, for lava, emissive throb). No world
 // normal is available on legacy floor tiles, and the camera is near top-down,
 // so the normal is reconstructed from two scrolling noise layers around +Z.
-static inline float4 dk2_water_overlay(float4 base, float2 uv, float2 screenUv,
+static inline float4 dk2_water_overlay(float4 base, float2 worldXZ,
                                        float t, bool lava) {
-    // CONTINUOUS domain from screen pixels, NOT the per-tile uv (which repeats
-    // 0..1 every tile -> visible grid seams + repeating caustics). Screen-space
-    // means the pattern is camera-locked, which for animated water reads fine.
-    const float2 P = screenUv * 0.010f;   // ~pixels -> wave units
+    // WORLD-anchored domain: reconstructed world XZ (Y=0 plane) so the surface
+    // is physically fixed to the level and pans/zooms with the camera - we fly
+    // over it. No per-tile uv (tiling) and no screen-lock. kWorldScale tunes
+    // wave size vs world units.
+    const float kWorldScale = 0.012f;
+    const float2 P = worldXZ * kWorldScale;
     // two scrolling noise fields -> height, differentiated -> surface normal
     const float2 w1 = P * 3.0f + float2(t * 0.06f, t * 0.045f);
     const float2 w2 = P * 6.3f - float2(t * 0.05f, t * 0.08f);
@@ -684,7 +718,7 @@ fragment float4 dk2_fragment(DK2RasterVertex input [[stage_in]],
     // Modern water/lava overlay (see dk2_water_overlay). materialFlags is set
     // host-side for draws sampling a water-/lava-named atlas region.
     if ((input.materialFlags & 3u) != 0u) {
-        current = dk2_water_overlay(current, input.texCoord, input.position.xy,
+        current = dk2_water_overlay(current, input.worldPos,
                                     input.waterTime,
                                     (input.materialFlags & 2u) != 0u);
     }

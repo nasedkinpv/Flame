@@ -135,3 +135,24 @@ done
 ```
 
 (Also re-run vec3f_difftest for the pre-existing rewrite.) All print `OK:`.
+
+### Iteration 6 — DONE (reflection + item 7 skip + item 8)
+
+- [~] **Vec3i::calcLength** `0x00555990` — **SKIPPED (non-leaf).** Calls isqrt `0x65FAE0` (Newton-Raphson, initial guess from lookup table `0x65FB14` indexed by `bsr`), with 3 asymmetric magnitude regimes (small: direct isqrt; medium: x,y>>8/isqrt/<<8; largest: x,y>>18, z>>8). Deterministic but table-dependent + non-leaf → not a confident translation. Documented for future focused work (would need to extract the 32-entry uint16 table at 0x65FB14 and replicate the Newton loop + all 3 regimes bit-exactly).
+- [x] **Mat3x3f difftests** — committed `2cea9a1`. 200k iters x 9 cases.
+  - Hardened the 6 existing-but-untested SSE2 Mat3x3f methods (matmul, mat-vec rows×2, mat-vec columns, scalar multiply, transpose). No new rewrite.
+  - Key: references mirror the impls' EXACT single-rounding order via explicit float intermediates + `-ffp-contract=off` (so the reference's mul+add doesn't fuse to FMA; the intrinsic impl never fuses). Under those terms bit-exact holds, incl. nan/inf/denormal.
+
+### Final verification command (rerunnable from worktree root)
+
+```
+for t in vec3f vec3i vec3d pos2i aabb mat3x3f; do
+  extra=""; [ "$t" = mat3x3f ] && extra="-ffp-contract=off"
+  clang++ -arch x86_64 -O2 -std=c++17 $extra -I tests/${t}_difftest \
+    -o /tmp/${t}_difftest tests/${t}_difftest/${t}_difftest.cpp && /tmp/${t}_difftest
+done
+```
+
+### Remaining backlog (lower-confidence / needs-decision)
+
+- Vec3i::calcLength (skipped, non-leaf) — only if we choose to also rewrite the isqrt helper + extract its table.

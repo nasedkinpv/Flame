@@ -10,6 +10,7 @@
 #include "dk2/CEngineDDSurface.h"
 #include "gog_patch.h"
 #include <metal_bridge/MetalBridgeProducer.h>
+#include "dk2/MeshGpuEmit.h"
 #include "dk2/Vertex18.h"
 #include "dk2/Triangle24.h"
 #include "dk2/SceneObject2E.h"
@@ -238,6 +239,10 @@ void dk2::draw3dScene() {
         PassFlag() { dk2::g_inMainScenePass = true; }
         ~PassFlag() { dk2::g_inMainScenePass = false; }
     } passFlag;
+    // Emit the camera every frame (not just on the GPU mesh path) so the host
+    // can unproject legacy floor fragments to world space for the water effect.
+    // emitMeshCamera is internally guarded to once per frame.
+    dk2::meshgpu::emitCamera();
     static uint32_t profileFrame = 0;
     static SceneSplitProfile profile;
     const uint32_t profilePhase = profileFrame++ % 300;
