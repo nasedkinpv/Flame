@@ -164,24 +164,26 @@ uint32_t meshDrawFlags(dk2::SceneObject2E *scene,
 
 uint32_t metalMeshFlags(uint32_t drawFlags, bool lit) {
     // wip: bring-up instrumentation for the selection-highlight/trap-marker
-    // culling investigation (removed once root-caused) - log every distinct
-    // raw drawFlags value seen, so a live A/B (creature selected vs not,
-    // trap markup shown vs not) reveals which bit pattern that material uses.
+    // culling/Z-sort investigation (removed once root-caused) - log every
+    // distinct (drawFlags, real ZFUNC, real CULLMODE) combo seen, READ-ONLY
+    // (does not affect drawn output), so a live A/B (creature selected vs
+    // not, trap markup shown vs not) reveals whether ZFUNC/CULLMODE change
+    // for the SAME drawFlags value - which would prove the render-state
+    // decorrelation hypothesis rather than a drawFlags-derived guess.
     {
-        static std::unordered_map<uint32_t, uint32_t> seen;
-        auto &count = seen[drawFlags];
+        DWORD realZFunc = 0, realCull = 0;
+        gog::metal_bridge::getRenderState(D3DRENDERSTATE_ZFUNC, &realZFunc);
+        gog::metal_bridge::getRenderState(D3DRENDERSTATE_CULLMODE, &realCull);
+        static std::unordered_map<uint64_t, uint32_t> seen;
+        const uint64_t key = (uint64_t(drawFlags) << 32) |
+                             (uint64_t(realZFunc) << 8) | uint64_t(realCull);
+        auto &count = seen[key];
         if (count < 3) {
-            const bool matchesMultiply = (drawFlags & 0x1000u) != 0;
-            const bool matchesAlphaBlend = !matchesMultiply && (drawFlags & 0x20u) != 0;
-            const bool matchesAdditive = !matchesMultiply && !matchesAlphaBlend &&
-                                          (drawFlags & 0x1u) != 0;
-            const bool opaqueFallthrough =
-                !matchesMultiply && !matchesAlphaBlend && !matchesAdditive;
             patch::log::dbg(
-                "metalMeshFlags: drawFlags=0x%08X (seen=%u) -> multiply=%d "
-                "alphaBlend=%d additive=%d OPAQUE_FALLTHROUGH=%d",
-                drawFlags, count, matchesMultiply, matchesAlphaBlend,
-                matchesAdditive, opaqueFallthrough);
+                "metalMeshFlags: drawFlags=0x%08X realZFunc=%u realCull=%u "
+                "(seen=%u)",
+                drawFlags, static_cast<unsigned>(realZFunc),
+                static_cast<unsigned>(realCull), count);
         }
         ++count;
     }
