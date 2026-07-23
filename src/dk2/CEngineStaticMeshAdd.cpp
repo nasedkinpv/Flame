@@ -427,9 +427,25 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
             // 0x586a16..0x586a41: emit via the free function (declared in
             // dk2_functions.h, implemented elsewhere) instead of appending
             // an entry directly.
+            //
+            // Bug found 2026-07-24 while chasing the "checkerboard holes /
+            // missing menu columns" regression: the 4th argument (-> the
+            // appended entry's f2C_) was wired to `bits` (the LOD
+            // mantissa-extraction scratch, effectively noise here), but the
+            // full decompile of this call site
+            // (FUN_00586a70(iVar6,uVar10,param_1,iStack_5c,...)) shows the
+            // 4th arg is `iStack_5c` -- the per-part LOOP COUNTER, exactly
+            // like every other branch's `entry.f2C_ = static_cast<int16_t>(
+            // request->word0 or i)`. f2C_ later doubles as the shadow-decal
+            // classifier in draw_functions.cpp (`f2C_ >= 0x7D0` => treated as
+            // a shadow decal, drawn on a completely different path) --
+            // feeding it near-random mantissa bits misclassified a large
+            // fraction of static-mesh objects (e.g. menu columns) as shadow
+            // decals, which is exactly the kind of bug that would make them
+            // vanish from the normal draw path.
             static_appendToSceneObject2EList(
                     handle1, static_cast<int>(combinedFlags1), this,
-                    static_cast<int16_t>(bits), record.baseTriCountLo,
+                    static_cast<int16_t>(part), record.baseTriCountLo,
                     static_cast<int16_t>(record.baseTriCountHi), 0);
             continue;
         }
