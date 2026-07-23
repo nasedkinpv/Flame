@@ -20,6 +20,8 @@
 #include <fake/FakeTexture.h>
 #include <metal_bridge/DK2BridgeProtocol.h>
 #include <metal_bridge/MetalBridgeProducer.h>
+#include <cstdlib>
+#include <cstring>
 #include <tools/flametal_config.h>
 #include <windows.h>
 
@@ -263,6 +265,20 @@ bool prepareFrameLights(uint32_t *lightData, uint32_t mask,
                         dk2::meshgpu::LightSelection *out) {
     if (!out) return false;
     out->count = 0;
+    // GPU light selection (settings.toml [game] light_selection_gpu, default
+    // on): bypass the CPU-computed per-object selection mask (this->f2C =
+    // sub_57BBF0, a bounding-sphere-vs-light-radius test) and let every
+    // candidate light for this object (already bounded to <=32 by
+    // lightData[0]+lightData[1], see `total` below) through to the GPU,
+    // which already does a per-VERTEX distSqLimit+facing test in
+    // dk2_mesh_accumulate_lights - finer-grained than the CPU's whole-object
+    // sphere test, and removes a guest-side hash-dedup selection step under
+    // Rosetta. Set DK2_LIGHT_SELECTION_GPU=0 to fall back to the original
+    // CPU selection.
+    static const bool testAllLights = [] {
+        const char *v = std::getenv("DK2_LIGHT_SELECTION_GPU");
+        return !v || std::strcmp(v, "0") != 0;
+    }();
     const auto *lut = reinterpret_cast<const float *>(0x007818A0);
     static uint64_t seenKeys[2048];
     static uint16_t seenIndices[2048];

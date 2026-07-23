@@ -65,6 +65,11 @@ struct Settings {
     std::string resolution = "1600x1200";
     bool movies = false;
     std::string level;
+    // GPU per-vertex distSqLimit test replaces the game's CPU-computed
+    // bounding-sphere light selection (see Obj57AD20.cpp prepareFrameLights /
+    // DK2_LIGHT_ALL_TEST) - finer-grained (per-vertex, not per-object-sphere),
+    // removes a guest-side hash-dedup selection step under Rosetta.
+    bool lightSelectionGpu = true;
     // [renderer]
     bool bloom = true;
     bool metalShadows = true;
@@ -217,7 +222,10 @@ std::string renderSettingsFile(const Settings &s) {
       << "resolution = \"" << s.resolution << "\"\n"
       << "movies = " << tomlBool(s.movies) << "\n"
       << "# Level file name to load directly, skipping the normal menu. Empty = normal menu.\n"
-      << "level = \"" << s.level << "\"\n\n";
+      << "level = \"" << s.level << "\"\n"
+      << "# GPU tests every candidate light per vertex (distance+facing) instead of\n"
+      << "# the game's CPU-selected subset - finer-grained, less guest CPU work.\n"
+      << "light_selection_gpu = " << tomlBool(s.lightSelectionGpu) << "\n\n";
     o << "[renderer]\n"
       << "# All five keys in this section apply live (no restart) while the game is running.\n"
       << "bloom = " << tomlBool(s.bloom) << "\n"
@@ -272,6 +280,7 @@ Settings load() {
             s.resolution = tomlGet<std::string>(*g, "resolution", s.resolution);
             s.movies = tomlGet<bool>(*g, "movies", s.movies);
             s.level = tomlGet<std::string>(*g, "level", s.level);
+            s.lightSelectionGpu = tomlGet<bool>(*g, "light_selection_gpu", s.lightSelectionGpu);
         }
         if (const auto *r = tomlSection(data, "renderer")) {
             s.bloom = tomlGet<bool>(*r, "bloom", s.bloom);
@@ -371,6 +380,7 @@ void composeRunnerEnv(const Settings &s) {
     setenvIfUnset("DK2_LEVEL", s.level);
     setenvIfUnset("DK2_WINEDEBUG", s.winedebug);
     setenvIfUnset("DK2_MOVIES", s.movies ? "1" : "0");
+    setenvIfUnset("DK2_LIGHT_SELECTION_GPU", s.lightSelectionGpu ? "1" : "0");
     std::ostringstream extra;
     extra << "-gog:MeshGpuPath=" << tomlBool(s.meshGpuPath)
           << " -flametal:ShadowCache=" << tomlBool(s.shadowCache)
@@ -5154,6 +5164,7 @@ static void *renderWorker(void *context) {
     NSButton *_metalShadows;
     NSButton *_hdTextures;
     NSButton *_movies;
+    NSButton *_lightSelectionGpu;
     NSButton *_meshGpuPath;
     NSButton *_shadowCache;
     NSButton *_debugProbes;
@@ -5344,6 +5355,13 @@ static void *renderWorker(void *context) {
     addHint(y);
     y -= rowHeight + rowGap;
 
+    addRowLabel(@"Light Selection GPU");
+    _lightSelectionGpu = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
+                                            title:@"" checked:s.lightSelectionGpu];
+    [container addSubview:_lightSelectionGpu];
+    addHint(y);
+    y -= rowHeight + rowGap;
+
     addHeader(@"Patches");
     addRowLabel(@"Mesh GPU Path");
     _meshGpuPath = [self checkboxWithFrame:NSMakeRect(controlX, y, controlWidth, rowHeight)
@@ -5442,6 +5460,7 @@ static void *renderWorker(void *context) {
     if (paren != std::string::npos) resolution = resolution.substr(0, paren);
     s.resolution = resolution;
     s.movies = _movies.state == NSControlStateValueOn;
+    s.lightSelectionGpu = _lightSelectionGpu.state == NSControlStateValueOn;
     s.level = _level.stringValue.UTF8String;
     s.bloom = _bloom.state == NSControlStateValueOn;
     s.metalShadows = _metalShadows.state == NSControlStateValueOn;
