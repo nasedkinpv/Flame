@@ -925,27 +925,50 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
             ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
         return deTally(8);
     } else {
+        // REVERTED 2026-07-23 (regression): retained-instanced draw
+        // (emitRetained + translate-by-origin, see git history 31ead1e)
+        // caused static terrain to render as a black void that grew as the
+        // camera rotated - torches/lights still visible floating in it,
+        // meaning the terrain draw was simply MISSING, not merely unlit.
+        //
+        // Root cause (suspected, not yet 100% proven): retainedEntryMesh's
+        // cache is keyed by entry.vertices/triangleIndices POOL ADDRESS plus
+        // a signature that samples only 3 vertices (index 0, mid, max - see
+        // describeEntryGuarded) + full index topology. Tile-based dungeon
+        // terrain shares near-identical topology and often shares edge
+        // vertices between adjacent tiles; when the game's memory pool
+        // recycles an address for a DIFFERENT tile as the camera reveals new
+        // geometry, a 3-sample signature collision can make the cache think
+        // it's the SAME object and reuse its STALE `origin` - drawing the
+        // new tile's shape translated to the OLD tile's world position
+        // (likely off-screen/outside the frustum -> appears as missing
+        // geometry). The pre-31ead1e code explicitly guarded against this
+        // exact failure mode ("an address-cache hit cannot resurrect old
+        // terrain") by re-streaming absolute positions every frame instead
+        // of trusting the signature to prove positional identity.
+        //
+        // Reverted to the proven-correct emitDeformed (stream absolute
+        // positions every frame, identity transform) until retained-instancing
+        // is redesigned with a stronger cache-hit guarantee (e.g. hash all
+        // vertices, or store+compare the origin itself as part of the
+        // signature). This gives back the ~16.5ms/frame CPU cost the
+        // optimization removed - correctness first.
+        static float positions[256 * 3];
+        if (!copyEntryPositionsGuarded(entry, vertexCount, positions)) {
+            return deTally(7);
+        }
+        static const float identity[12] = {
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0};
         RetainedEntryMesh retained;
         if (!retainedEntryMesh(
                 entry, indexCount, vertexCount, signature, uvScale,
                 &retained)) {
             return deTally(6);
         }
-        // Static geometry (this whole path is reached only from the static
-        // mesh/heightfield renderers 0x586150/0x587010): the retained template
-        // is stored object-space, relative to `retained.origin` (its world
-        // placement). Draw it with a translate-by-origin transform so the GPU
-        // reconstructs the same absolute position it would have streamed -
-        // WITHOUT the per-frame copyEntryPositionsGuarded. That per-draw
-        // position copy was the CPU marshalling (~16.5ms/frame at zoom-out,
-        // measured 99% retained-cache hits over 11k unique templates) that
-        // Rosetta paid every frame even though static positions never change.
-        const float world[12] = {
-            1, 0, 0, retained.origin.x,
-            0, 1, 0, retained.origin.y,
-            0, 0, 1, retained.origin.z};
-        dk2::meshgpu::emitRetained(
-            target, retained.meshId, world, lights,
+        dk2::meshgpu::emitDeformed(
+            target, retained.meshId, positions, vertexCount, identity, lights,
             ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
         return deTally(9);
     }
