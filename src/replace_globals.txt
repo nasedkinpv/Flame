@@ -455,7 +455,14 @@
 # MyScaledSurface/MyCESurfHandle pointer derefs) preemptively before first
 # live test, following the same reasoning that fixed the heightfield
 # sibling's intermittent crash.
-00586190 int CEngineStaticMesh::appendToSceneObject2EList(int)
+#
+# Re-commented out: live-tested alongside the heightfield sibling below and
+# the combined build crashed 2/2 on world load (heightfield alone was stable
+# 4/4 after its own null-guards). This function's own header comments flag
+# the sub_57F030/sub_581B80 stack-argument mapping as unverified -- likely
+# root cause, not a simple null-deref the existing guards would catch. Needs
+# that mapping re-checked in Ghidra before re-enabling.
+# 00586190 int CEngineStaticMesh::appendToSceneObject2EList(int)
 
 # CEngineStaticHeightField
 # Crashed once (of two attempts) on world load. Re-checked the loader
