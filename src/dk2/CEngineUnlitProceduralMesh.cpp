@@ -6,7 +6,6 @@
 #include "dk2/utils/Vec3f.h"
 #include "dk2_functions.h"
 #include "dk2_globals.h"
-#include "patches/logging.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -134,21 +133,6 @@ int *dk2::CEngineUnlitProceduralMesh::fun_5884F0(int mode, SceneObject2E *scene)
     const int totalCount = static_cast<int>(field_8);
     const int begin = mode << 8;
     const int end = std::min(begin + 0x100, totalCount);
-
-    // wip: bring-up instrumentation (tower smoke/light-effect investigation,
-    // removed once confirmed) - this function is never gated on
-    // meshGpuActive(), so if it IS the menu's smoke/glow effect, it always
-    // runs the legacy CPU emission path regardless of mesh_gpu_path.
-    {
-        static uint32_t calls = 0;
-        if (calls < 5) {
-            patch::log::dbg(
-                "CEngineUnlitProceduralMesh::fun_5884F0: mode=%d "
-                "totalCount=%d begin=%d end=%d (calls=%u)",
-                mode, totalCount, begin, end, calls);
-        }
-        ++calls;
-    }
 
     if (begin < end) {
         const auto *triangles = reinterpret_cast<const Idx3s *>(field_18);
