@@ -1357,15 +1357,33 @@ uint32_t materialClassForUV(uint32_t textureId, float u, float v) {
 // file applied (caller falls through to the original/hash path).
 id<MTLTexture> composePage(id<MTLDevice> device, uint32_t textureId, PageState &st,
                            uint32_t *packHits) {
+    // wip: terrain-HD investigation (2026-07-24d) -- log the outcome for any
+    // page carrying a terrain-looking rect name.
+    bool wipTerrainPage = false;
+    for (const auto &r : st.rects) {
+        if (strstr(r.name, "Rock") || strstr(r.name, "T_") || strstr(r.name, "Path")) {
+            wipTerrainPage = true;
+            break;
+        }
+    }
+    static int wipPageLogsLeft = 30;
+    auto wipLog = [&](const char *reason) {
+        if (wipTerrainPage && wipPageLogsLeft > 0) {
+            --wipPageLogsLeft;
+            NSLog(@"composePage terrain page %u: %s (rects=%zu w=%u h=%u pixels=%zu)",
+                  textureId, reason, st.rects.size(), st.w, st.h, st.pixels1x.size());
+        }
+    };
     NSString *dir = directory();
-    if (!dir) { ++composeStats().noDir; return nil; }
-    if (st.pixels1x.empty()) { ++composeStats().noPixels; return nil; }
-    if (st.rects.empty()) { ++composeStats().noRects; return nil; }
+    if (!dir) { ++composeStats().noDir; wipLog("noDir"); return nil; }
+    if (st.pixels1x.empty()) { ++composeStats().noPixels; wipLog("noPixels"); return nil; }
+    if (st.rects.empty()) { ++composeStats().noRects; wipLog("noRects"); return nil; }
     // Stale pixels1x kept across a repack that changed the page size (see
     // pageReset) would make the HD page the wrong dimensions and misalign
     // every decal UV = holes. Refuse to compose from a mismatched snapshot.
     if (st.pixels1x.size() != (size_t)st.w * st.h * 4) {
         ++composeStats().dimMismatch;
+        wipLog("dimMismatch");
         return nil;
     }
     const uint32_t hdW = st.w * kScale, hdH = st.h * kScale;
@@ -1385,7 +1403,8 @@ id<MTLTexture> composePage(id<MTLDevice> device, uint32_t textureId, PageState &
                           rw * kScale, rh * kScale, hdW * 4);
         ++applied;
     }
-    if (!applied) { ++composeStats().noApplied; return nil; }
+    if (!applied) { ++composeStats().noApplied; wipLog("noApplied"); return nil; }
+    wipLog("OK");
     ++composeStats().ok;
     if (packHits) *packHits += applied;
     static dispatch_once_t once;
