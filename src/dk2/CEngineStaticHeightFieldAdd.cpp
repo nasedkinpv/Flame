@@ -260,9 +260,14 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     // metric/level for this heightfield chunk, to see what's really driving
     // the tag=3/16px handles observed downstream in SurfHashList2.
     {
-        static int wipLeft = 40;
-        if (wipLeft > 0) {
-            --wipLeft;
+        static uint32_t wipSeen[64] = {};
+        static int wipSeenCount = 0;
+        bool wipAlreadySeen = false;
+        for (int i = 0; i < wipSeenCount; ++i) {
+            if (wipSeen[i] == field_10) { wipAlreadySeen = true; break; }
+        }
+        if (!wipAlreadySeen && wipSeenCount < 64) {
+            wipSeen[wipSeenCount++] = field_10;
             patch::log::dbg("heightfield LOD pick: field_10=%u f20=%f reductionFactor=%f "
                             "baseHandleW=%u metric=%f lodLevel=%d",
                             field_10, pObj57AD20->f20, reductionFactor,
