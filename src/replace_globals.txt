@@ -449,13 +449,18 @@
 #00582CE0 void CEngineDynamicMesh::fun_582CE0(int, SceneObject2E *)
 
 # CEngineStaticHeightField
-# 817 bytes -- smaller than the ~1.5-2.3KB bodies flagged unsafe elsewhere in
-# this file (5836A0/586190), but larger than the small dispatchers used to
-# route around that Wine 11 WOW64 self-modification issue. Untested live;
-# if this destabilizes WOW64 the same way, fall back to routing through a
-# small dispatcher instead of patching 587060 directly (see the
-# CEngineAnimMesh/Obj57AD20 entries above for the established pattern).
-00587060 int CEngineStaticHeightField::appendToSceneObject2EList(int)
+# Staged: confirmed live to intermittently crash Wine 11 WOW64 on world load
+# (817 bytes -- smaller than the ~1.5-2.3KB bodies flagged unsafe elsewhere in
+# this file, but evidently still large enough to hit the same self-modifying-
+# code race). Unlike CEngineAnimMesh::fun_5848B0/Obj57AD20::sub_57A9A0, this
+# function IS the vtable slot itself -- there is no pre-existing small
+# dispatcher in the original binary to route through instead. Candidate real
+# fix: patch the vtable function-pointer slot (0x66FDB4+8, 4 bytes of data)
+# rather than the function body in place (code); not yet attempted. Keep the
+# full translation in CEngineStaticHeightFieldAdd.cpp (correct, verified live
+# once it's actually reached -- terrain rendered normally in-level), just not
+# wired in for production until the patching mechanism is safe.
+#00587060 int CEngineStaticHeightField::appendToSceneObject2EList(int)
 
 # MyScaledSurface
 0057C420 MyScaledSurface *MyScaledSurface::constructor(MyDblNamedSurface *, int)
