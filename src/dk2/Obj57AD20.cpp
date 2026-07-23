@@ -195,6 +195,20 @@ uint32_t metalMeshFlags(uint32_t drawFlags, bool lit) {
     if (drawFlags & 0x1000u) flags |= DK2M_DRAW_MESH_MULTIPLY;
     else if (drawFlags & 0x20u) flags |= DK2M_DRAW_MESH_ALPHA_BLEND;
     else if (drawFlags & 0x1u) flags |= DK2M_DRAW_MESH_ADDITIVE;
+
+    // wip: bring-up instrumentation (menu light-ray flicker investigation,
+    // removed once root-caused) - log EVERY additive-blend draw, continuous
+    // (not throttled to first-N-distinct), since additive draws should be
+    // rare in a menu scene - isolates the ray effect from the noise of every
+    // other lit draw.
+    if (flags & DK2M_DRAW_MESH_ADDITIVE) {
+        static uint32_t additiveCalls = 0;
+        patch::log::dbg(
+            "metalMeshFlags ADDITIVE: drawFlags=0x%08X lit=%d frame=%u "
+            "(call=%u)",
+            drawFlags, lit, gog::metal_bridge::frameCounter(), additiveCalls);
+        ++additiveCalls;
+    }
     return flags;
 }
 
