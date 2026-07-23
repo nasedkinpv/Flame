@@ -21,6 +21,7 @@
 #include <tools/flametal_config.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <emmintrin.h>
 
@@ -279,6 +280,15 @@ bool drawAnimOnGpu(
             frameIndex, static_cast<void *>(resource),
             static_cast<const void *>(indices),
             gog::metal_bridge::frameCounter());
+        // wip: proof-of-identification experiment (menu light-ray flicker
+        // investigation) - skip this GPU draw entirely when set, falling
+        // back to the legacy CPU path for just this object, to prove it is
+        // the flickering element before chasing the disasm further.
+        static const bool skipAdditiveGpuDraw = [] {
+            const char *v = std::getenv("DK2_SKIP_ADDITIVE_ANIM_GPU");
+            return v && std::strcmp(v, "0") != 0;
+        }();
+        if (skipAdditiveGpuDraw) return false;
     }
     dk2::meshgpu::emitDeformed(
         target, topology->meshId, positions, topology->vertexCount,
