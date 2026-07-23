@@ -59,7 +59,7 @@ static int ref(const Obj *o, float X, float Y, float Z, float W, int mask) {
         if ((static_cast<int32_t>(e->flags) & mask) == mask) {
             const double dx = X - e->cx, dy = Y - e->cy, dz = Z - e->cz;
             const double rW = (double)e->radius + (double)W;
-            const double s = rW * rW - (dx * dx + dy * dy + dz * dz);
+            const double s = (dx * dx + dy * dy + dz * dz) - rW * rW;
             if (s < 0.0) result |= bit;
         }
         bit <<= 1;
@@ -77,12 +77,12 @@ int main() {
         Entry e{0, 0xffffffff, 0.f, 0.f, 0.f, {0,0,0}, 10.f};  // r=10 at origin
         Obj o{0, 1, {}, {&e, nullptr}};
         // mask=0x1: selRange (bit0) -> start=base=0, bit5 clear -> end=0+1=1, bit0=0
-        assert(sub_57BBF0((int*)&o, nullptr, 0,0,0, 0, 0x1) == 0);   // inside -> bit0 clear
-        assert(sub_57BBF0((int*)&o, nullptr, 100,0,0, 0, 0x1) == 1); // outside -> bit0 set
+        assert(sub_57BBF0((int*)&o, nullptr, 0,0,0, 0, 0x1) == 1);   // inside -> bit0 set
+        assert(sub_57BBF0((int*)&o, nullptr, 100,0,0, 0, 0x1) == 0); // outside -> bit0 clear
         assert(sub_57BBF0((int*)&o, nullptr, 100,0,0, 0, 0x1) == ref(&o,100,0,0,0,0x1));
         assert(sub_57BBF0((int*)&o, nullptr, 0,0,0, 0, 0x1) == ref(&o,0,0,0,0,0x1));
         // inflation by W: point at dist 12 is outside r=10 but inside r=10+W=15
-        assert(sub_57BBF0((int*)&o, nullptr, 12,0,0, 5, 0x1) == 0);  // 12<15 inside
+        assert(sub_57BBF0((int*)&o, nullptr, 12,0,0, 5, 0x1) == 1);  // 12<15 inside -> bit set
         assert(sub_57BBF0((int*)&o, nullptr, 12,0,0, 5, 0x1) == ref(&o,12,0,0,5,0x1));
         // mask=0xffffffff (bit0 AND bit5 set) -> clampEmpty -> empty range -> 0
         assert(sub_57BBF0((int*)&o, nullptr, 100,0,0, 0, static_cast<int>(0xffffffffu)) == 0);

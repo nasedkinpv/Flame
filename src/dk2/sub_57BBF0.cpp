@@ -2,8 +2,12 @@
 //
 // __fastcall leaf on the appendToSceneObject2EList render hot path (0x584900
 // calls it twice). For each sphere entry in the object's array, filtered by
-// (entry->flags & mask) == mask, tests whether point (X,Y,Z) is OUTSIDE the
-// sphere inflated by W, and accumulates a result bitmask (bit i set = outside).
+// (entry->flags & mask) == mask, tests whether point (X,Y,Z) is WITHIN the
+// sphere inflated by W, and accumulates a result bitmask (bit i set = overlap/
+// in-range). Verified against the original SIMD translation's sign convention
+// (distanceSquared - radiusSum^2 < 0 => in range) -- an earlier version of
+// this function had the subtraction order (and therefore the branch) flipped,
+// which inverted every bit and broke light selection game-wide.
 // Range and bit-numbering are selected by mask bits 0 and 5.
 //
 // Replaces an x87 leaf (14 x87 instrs, 0 calls, no globals). The original kept
@@ -67,8 +71,9 @@ int __fastcall sub_57BBF0(int *objRaw, void * /*edx*/, float X, float Y,
             const float r = load_f32(entry + 0x20);
             const float dx = X - cx, dy = Y - cy, dz = Z - cz;
             const float rW = r + W;
-            const float scalar = rW * rW - (dx * dx + dy * dy + dz * dz);
-            if (scalar < 0.0f) result |= bit;  // point outside inflated sphere
+            const float distanceSquared = dx * dx + dy * dy + dz * dz;
+            const float scalar = distanceSquared - rW * rW;
+            if (scalar < 0.0f) result |= bit;  // point within inflated sphere
         }
         bit <<= 1;
     }
