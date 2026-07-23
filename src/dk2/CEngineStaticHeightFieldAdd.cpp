@@ -153,17 +153,13 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
                         g_hfStats.nullHandle, g_hfStats.zeroTriangles, g_hfStats.appended,
                         SceneObject2EList_instance.maxCount, SceneObject2E_count);
     }
-    // wip: temporary re-bypass (2026-07-24i), JUST to get the metric log
-    // below to actually execute (guard1 blocks ~100% of live calls) -- not
-    // proposing this as the fix, purely for data collection. Remove after.
-    constexpr bool wipBypassGuards = true;
     // Both guards must pass (single combined condition, unlike the
     // static-mesh sibling's two sequential early returns).
-    if (!wipBypassGuards && (a8 & 0x8) != 0 && *reinterpret_cast<const int32_t *>(0x00760B60) == 0) {
+    if ((a8 & 0x8) != 0 && *reinterpret_cast<const int32_t *>(0x00760B60) == 0) {
         ++g_hfStats.guard1Bail;
         return 0;
     }
-    if (!wipBypassGuards && (a8 & 0x10) != 0 && *reinterpret_cast<const int32_t *>(0x00760B84) == 0) {
+    if ((a8 & 0x10) != 0 && *reinterpret_cast<const int32_t *>(0x00760B84) == 0) {
         ++g_hfStats.guard2Bail;
         return 0;
     }
@@ -190,10 +186,20 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
         }
     }
 
-    Vec3f reductionCenterScratch{};
+    // Bug found 2026-07-24 (terrain-HD investigation): this call was passing
+    // a zero-initialized scratch Vec3f as the first argument. The original
+    // disassembly (FUN_00587060) passes the SAME camSpacePos (auStack_24) to
+    // BOTH Vec3f_static_sub_575D70 (cull test, above) and this call -- not a
+    // separate zero vector. Confirmed live: with the wrong zero input,
+    // reductionFactor came out as a constant, wildly-out-of-range value
+    // (~1e30) every time regardless of true camera distance, making the LOD
+    // metric meaningless (either always-best or always-worst by accident of
+    // floating point, not by actual distance). camSpacePos isn't read again
+    // after this call, so reusing it here (rather than a fresh scratch) is
+    // safe even if the callee treats it as in/out.
     Vec3f reductionOtherScratch{};
     float reductionFactor = 0.0f;
-    Vec3f_static_sub_575F10(&reductionCenterScratch, pObj57AD20->f20,
+    Vec3f_static_sub_575F10(&camSpacePos, pObj57AD20->f20,
                              &reductionOtherScratch, &reductionFactor);
 
     // Inlined Obj57AD20::sub_57AC10 -- light-selection mask.
@@ -255,25 +261,6 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     int lodLevel = (metric < 1.0f) ? 1 : 0;
     if (metric < 0.5f) lodLevel = 2;
     if (metric < 0.25f) lodLevel = 3;
-
-    // wip: terrain-HD investigation (2026-07-24h) -- the actual computed LOD
-    // metric/level for this heightfield chunk, to see what's really driving
-    // the tag=3/16px handles observed downstream in SurfHashList2.
-    {
-        static uint32_t wipSeen[64] = {};
-        static int wipSeenCount = 0;
-        bool wipAlreadySeen = false;
-        for (int i = 0; i < wipSeenCount; ++i) {
-            if (wipSeen[i] == field_10) { wipAlreadySeen = true; break; }
-        }
-        if (!wipAlreadySeen && wipSeenCount < 64) {
-            wipSeen[wipSeenCount++] = field_10;
-            patch::log::dbg("heightfield LOD pick: field_10=%u f20=%f reductionFactor=%f "
-                            "baseHandleW=%u metric=%f lodLevel=%d",
-                            field_10, pObj57AD20->f20, reductionFactor,
-                            (unsigned) baseHandle->surfWidth8, metric, lodLevel);
-        }
-    }
 
     // TODO(verify): defensive index adjustment for prob_height < 1 --
     // mirrored as-is from the decompile; looks unreachable for a real

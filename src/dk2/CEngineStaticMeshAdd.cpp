@@ -285,15 +285,24 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
         }
     }
 
-    // 0x58625F..0x586274: reduction/LOD scale factor. The two Vec3f*
-    // outputs are never read again by this function (verified: their
-    // stack slots have no further reader) -- kept as unused scratch for
-    // call-signature fidelity, same as the "TODO(verify)" outputs in
-    // CEngineAnimMeshBlend.cpp.
-    Vec3f reductionCenterScratch{};
+    // 0x58625F..0x586274: reduction/LOD scale factor.
+    //
+    // Bug found 2026-07-24 (terrain-HD investigation, same call in the
+    // heightfield sibling): this passed a zero-initialized scratch Vec3f as
+    // the first argument instead of camSpacePos. The original disassembly
+    // passes the SAME camera-space position to both
+    // Vec3f_static_sub_575D70 (cull test, above) and this call. With a zero
+    // input, reductionFactor comes out as a constant, wildly-out-of-range
+    // value regardless of true camera distance, making the LOD metric
+    // meaningless. camSpacePos isn't read again after this call, so reusing
+    // it here is safe even if the callee treats it as in/out. The second
+    // Vec3f* output (reductionOtherScratch) genuinely is never read again
+    // (verified: its stack slot has no further reader) -- kept as unused
+    // scratch for call-signature fidelity, same as the "TODO(verify)"
+    // outputs in CEngineAnimMeshBlend.cpp.
     Vec3f reductionOtherScratch{};
     float reductionFactor = 0.0f;
-    Vec3f_static_sub_575F10(&reductionCenterScratch, pObj57AD20->f20,
+    Vec3f_static_sub_575F10(&camSpacePos, pObj57AD20->f20,
                              &reductionOtherScratch, &reductionFactor);
 
     // 0x586274..0x58629C: nothing to submit if there are no sub-parts.
