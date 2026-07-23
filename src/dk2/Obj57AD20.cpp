@@ -193,6 +193,19 @@ uint32_t metalMeshFlags(uint32_t drawFlags, bool lit) {
     if (drawFlags & 0x1000u) flags |= DK2M_DRAW_MESH_MULTIPLY;
     else if (drawFlags & 0x20u) flags |= DK2M_DRAW_MESH_ALPHA_BLEND;
     else if (drawFlags & 0x1u) flags |= DK2M_DRAW_MESH_ADDITIVE;
+
+    // Carry the REAL D3DRENDERSTATE_CULLMODE through instead of guessing
+    // cull from blend mode host-side: a two-sided decal (e.g. selection
+    // highlight, trap markup) drawn with otherwise-opaque blend flags was
+    // getting back-face culled because the mesh-draw command never told the
+    // host what cull mode the game actually had set. The guest already
+    // shadow-copies every render state (metal_bridge::setRenderState), so
+    // read it directly here at emit time rather than reconstructing it from
+    // the host's reordered (mesh-hoisted) command stream.
+    DWORD cullMode = D3DCULL_CCW;
+    gog::metal_bridge::getRenderState(D3DRENDERSTATE_CULLMODE, &cullMode);
+    if (cullMode == D3DCULL_NONE) flags |= DK2M_DRAW_MESH_CULL_NONE;
+    else if (cullMode == D3DCULL_CCW) flags |= DK2M_DRAW_MESH_CULL_CCW;
     return flags;
 }
 
