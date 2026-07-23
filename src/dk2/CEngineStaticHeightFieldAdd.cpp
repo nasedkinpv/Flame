@@ -135,8 +135,8 @@ struct SceneAddRequest {
 // how often each bail-out actually fires relative to total calls/appends.
 // Remove once the cause is confirmed.
 struct HeightFieldStats {
-    uint32_t calls = 0, cullFail = 0, nullSurf = 0, nullBaseHandle = 0,
-             nullHandle = 0, appended = 0;
+    uint32_t calls = 0, guard1Bail = 0, guard2Bail = 0, cullFail = 0, nullSurf = 0,
+             nullBaseHandle = 0, nullHandle = 0, zeroTriangles = 0, appended = 0;
 };
 HeightFieldStats g_hfStats;
 
@@ -145,18 +145,22 @@ HeightFieldStats g_hfStats;
 int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     ++g_hfStats.calls;
     if (g_hfStats.calls % 256 == 0) {
-        patch::log::dbg("heightfield append stats: calls=%u cullFail=%u nullSurf=%u "
-                        "nullBaseHandle=%u nullHandle=%u appended=%u maxCount=%d count=%u",
-                        g_hfStats.calls, g_hfStats.cullFail, g_hfStats.nullSurf,
-                        g_hfStats.nullBaseHandle, g_hfStats.nullHandle, g_hfStats.appended,
+        patch::log::dbg("heightfield append stats: calls=%u guard1Bail=%u guard2Bail=%u "
+                        "cullFail=%u nullSurf=%u nullBaseHandle=%u nullHandle=%u "
+                        "zeroTriangles=%u appended=%u maxCount=%d count=%u",
+                        g_hfStats.calls, g_hfStats.guard1Bail, g_hfStats.guard2Bail,
+                        g_hfStats.cullFail, g_hfStats.nullSurf, g_hfStats.nullBaseHandle,
+                        g_hfStats.nullHandle, g_hfStats.zeroTriangles, g_hfStats.appended,
                         SceneObject2EList_instance.maxCount, SceneObject2E_count);
     }
     // Both guards must pass (single combined condition, unlike the
     // static-mesh sibling's two sequential early returns).
     if ((a8 & 0x8) != 0 && *reinterpret_cast<const int32_t *>(0x00760B60) == 0) {
+        ++g_hfStats.guard1Bail;
         return 0;
     }
     if ((a8 & 0x10) != 0 && *reinterpret_cast<const int32_t *>(0x00760B84) == 0) {
+        ++g_hfStats.guard2Bail;
         return 0;
     }
 
@@ -271,7 +275,9 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     const int32_t gridWidth = field_14;
     const int16_t vertsPerSide = static_cast<int16_t>(gridWidth + 1);
     const int32_t triangleCountX2 = gridWidth * gridWidth * 2;
-    if (triangleCountX2 != 0) {
+    if (triangleCountX2 == 0) {
+        ++g_hfStats.zeroTriangles;
+    } else {
         ++g_hfStats.appended;
         if (SceneObject2E_count >= static_cast<uint32_t>(SceneObject2EList_instance.maxCount)) {
             SceneObject2EList_instance.objects2EToDraw_enlarge(SceneObject2E_count);
