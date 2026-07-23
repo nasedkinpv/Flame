@@ -456,13 +456,16 @@
 # live test, following the same reasoning that fixed the heightfield
 # sibling's intermittent crash.
 #
-# Re-commented out: live-tested alongside the heightfield sibling below and
-# the combined build crashed 2/2 on world load (heightfield alone was stable
-# 4/4 after its own null-guards). This function's own header comments flag
-# the sub_57F030/sub_581B80 stack-argument mapping as unverified -- likely
-# root cause, not a simple null-deref the existing guards would catch. Needs
-# that mapping re-checked in Ghidra before re-enabling.
-# 00586190 int CEngineStaticMesh::appendToSceneObject2EList(int)
+# Was re-commented out after the combined build crashed 2/2 on world load
+# (heightfield alone was stable 4/4). Re-checked the sub_57F030/sub_581B80
+# call in Ghidra directly against the raw listing (0x5863A7..0x5863E5): the
+# second MyScaledSurface's sub_581B80 call was passing a hardcoded 0.0f for
+# its 2nd stack arg instead of `this->field_24` bit-reinterpreted as float
+# (confirmed via `FLD [ESI+0x28]` staged onto the stack ahead of the
+# sub_57F030 call and left unconsumed by its cdecl cleanup -- same "leftover
+# stack reuse" pattern as CEngineAnimMeshAdd.cpp's identical helper pair).
+# Fixed in CEngineStaticMeshAdd.cpp; re-enabling for another live test.
+00586190 int CEngineStaticMesh::appendToSceneObject2EList(int)
 
 # CEngineStaticHeightField
 # Crashed once (of two attempts) on world load. Re-checked the loader

@@ -94,14 +94,20 @@
 //     SceneObject2E via the free function `static_appendToSceneObject2EList`
 //     (0x00586A70, already declared in dk2_functions.h, not implemented by
 //     this file -- it is a separate translation unit's responsibility).
-//     TODO(verify): the exact stack-argument split between sub_57F030's
-//     two float parameters and sub_581B80's three declared parameters could
-//     not be fully pinned down (the disassembly shows sub_581B80 called
-//     with what looks like only 1 of its 3 declared stack arguments
-//     explicitly pushed at this call site, the other 2 apparently reusing
-//     whatever was left on the stack by the immediately-preceding cdecl
-//     call's own cleanup -- plausible stack-slot reuse, but not confirmed
-//     against the callee's own disassembly for this specific call site).
+//     Stack-argument split confirmed by direct listing trace at
+//     0x5863A7..0x5863E5: `CALL FUN_0057F030` at 0x5863D5 takes exactly 3
+//     args (surf2, reductionFactor, record.mmFactor; `ADD ESP,0xC` after
+//     confirms 3), then `MOV ECX,EDI` at 0x5863DD sets ECX (this) back to
+//     surf2 for the following thiscall, `PUSH EAX` at 0x5863DF pushes
+//     sub_57F030's return (the picked LOD level) as the 1st stack arg, and
+//     the 2nd/3rd stack args are two values pushed *before* the
+//     sub_57F030 call and left unconsumed by its cdecl cleanup (the
+//     "leftover stack reuse between two cdecl calls" pattern already
+//     documented in CEngineAnimMeshAdd.cpp for this exact helper pair):
+//     `this->field_24` bit-reinterpreted as float (loaded via
+//     `FLD [ESI+0x28]` at 0x5863B6) and a literal 0. So the call is
+//     `surf2->sub_581B80(lodLevel, *(float*)&field_24, 0)` -- matching the
+//     sibling's `surf2->sub_581B80(lod2, field_74, 0)` shape exactly.
 //
 //  6. 0x586416..0x586A16: reloads `a5_flags`/the combined draw flags and
 //     picks one of three ways to append SceneObject2E entries. Verified by
@@ -373,7 +379,17 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
             MyScaledSurface *surf2 = MyEntryBuf_MyScaledSurface_getByIdx(field_20);
             if (surf2 == nullptr) continue;
             const int lodLevel2 = sub_57F030(surf2, reductionFactor, record.mmFactor);
-            handle2 = surf2->sub_581B80(lodLevel2, 0.0f, 0);
+            // Verified against the raw listing at 0x5863dd..0x5863e0: ECX (this)
+            // is surf2 (MOV ECX,EDI), and the 2nd stack arg is `this->field_24`
+            // bit-reinterpreted as float (FLD [ESI+0x28] at 0x5863b6, staged
+            // into the arg slot the same way as sub_57F030's own args -- the
+            // classic "leftover stack push reused by the next cdecl call"
+            // pattern already documented in CEngineAnimMeshAdd.cpp for this
+            // exact helper pair). Previously hardcoded to 0.0f here, which
+            // doesn't match this->field_24 -- same call shape as the sibling's
+            // `surf2->sub_581B80(lod2, field_74, 0)`.
+            const float field24AsFloat = *reinterpret_cast<const float *>(&field_24);
+            handle2 = surf2->sub_581B80(lodLevel2, field24AsFloat, 0);
             if (handle2 == nullptr) continue;
 
             uint32_t andMask2 = 0xFFFFFFFFu;
