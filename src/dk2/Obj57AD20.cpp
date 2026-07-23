@@ -665,6 +665,13 @@ struct RetainedEntryMesh {
 
 // bring-up: retained cache reuse ratio (decides retained-instancing viability)
 static uint32_t g_reHit = 0, g_reNew = 0;
+static uint32_t g_reFailSat = 0, g_reFailCopy = 0, g_reFailReg = 0;
+static void reFailReport() {
+    uint32_t t = g_reFailSat + g_reFailCopy + g_reFailReg;
+    if ((t % 4096) == 0)
+        patch::log::dbg("retainfail reasons: saturation=%u copyfail=%u regfail=%u",
+                        g_reFailSat, g_reFailCopy, g_reFailReg);
+}
 static void reuseReport() {
     if (((g_reHit + g_reNew) % 8192) == 0)
         patch::log::dbg("retainedEntryMesh: HIT=%u NEW=%u hit%%=%u uniqueMeshes=%u",
@@ -722,14 +729,14 @@ bool retainedEntryMesh(const MeshEntry &entry,
         available = &candidate;  // address reuse after a level/resource rebuild
         break;
     }
-    if (!available) return false;
+    if (!available) { g_reFailSat++; reFailReport(); return false; }
     static DK2MMeshVertex vertices[256];
     static uint16_t indices[765];
     uint32_t copiedVertices = 0;
     if (!copyEntryGuarded(entry, indexCount, &copiedVertices, vertices, 256,
                           indices, uvScale, 1.0f, 1.0f, 0.0f, 0.0f) ||
         copiedVertices != vertexCount) {
-        return false;
+        g_reFailCopy++; reFailReport(); return false;
     }
     const dk2::Vec3f origin{vertices[0].px, vertices[0].py, vertices[0].pz};
     for (uint32_t vertex = 0; vertex < copiedVertices; ++vertex) {
@@ -768,7 +775,7 @@ bool retainedEntryMesh(const MeshEntry &entry,
         meshId = dk2::meshgpu::allocateMeshId();
         if (!dk2::meshgpu::registerMesh(
                 meshId, vertices, copiedVertices, indices, indexCount)) {
-            return false;
+            g_reFailReg++; reFailReport(); return false;
         }
         g_reNew++;  // a truly unique object-space template was registered
         if (contents.size() < 16384) {
