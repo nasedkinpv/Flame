@@ -663,6 +663,16 @@ struct RetainedEntryMesh {
     dk2::Vec3f origin;
 };
 
+// bring-up: retained cache reuse ratio (decides retained-instancing viability)
+static uint32_t g_reHit = 0, g_reNew = 0;
+static void reuseReport() {
+    if (((g_reHit + g_reNew) % 8192) == 0)
+        patch::log::dbg("retainedEntryMesh: HIT=%u NEW=%u hit%%=%u uniqueMeshes=%u",
+                        g_reHit, g_reNew,
+                        (g_reHit + g_reNew) ? g_reHit * 100 / (g_reHit + g_reNew) : 0,
+                        g_reNew);
+}
+
 bool retainedEntryMesh(const MeshEntry &entry,
                        uint32_t indexCount, uint32_t vertexCount,
                        uint64_t signature, float uvScale,
@@ -705,6 +715,8 @@ bool retainedEntryMesh(const MeshEntry &entry,
         if (candidate.signature == signature) {
             out->meshId = candidate.meshId;
             out->origin = candidate.origin;
+            g_reHit++;
+            reuseReport();
             return true;
         }
         available = &candidate;  // address reuse after a level/resource rebuild
@@ -758,6 +770,7 @@ bool retainedEntryMesh(const MeshEntry &entry,
                 meshId, vertices, copiedVertices, indices, indexCount)) {
             return false;
         }
+        g_reNew++;  // a truly unique object-space template was registered
         if (contents.size() < 16384) {
             ContentEntry content;
             content.vertexCount = copiedVertices;
