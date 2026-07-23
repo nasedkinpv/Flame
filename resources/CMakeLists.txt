@@ -17,7 +17,11 @@ if(CONFIGURE_DATE)
     string(APPEND VER_FILE_SUFFIX " ${CONFIGURE_DATE}")
 endif ()
 if(GIT_SHA1)
-    string(APPEND VER_COMMENTS ", commit: ${GIT_SHA1} ${GIT_DATE} ${GIT_COMMIT_SUBJECT}")
+    # A raw commit subject can contain a '"', which breaks the .rc string
+    # literal it's embedded into below (rc.exe then fails on whatever
+    # follows as a stray keyword). Strip quotes before embedding.
+    string(REPLACE "\"" "'" GIT_COMMIT_SUBJECT_SAFE "${GIT_COMMIT_SUBJECT}")
+    string(APPEND VER_COMMENTS ", commit: ${GIT_SHA1} ${GIT_DATE} ${GIT_COMMIT_SUBJECT_SAFE}")
     string(APPEND VER_FILE_SUFFIX " ${GIT_SHORT_SHA1}")
 endif ()
 
