@@ -280,13 +280,22 @@ bool drawAnimOnGpu(
             frameIndex, static_cast<void *>(resource),
             static_cast<const void *>(indices),
             gog::metal_bridge::frameCounter());
-        // wip: proof-of-identification experiment (menu light-ray flicker
-        // investigation) - skip this GPU draw entirely when set, falling
-        // back to the legacy CPU path for just this object, to prove it is
-        // the flickering element before chasing the disasm further.
+        // Confirmed live (2026-07-23): additive-blended animated meshes on
+        // the GPU path are the shared root cause of three symptoms - menu
+        // light-ray flicker, trap-markup disappearing at angles, and
+        // creature-selection highlight covering only half the silhouette.
+        // Falling back to the legacy CPU path for just these draws fixes
+        // all three (legacy has its own minor artifact - the model's own
+        // triangles poking through the highlight overlay - but that's a
+        // separate, far less disruptive issue). Default ON until the real
+        // GPU-path defect (likely in retainedAnimTopology's cache/vertex
+        // selection, or the untranslated frame/frameIndex source feeding
+        // it) is root-caused and fixed at the source; set
+        // DK2_SKIP_ADDITIVE_ANIM_GPU=0 to force the GPU path back on for
+        // comparison/debugging.
         static const bool skipAdditiveGpuDraw = [] {
             const char *v = std::getenv("DK2_SKIP_ADDITIVE_ANIM_GPU");
-            return v && std::strcmp(v, "0") != 0;
+            return !v || std::strcmp(v, "0") != 0;
         }();
         if (skipAdditiveGpuDraw) return false;
     }

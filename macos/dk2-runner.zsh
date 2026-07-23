@@ -133,6 +133,7 @@ if [[ "${DK2_RUNNER_MODE}" == packaged ]]; then
       WINEDLLOVERRIDES='dinput=b;winedbg.exe=d;mscoree,mshtml=;wined3d,opengl32=;d3d8,d3d9,d3d10,d3d11,dxgi=' \
       DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
       DK2_HEADLESS_DDRAW="${HEADLESS_DDRAW}" \
+      DK2_SKIP_ADDITIVE_ANIM_GPU="${DK2_SKIP_ADDITIVE_ANIM_GPU:-}" \
       "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
         -skip-launcher -game-res="${GAME_RES}" "${LEVEL_ARGS[@]}" \
         "${MOVIES_ARGS[@]}" -DisableGamma -Sound -Shadows "${SHADOW_LEVEL}" \
@@ -168,6 +169,7 @@ else
     WINEDLLOVERRIDES='dinput=b;winedbg.exe=d;mscoree,mshtml=;wined3d,opengl32=;d3d8,d3d9,d3d10,d3d11,dxgi=' \
     DK2_METAL_BRIDGE_FILE='C:\dk2-metal\frame.bin' \
     DK2_HEADLESS_DDRAW="${HEADLESS_DDRAW}" \
+    DK2_SKIP_ADDITIVE_ANIM_GPU="${DK2_SKIP_ADDITIVE_ANIM_GPU:-}" \
     "${WINE}" start.exe /exec 'C:\GOG Games\Dungeon Keeper 2\DKII-DX.exe' \
       -skip-launcher -game-res="${GAME_RES}" "${LEVEL_ARGS[@]}" \
       "${MOVIES_ARGS[@]}" -DisableGamma -Sound -Shadows "${SHADOW_LEVEL}" \
