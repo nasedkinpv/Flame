@@ -12,9 +12,18 @@
 #include "dk2_globals.h"
 #include "patches/logging.h"
 
+#include <metal_bridge/MetalBridgeProducer.h>
+#include <tools/flametal_config.h>
+
 #include <cstdint>
 #include <cstring>
 #include <emmintrin.h>
+
+// Phase 1/2 native scene mirror flag (defined in src/dk2/Obj57AD20.cpp). Reused
+// verbatim here -- NO new flag: this file only ADDS the reject-side (guest-
+// CULLED) half of the existing log-only mirror. Default off -> zero behaviour
+// change when off.
+extern flametal_config::define_flame_option<bool> o_native_scene_mirror;
 
 // dk2::CEngineStaticHeightField::appendToSceneObject2EList, 0x00587060.
 //
@@ -187,6 +196,29 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
         uint32_t cullScratch = 0;
         if (Vec3f_static_sub_575D70(&camSpacePos, pObj57AD20->f20, &cullScratch) == 0) {
             ++g_hfStats.cullFail;
+            // Native scene mirror reject-side (Phase 2, LOG-ONLY). Same rationale
+            // as the static-mesh sibling (CEngineStaticMeshAdd.cpp): this
+            // heightfield chunk just FAILED the guest cull and is dropped by the
+            // early return below, so it never reaches the draw path's
+            // sceneRegister. Register it here with minimal identity (mesh_id=0 =
+            // "culled, no mesh") + the guest's own verdict, so the host can
+            // independently confirm it ALSO culls -- the reject-side half of the
+            // Phase 2 diff. LOG-ONLY: still returns 0 / drops the chunk as before.
+            if (o_native_scene_mirror.get()) {
+                static const float kIdentity[12] = {
+                    1.0f, 0.0f, 0.0f, 0.0f,
+                    0.0f, 1.0f, 0.0f, 0.0f,
+                    0.0f, 0.0f, 1.0f, 0.0f};
+                const float center[3] = {
+                    pObj57AD20->vec.x, pObj57AD20->vec.y, pObj57AD20->vec.z};
+                // visible=0 (cull-fail branch); sub_575D70 clears fullyInside on
+                // a cull, so cullScratch==0. bit0 visible, bit1 fullyInside.
+                const uint32_t guestCull = (cullScratch ? 2u : 0u);
+                gog::metal_bridge::sceneRegister(
+                    static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pObj57AD20)),
+                    0u, 0ull, 0u, 0u, kIdentity, center, pObj57AD20->f20,
+                    guestCull);
+            }
             return 0;
         }
     }

@@ -13,9 +13,18 @@
 #include "dk2_globals.h"
 #include "patches/logging.h"
 
+#include <metal_bridge/MetalBridgeProducer.h>
+#include <tools/flametal_config.h>
+
 #include <cstdint>
 #include <cstring>
 #include <emmintrin.h>
+
+// Phase 1/2 native scene mirror flag (defined in src/dk2/Obj57AD20.cpp). Reused
+// verbatim here -- NO new flag: this file only ADDS the reject-side (guest-
+// CULLED) half of the existing log-only mirror. Default off -> zero behaviour
+// change when off.
+extern flametal_config::define_flame_option<bool> o_native_scene_mirror;
 
 // dk2::CEngineStaticMesh::appendToSceneObject2EList, 0x00586190..0x00586A6C
 // (next symbol: the free function static_appendToSceneObject2EList at
@@ -285,6 +294,35 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
     if (request->fieldC == 0) {
         uint32_t cullScratch = 0;
         if (Vec3f_static_sub_575D70(&camSpacePos, pObj57AD20->f20, &cullScratch) == 0) {
+            // Native scene mirror reject-side (Phase 2, LOG-ONLY). This object
+            // just FAILED the guest's frustum-sphere cull and is about to be
+            // dropped via the early return below, so it will NEVER reach
+            // drawEntryOnGpu / sceneRegister on the draw path -- meaning the
+            // host mirror would otherwise structurally never see a guest-CULLED
+            // object, and Phase 2's "100% match" only ever proved the visible
+            // direction. Register it here with minimal identity (mesh/verts are
+            // not resolved yet at cull time: mesh_id=0 marks "culled, no mesh")
+            // and the guest's OWN verdict, so the host can independently
+            // recompute its cull for the SAME world bounds + camera and confirm
+            // it ALSO culls. LOG-ONLY: the guest still returns 0 and drops the
+            // object exactly as before -- nothing about drawing changes.
+            if (o_native_scene_mirror.get()) {
+                static const float kIdentity[12] = {
+                    1.0f, 0.0f, 0.0f, 0.0f,
+                    0.0f, 1.0f, 0.0f, 0.0f,
+                    0.0f, 0.0f, 1.0f, 0.0f};
+                const float center[3] = {
+                    pObj57AD20->vec.x, pObj57AD20->vec.y, pObj57AD20->vec.z};
+                // visible=0 by construction (this is the cull-fail branch);
+                // Vec3f_static_sub_575D70 clears fullyInside on a cull, so
+                // cullScratch==0 here. Stamp using the same bit encoding the
+                // draw path uses (bit0 visible, bit1 fullyInside).
+                const uint32_t guestCull = (cullScratch ? 2u : 0u);
+                gog::metal_bridge::sceneRegister(
+                    static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pObj57AD20)),
+                    0u, 0ull, 0u, 0u, kIdentity, center, pObj57AD20->f20,
+                    guestCull);
+            }
             return 0;
         }
     }
