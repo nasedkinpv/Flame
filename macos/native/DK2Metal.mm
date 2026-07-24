@@ -4878,6 +4878,32 @@ static void *renderWorker(void *context) {
                                 pipeline = _meshAlphaPipeline;
                             }
                             [encoder setRenderPipelineState:pipeline];
+                            // Bug B probe (host): same probe as the batched
+                            // DRAW_MESH path above, retargeted here because static
+                            // terrain (and thus any tile-selection highlight drawn
+                            // as a blended SceneObject2E on the heightfield) travels
+                            // the DRAW_MESH_DEFORMED path, not the batched one.
+                            // kind 1 alpha / 2 additive / 3 multiply; grep
+                            // "Bug B host" during a drag-select. kind=3 (MULTIPLY,
+                            // dest*(1-src)) over a bright texture is the solid-black
+                            // signature; texId->slot=0 (shared-white fallback)
+                            // means a stale/missing binding instead. Shares
+                            // selDebug/selDebugSeq with the batched-path probe.
+                            const uint32_t pipelineKind =
+                                (meshDraw.flags & DK2M_DRAW_MESH_MULTIPLY) ? 3u
+                                : (meshDraw.flags & DK2M_DRAW_MESH_ADDITIVE) ? 2u
+                                : (meshDraw.flags & DK2M_DRAW_MESH_ALPHA_BLEND) ? 1u
+                                : 0u;
+                            if (selDebug && pipelineKind != 0u &&
+                                (selDebugSeq++ % 64u) == 0u) {
+                                NSLog(@"Bug B host: blended mesh draw kind=%u "
+                                      @"texId=%u slot=%u tint=%08X flags=0x%X "
+                                      @"ambient=(%.1f %.1f %.1f)",
+                                      pipelineKind, meshDraw.texture_id,
+                                      binding.slot, meshDraw.tint, meshDraw.flags,
+                                      meshDraw.ambient_r, meshDraw.ambient_g,
+                                      meshDraw.ambient_b);
+                            }
                             const bool meshZEnabled =
                                 (meshDraw.flags & DK2M_DRAW_MESH_Z_ENABLE) != 0;
                             const uint32_t effectiveZFunction = meshZEnabled ? 4u : 8u;
