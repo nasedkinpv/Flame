@@ -985,45 +985,82 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     // both vertex colour and ambient); the "bias" constants in the engine's
     // encoding helpers are themselves negative magic numbers, so nothing here
     // needs debiasing.
-    const uint32_t meshFlags = metalMeshFlags(
-        meshDrawFlags(scene, surface, stageSlot), true);
+    const uint32_t rawDrawFlags = meshDrawFlags(scene, surface, stageSlot);
+    const uint32_t meshFlags = metalMeshFlags(rawDrawFlags, true);
     const dk2::meshgpu::InlineTarget target = {
         textureId, uS, vS, uO, vO, meshFlags, tint};
     // DIAGNOSTIC (Bug B, 2026-07-24): "tile/chunk selection highlight renders
     // black instead of tinting." The drag-select overlay was traced to this
     // path-(b) scene draw (terrain / SceneObject2E -> drawEntryOnGpu),
-    // alpha-blended. Two facts make the "black" NOT explainable by a faithful
-    // path: (1) tint RGB is deliberately forced white here (line ~957) and the
-    // reference CPU emitter RenderData.cpp:104-105 likewise sources per-vertex
-    // RGB from `colour`, taking only the global alpha byte from 0x00779380 --
-    // so tint is correct; (2) the world-mesh shader (DK2MeshShader.metal)
-    // hardcodes MODULATE(texture, diffuse) with textureFactor=0xFFFFFFFF and
-    // does NOT honour per-draw D3D texture-stage colour ops / TEXTUREFACTOR the
-    // way the legacy replay (DK2LegacyShaders.metal) does. So a black overlay
-    // is consistent with EITHER (i) the selection colour computed by
-    // calcSelectionColor (0x40AE80, still unported x86) never reaching the
-    // emitted per-vertex colour (src.color ~0), or (ii) it being carried in a
-    // TFACTOR / colour-op that this GPU mesh path silently ignores. Static
-    // analysis cannot distinguish these, so log blended scene draws (throttled,
-    // gated behind [flametal:logging:debug]) with their source-vertex colour.
-    // To confirm: enable debug logging, drag-select tiles, read game.log --
-    //   maxSrcColor ~0 on the black tiles  => colour absent from the vertex
-    //       stream: cause is upstream (engine colour not emitted) OR a colour
-    //       -op/TFACTOR the mesh shader drops (fix belongs in the shader / this
-    //       path, e.g. honour the draw's real colour stage like the legacy one).
-    //   maxSrcColor non-zero on black tiles => colour IS present: the black is
-    //       downstream in blend/shader (different fix).
+    // alpha-blended.
+    //
+    // UPDATE 2026-07-24 (static-analysis pass 2): hypothesis (i) as originally
+    // framed ("src.color ~0 => black") is DISPROVEN by the shader itself.
+    // DK2MeshShader.metal:53 computes  lit = base.rgb + draw.ambient.rgb  and
+    // line 75 emits  saturate(lit) * tint.rgb , so a draw with zero per-vertex
+    // colour but NON-zero ambient renders as (ambient * texture) -- NOT black.
+    // The prior FRESH LOG lines that showed maxSrcColor=(0,0,0) all carried
+    // ambient=(217,199,167)/(100,85,50), i.e. plenty of ambient, so those
+    // sampled draws are ordinary ambient-lit terrain, NOT the black tiles.
+    // The %256 throttle samples terrain at random and does not preferentially
+    // catch the (few-per-frame) selection overlay, so maxSrcColor==0 was never
+    // actually correlated with a black tile -- it was an assumption.
+    // Also verified faithful (objdump -d, DKII.EXE):
+    //   * 0x00779380 is ALPHA-ONLY: writer 0x0058AA83-86 does `shl eax,0x18;
+    //     mov [0x779380],eax`, i.e. one clamped byte in the alpha lane, RGB=0.
+    //     So `tint = (alphaTerm & 0xFF000000) | 0x00FFFFFF` is correct; it is
+    //     NOT a TEXTUREFACTOR carrying a selection RGB.
+    //   * 0x0040AE80 ("calcSelectionColor") is a CDefaultPlayerInterface method
+    //     that mutates selection *state* flag bytes (+0x1312/+0x132E) and calls
+    //     sub_40ABC0/sub_40C1E0 -- it is NOT a per-vertex colour emitter, so the
+    //     "unported selection-colour helper never reached the vertex" story does
+    //     not hold; the name was a guess.
+    // Genuinely-black is only possible under the faithful shader when the whole
+    // diffuse is ~0, i.e. base+ambient(+lights) ~0, OR when the bound texture is
+    // itself ~black (a mask whose colour the legacy path supplied via a D3D
+    // colour-op / TEXTUREFACTOR that this hardcoded-MODULATE mesh shader drops).
+    // Both are HOST-side to fix (shader/blend), out of this guest file's scope.
+    // So the remaining job is to make the probe actually CATCH black-rendering
+    // draws (not random terrain) and record enough to tell the two apart:
+    //   - fires whenever the guest-computable diffuse would be near-black
+    //     (maxSrcColor AND ambient both ~0) -- these are the only draws that go
+    //     black without a texture/colour-op cause;
+    //   - also keeps a throttled background sample;
+    //   - adds rawDrawFlags (pre-translation D3D stage flags) + the alpha byte,
+    //     so a mis-translated selection blend (e.g. additive/MULTIPLY collapsed
+    //     to ALPHA_BLEND by metalMeshFlags) is visible.
+    // Next run: drag-select tiles with [flametal:logging:debug] on, grep game.log
+    // for "Bug B probe". If NO near-black draws appear here, the selection
+    // overlay is not on this path -> it is the colour-op/TEXTUREFACTOR shader
+    // gap (host-side). If near-black draws DO appear, read their rawDrawFlags to
+    // see the true blend the engine wanted vs the translated meshFlags.
     if (meshFlags & (DK2M_DRAW_MESH_ALPHA_BLEND | DK2M_DRAW_MESH_MULTIPLY |
                      DK2M_DRAW_MESH_ADDITIVE)) {
+        dk2::Vec3f maxSrc{-1.0f, -1.0f, -1.0f};
+        maxSourceColorGuarded(entry, vertexCount, &maxSrc);
+        // A draw renders black under the faithful shader only if the whole
+        // diffuse (per-vertex colour + ambient) is ~0. That is the real
+        // black-tile signature -- catch it directly instead of sampling
+        // terrain at random.
+        const bool nearBlack =
+            maxSrc.x >= 0.0f && maxSrc.x < 2.0f && maxSrc.y < 2.0f &&
+            maxSrc.z < 2.0f && ambient.x < 2.0f && ambient.y < 2.0f &&
+            ambient.z < 2.0f;
         static uint32_t blendedProbeSeq = 0;
-        if ((blendedProbeSeq++ % 256) == 0) {
-            dk2::Vec3f maxSrc{-1.0f, -1.0f, -1.0f};
-            maxSourceColorGuarded(entry, vertexCount, &maxSrc);
+        static uint32_t nearBlackSeq = 0;
+        // Rate-limit the near-black stream on its own counter so it is not
+        // starved by the terrain sample, but still cannot flood the log.
+        const bool emit = (blendedProbeSeq++ % 256) == 0 ||
+                          (nearBlack && (nearBlackSeq++ % 32) == 0);
+        if (emit) {
+            const uint32_t alphaByte =
+                *reinterpret_cast<const uint32_t *>(0x00779380) >> 24;
             patch::log::dbg(
-                "Bug B probe: blended scene draw flags=0x%X tint=%08X "
-                "ambient=(%.1f %.1f %.1f) maxSrcColor=(%.1f %.1f %.1f) "
-                "vertexCount=%u textureId=%u sampler=%d",
-                meshFlags, tint, ambient.x, ambient.y, ambient.z,
+                "Bug B probe: blended scene draw nearBlack=%d flags=0x%X "
+                "rawFlags=0x%X alphaByte=%u tint=%08X ambient=(%.1f %.1f %.1f) "
+                "maxSrcColor=(%.1f %.1f %.1f) vertexCount=%u textureId=%u sampler=%d",
+                nearBlack ? 1 : 0, meshFlags, rawDrawFlags, alphaByte, tint,
+                ambient.x, ambient.y, ambient.z,
                 maxSrc.x, maxSrc.y, maxSrc.z, vertexCount, textureId,
                 sampler ? 1 : 0);
         }
