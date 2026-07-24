@@ -6,6 +6,7 @@
 #import <QuartzCore/QuartzCore.h>
 
 #include "metal_bridge/DK2BridgeProtocol.h"
+#include "DK2SceneMirror.h"
 
 #include <algorithm>
 #include <array>
@@ -2712,6 +2713,7 @@ bool inputLogEnabled() {
     };
     std::unordered_map<uint32_t, DynamicTexture> _dynamicTextures;
     std::vector<CommandView> _commandViews;
+    dk2::SceneMirror _sceneMirror;  // native scene mirror (Phase 1, LOG-ONLY)
     std::vector<TextureBindingEntry> _frameTextureBindings;
     TelemetryWindow _telemetry;
     TelemetryClock::time_point _lastBridgeArrival;
@@ -3576,27 +3578,43 @@ static void *renderWorker(void *context) {
         }
 
         // Native scene mirror (Phase 1, LOG-ONLY). The guest emits
-        // SCENE_REGISTER per static object + SCENE_RESET on epoch bump. Phase 1
-        // observes only -- count + log; no registry, no culling, the guest never
-        // skips its draw-walk. (Registry + diff-vs-retained lands in a later iter.)
+        // SCENE_REGISTER per static object + SCENE_RESET on epoch bump. Feed the
+        // frame's registrations, epoch resets, and drawn mesh ids into the
+        // host-side registry, which cross-checks its view against the meshes the
+        // guest actually drew and logs the match/mismatch rate. Observes only:
+        // no registry-driven culling, the guest never skips its draw-walk.
+        //
+        // Registrations arrive as an UNORDERED stream within the frame (they may
+        // be interleaved with, or contiguous relative to, the draws -- the mirror
+        // makes no ordering assumption; SceneMirror::applyRegister self-heals an
+        // unannounced epoch jump). The drawn-mesh set is read from the frame's
+        // own DRAW_MESH / DRAW_MESH_DEFORMED commands: the protocol carries
+        // mesh_id but not object_id, so mesh_id is the correlation key.
         if (snapshot) {
-            uint32_t sceneRegisters = 0, sceneEpochSeen = 0;
             for (const CommandView &view : _commandViews) {
                 if (view.type == DK2M_COMMAND_SCENE_RESET) {
                     if (view.size != sizeof(DK2MSceneResetCommand)) continue;
                     DK2MSceneResetCommand reset = {};
                     std::memcpy(&reset, snapshot->bytes.data() + view.offset, sizeof(reset));
-                    sceneEpochSeen = reset.scene_epoch;
-                    NSLog(@"DK2 scene mirror: RESET epoch=%u", reset.scene_epoch);
+                    _sceneMirror.applyReset(reset);
                 } else if (view.type == DK2M_COMMAND_SCENE_REGISTER) {
                     if (view.size != sizeof(DK2MSceneRegisterCommand)) continue;
-                    ++sceneRegisters;
+                    DK2MSceneRegisterCommand reg = {};
+                    std::memcpy(&reg, snapshot->bytes.data() + view.offset, sizeof(reg));
+                    _sceneMirror.applyRegister(reg);
+                } else if (view.type == DK2M_COMMAND_DRAW_MESH) {
+                    if (view.size != sizeof(DK2MDrawMeshCommand)) continue;
+                    DK2MDrawMeshCommand meshDraw = {};
+                    std::memcpy(&meshDraw, snapshot->bytes.data() + view.offset, sizeof(meshDraw));
+                    _sceneMirror.noteDrawnMesh(meshDraw.mesh_id);
+                } else if (view.type == DK2M_COMMAND_DRAW_MESH_DEFORMED) {
+                    if (view.size != sizeof(DK2MDrawMeshDeformedCommand)) continue;
+                    DK2MDrawMeshDeformedCommand meshDraw = {};
+                    std::memcpy(&meshDraw, snapshot->bytes.data() + view.offset, sizeof(meshDraw));
+                    _sceneMirror.noteDrawnMesh(meshDraw.mesh_id);
                 }
             }
-            if (sceneRegisters && (_frame % 60) == 0) {
-                NSLog(@"DK2 scene mirror: registers=%u epoch=%u (Phase 1 log-only)",
-                      sceneRegisters, sceneEpochSeen ? sceneEpochSeen : 0);
-            }
+            _sceneMirror.endFrame(_frame);
         }
 
         const NSUInteger slot = _frame % kFramesInFlight;

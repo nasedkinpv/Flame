@@ -54,6 +54,7 @@ done
   -I "${REPO_ROOT}/src/gog_patch_dll" \
   -I "${REPO_ROOT}/libs/Toml11-4.4.0" \
   "${SOURCE}" \
+  "${SCRIPT_DIR}/native/DK2SceneMirror.cpp" \
   -o "${EXECUTABLE}"
 
 /usr/bin/xcrun --sdk macosx clang++ \
