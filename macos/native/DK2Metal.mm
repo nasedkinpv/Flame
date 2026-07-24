@@ -4331,6 +4331,20 @@ static void *renderWorker(void *context) {
             static const bool meshDebug = getenv("DK2_MESH_DEBUG") != nullptr;
             static const bool meshNoTexture = meshDebug ||
                 getenv("DK2_MESH_NO_TEXTURE") != nullptr;
+            // Bug B (2026-07-24): "tile/chunk selection highlight renders solid
+            // black." Guest-side probe (Obj57AD20.cpp "Bug B probe") ruled out
+            // near-black diffuse on the mesh scene path, and disassembly proved
+            // the original selection tint is plain MODULATE(texture, vertex
+            // diffuse) with NO TEXTUREFACTOR / non-default colour-op (see report
+            // + renderFun_sub_58B440 @0x58b51e-0x58b574 in DKII.EXE), so the
+            // colour-op/TEXTUREFACTOR shader gap is NOT the cause. The remaining
+            // host mechanism that turns a bright draw solid black is the mesh
+            // MULTIPLY pipeline: dest*(1-src) (srcRGB=Zero, destRGB=
+            // OneMinusSourceColor, see _meshMultiplyPipeline). This env-gated,
+            // throttled probe reveals which blended mesh draw + texture + blend
+            // the black selection overlay actually is on the next drag-select.
+            static const bool selDebug = getenv("DK2_SELECTION_DEBUG") != nullptr;
+            static uint32_t selDebugSeq = 0;
             struct MeshPlacement { NSUInteger baseVertex; NSUInteger indexByteOffset; uint32_t indexCount; };
             struct MeshIndexPlacement { NSUInteger byteOffset; uint32_t indexCount; };
             std::unordered_map<uint32_t, MeshPlacement> meshPlacements;
@@ -4682,6 +4696,24 @@ static void *renderWorker(void *context) {
                                 : (meshDraw.flags & DK2M_DRAW_MESH_ADDITIVE) ? 2u
                                 : (meshDraw.flags & DK2M_DRAW_MESH_ALPHA_BLEND) ? 1u
                                 : 0u;
+                            // Bug B probe (host): log blended retained-mesh draws
+                            // (kind 1 alpha / 2 additive / 3 multiply). During a
+                            // drag-select, grep for "Bug B host" and read the
+                            // pipelineKind + texture of the black tile: kind=3
+                            // (MULTIPLY, dest*(1-src)) with a bright/opaque
+                            // texture is the solid-black signature; a real
+                            // texId->slot=0 (shared-white fallback) means a
+                            // stale/missing binding instead.
+                            if (selDebug && pipelineKind != 0u &&
+                                (selDebugSeq++ % 64u) == 0u) {
+                                NSLog(@"Bug B host: blended mesh draw kind=%u "
+                                      @"texId=%u slot=%u tint=%08X flags=0x%X "
+                                      @"ambient=(%.1f %.1f %.1f)",
+                                      pipelineKind, meshDraw.texture_id,
+                                      binding.slot, meshDraw.tint, meshDraw.flags,
+                                      meshDraw.ambient_r, meshDraw.ambient_g,
+                                      meshDraw.ambient_b);
+                            }
                             // The legacy emitter already screen-space culled
                             // opaque triangles. Mesh draws bypass it, so cull
                             // their back faces here; blended/cutout geometry
