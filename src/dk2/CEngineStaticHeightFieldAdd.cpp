@@ -229,7 +229,7 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
         andMask &= 0xFFFFFFBFu;
     }
 
-    // wip: defensive null-guards (menu/world-load crash investigation) --
+    // Defensive null-guards (menu/world-load crash investigation) --
     // NOT present in the original decompile (mirrored elsewhere in this file
     // per this project's no-silent-fixes convention), but this function is
     // now confirmed to crash intermittently on world load, and the original

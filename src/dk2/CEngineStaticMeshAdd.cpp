@@ -332,7 +332,7 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
 
         // 0x5862AC..0x5862BB: resolve this sub-part's base MyScaledSurface.
         MyScaledSurface *surf = MyEntryBuf_MyScaledSurface_getByIdx(record.surfIdx);
-        // wip: defensive null-guard (same rationale as the heightfield
+        // Defensive null-guard (same rationale as the heightfield
         // sibling CEngineStaticHeightFieldAdd.cpp -- not present in the
         // original decompile, but this function was never actually live
         // until now and an unchecked deref here would crash instead of

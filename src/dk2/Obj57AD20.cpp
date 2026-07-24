@@ -163,30 +163,6 @@ uint32_t meshDrawFlags(dk2::SceneObject2E *scene,
 }
 
 uint32_t metalMeshFlags(uint32_t drawFlags, bool lit) {
-    // wip: bring-up instrumentation for the selection-highlight/trap-marker
-    // culling/Z-sort investigation (removed once root-caused) - log every
-    // distinct (drawFlags, real ZFUNC, real CULLMODE) combo seen, READ-ONLY
-    // (does not affect drawn output), so a live A/B (creature selected vs
-    // not, trap markup shown vs not) reveals whether ZFUNC/CULLMODE change
-    // for the SAME drawFlags value - which would prove the render-state
-    // decorrelation hypothesis rather than a drawFlags-derived guess.
-    {
-        DWORD realZFunc = 0, realCull = 0;
-        gog::metal_bridge::getRenderState(D3DRENDERSTATE_ZFUNC, &realZFunc);
-        gog::metal_bridge::getRenderState(D3DRENDERSTATE_CULLMODE, &realCull);
-        static std::unordered_map<uint64_t, uint32_t> seen;
-        const uint64_t key = (uint64_t(drawFlags) << 32) |
-                             (uint64_t(realZFunc) << 8) | uint64_t(realCull);
-        auto &count = seen[key];
-        if (count < 3) {
-            patch::log::dbg(
-                "metalMeshFlags: drawFlags=0x%08X realZFunc=%u realCull=%u "
-                "(seen=%u)",
-                drawFlags, static_cast<unsigned>(realZFunc),
-                static_cast<unsigned>(realCull), count);
-        }
-        ++count;
-    }
     uint32_t flags = lit ? DK2M_DRAW_MESH_LIT : 0u;
     if (drawFlags & 0x100u) flags |= DK2M_DRAW_MESH_Z_ENABLE;
     if (drawFlags & 0x80u) flags |= DK2M_DRAW_MESH_Z_WRITE;
@@ -196,19 +172,6 @@ uint32_t metalMeshFlags(uint32_t drawFlags, bool lit) {
     else if (drawFlags & 0x20u) flags |= DK2M_DRAW_MESH_ALPHA_BLEND;
     else if (drawFlags & 0x1u) flags |= DK2M_DRAW_MESH_ADDITIVE;
 
-    // wip: bring-up instrumentation (menu light-ray flicker investigation,
-    // removed once root-caused) - log EVERY additive-blend draw, continuous
-    // (not throttled to first-N-distinct), since additive draws should be
-    // rare in a menu scene - isolates the ray effect from the noise of every
-    // other lit draw.
-    if (flags & DK2M_DRAW_MESH_ADDITIVE) {
-        static uint32_t additiveCalls = 0;
-        patch::log::dbg(
-            "metalMeshFlags ADDITIVE: drawFlags=0x%08X lit=%d frame=%u "
-            "(call=%u)",
-            drawFlags, lit, gog::metal_bridge::frameCounter(), additiveCalls);
-        ++additiveCalls;
-    }
     return flags;
 }
 
@@ -374,19 +337,6 @@ bool prepareFrameLights(uint32_t *lightData, uint32_t mask,
     if (scratch.size() != sizeBefore || firstOfFrame) {
         gog::metal_bridge::lightsSet(scratch.data(), static_cast<uint32_t>(scratch.size()),
                                      0.0f, 0.0f, 0.0f, lut);
-    }
-    // wip: bring-up instrumentation (menu flicker investigation, removed
-    // once root-caused) - continuous (not "first N distinct") sampling of
-    // frame/mask/light-count, to see values changing call-to-call rather
-    // than just discovering distinct values ever seen.
-    {
-        static uint32_t calls = 0;
-        if ((++calls % 5) == 0) {
-            patch::log::dbg(
-                "prepareFrameLights: frame=%u mask=0x%08X total=%d "
-                "selected=%u scratchSize=%zu testAllLights=%d",
-                stamp, mask, total, out->count, scratch.size(), testAllLights);
-        }
     }
     return true;
 }

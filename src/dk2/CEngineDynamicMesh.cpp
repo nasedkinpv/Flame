@@ -292,22 +292,6 @@ void dk2::CEngineDynamicMesh::sub_581BE0(int meshIndex, SceneObject2E *scene) {
 
 
 void dk2::CEngineDynamicMesh::fun_582CE0(int mode, SceneObject2E *scene) {
-    // wip: bring-up instrumentation for the selection-highlight/trap-marker
-    // investigation (removed once root-caused) - log every distinct mode
-    // value seen, so a select/deselect A/B reveals whether the mode>=1000/
-    // 2000 branches (raw untranslated addresses, presumed unrelated to
-    // mesh_gpu_path) ever fire for these effects.
-    {
-        static std::unordered_map<int, uint32_t> seen;
-        auto &count = seen[mode];
-        if (count < 3) {
-            patch::log::dbg(
-                "CEngineDynamicMesh::fun_582CE0: mode=%d (seen=%u) "
-                "meshGpuActive=%d",
-                mode, count, dk2::meshgpu::active());
-        }
-        ++count;
-    }
     using OriginalModeFun = void (__thiscall *)(
             CEngineDynamicMesh *, int, SceneObject2E *);
     if (mode >= 2000) {

@@ -267,19 +267,7 @@ bool drawAnimOnGpu(
     world[7] = mesh->field_4.y;
     world[11] = mesh->field_4.z;
     dk2::meshgpu::emitCamera();
-    // wip: bring-up instrumentation (menu light-ray flicker investigation,
-    // removed once root-caused) - gated on the additive blend flag (the
-    // ray effect), continuous, to see whether topology (meshId/vertexCount,
-    // i.e. the retainedAnimTopology cache) or the animation/frame inputs
-    // are what's changing frame to frame.
     if (target.meshFlags & DK2M_DRAW_MESH_ADDITIVE) {
-        patch::log::dbg(
-            "drawAnimOnGpu ADDITIVE: meshId=%u vertexCount=%u animation=%d "
-            "frame=%f frameIndex=%u resource=%p indices=%p frameCounter=%u",
-            topology->meshId, topology->vertexCount, animation, frame,
-            frameIndex, static_cast<void *>(resource),
-            static_cast<const void *>(indices),
-            gog::metal_bridge::frameCounter());
         // Confirmed live (2026-07-23): additive-blended animated meshes on
         // the GPU path are the shared root cause of three symptoms - menu
         // light-ray flicker, trap-markup disappearing at angles, and
