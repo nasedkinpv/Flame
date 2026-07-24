@@ -153,13 +153,18 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
                         g_hfStats.nullHandle, g_hfStats.zeroTriangles, g_hfStats.appended,
                         SceneObject2EList_instance.maxCount, SceneObject2E_count);
     }
+    // wip: re-test bypass (2026-07-24j) -- now that reductionFactor is
+    // actually correct (camSpacePos fix above), see if forcing
+    // re-registration every frame finally makes terrain LOD respond to
+    // zoom. Remove after testing regardless of outcome.
+    constexpr bool wipBypassGuards = true;
     // Both guards must pass (single combined condition, unlike the
     // static-mesh sibling's two sequential early returns).
-    if ((a8 & 0x8) != 0 && *reinterpret_cast<const int32_t *>(0x00760B60) == 0) {
+    if (!wipBypassGuards && (a8 & 0x8) != 0 && *reinterpret_cast<const int32_t *>(0x00760B60) == 0) {
         ++g_hfStats.guard1Bail;
         return 0;
     }
-    if ((a8 & 0x10) != 0 && *reinterpret_cast<const int32_t *>(0x00760B84) == 0) {
+    if (!wipBypassGuards && (a8 & 0x10) != 0 && *reinterpret_cast<const int32_t *>(0x00760B84) == 0) {
         ++g_hfStats.guard2Bail;
         return 0;
     }
