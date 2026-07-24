@@ -4853,13 +4853,21 @@ static void *renderWorker(void *context) {
                                 (meshDraw.flags & DK2M_DRAW_MESH_Z_WRITE) != 0;
                             [encoder setDepthStencilState:
                                 _depthStates[effectiveZFunction][effectiveZWrite]];
-                            const bool meshDoubleSided =
-                                (meshDraw.flags & (DK2M_DRAW_MESH_ALPHA_BLEND |
-                                                   DK2M_DRAW_MESH_ADDITIVE |
-                                                   DK2M_DRAW_MESH_ALPHA_TEST |
-                                                   DK2M_DRAW_MESH_MULTIPLY)) != 0;
-                            [encoder setCullMode:meshDoubleSided
-                                ? MTLCullModeNone : MTLCullModeBack];
+                            // The original DK2 triangle device runs permanently
+                            // with D3DCULL_NONE - MyDirectDraw sets CULLMODE=1
+                            // once at init and nothing ever changes it (the only
+                            // CULLMODE writes in the whole game are D3DCULL_NONE)
+                            // - relying on the legacy emitter's per-triangle
+                            // screen-space cull, which is correct even for concave
+                            // interiors. This deformed path draws static terrain,
+                            // including the dungeon's domed ceiling. Fixed-winding
+                            // hardware back-face culling drops the dome's
+                            // camera-facing (concave) faces, so you see through the
+                            // near ceiling to its far side. Match the original and
+                            // never hardware-cull; opaque back faces stay hidden by
+                            // the depth test, so only genuinely-concave interiors
+                            // change (and they change from broken to correct).
+                            [encoder setCullMode:MTLCullModeNone];
                             [encoder setFrontFacingWinding:MTLWindingClockwise];
                             if (boundArgumentTableBank != binding.bank) {
                                 boundArgumentTableBank = binding.bank;
