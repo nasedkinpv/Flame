@@ -51,13 +51,11 @@ done
   -framework GameController \
   -framework ImageIO \
   -framework Metal \
-  -framework MetalPerformanceShaders \
   -framework QuartzCore \
   -I "${REPO_ROOT}/src/gog_patch_dll" \
   -I "${REPO_ROOT}/libs/Toml11-4.4.0" \
   -I "${REPO_ROOT}/src/shared" \
   "${SOURCE}" \
-  "${SCRIPT_DIR}/native/DK2TextureScale.mm" \
   "${SCRIPT_DIR}/native/DK2SceneMirror.cpp" \
   "${REPO_ROOT}/src/shared/dk2_core/sub_575D70.cpp" \
   -o "${EXECUTABLE}"
