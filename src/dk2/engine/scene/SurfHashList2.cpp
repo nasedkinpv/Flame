@@ -49,22 +49,15 @@ const CreateHolderFn createHolder = reinterpret_cast<CreateHolderFn>(0x00591DA0)
 // an allocation fails), then requires at least `minHolders` to have
 // succeeded -- otherwise tears everything down and reports failure.
 //
-// holder_size bumped 0x80 (128) -> 0x100 (256) (2026-07-24): the original's
-// hardcoded 128 packs many small, unrelated named textures (terrain rock/
-// floor/wall variants, ~15-30 per page observed live) into one tiny shared
-// atlas page, so the HD resource-pack art (verified separately reaching
-// composePage successfully) gets scaled down into a correspondingly tiny
-// sub-rect and reads as blurry -- not a registration bug, a page-size
-// ceiling. 256 is the max safe bump: MyCESurfHandle::x8/y8 (the position of
-// a handle's rect within its holder) are uint8_t, so positions must stay in
-// 0..255, meaning holder_size can be at most 256. Untouched:
-// createHolder/sub_593880's own math (they already read holder_size back
-// from `this`, not a hardcoded local), and FUN_00591da0 itself (unchanged,
-// original address) -- it already computes everything (including
-// SurfaceHolder::_1divSize = 1/holder_size) from the size it's given.
+// holder_size reverted to the original 0x80 (128) (2026-07-24): a 256 bump
+// was tried to give HD resource-pack art more room per shared atlas page,
+// but combined with the (also-reverted) holder-count bump it multiplied
+// aggregate holder-page memory 16x, ballooning Metal host memory to ~3GB and
+// causing scroll lag -- a confirmed regression for a benefit that was never
+// actually confirmed. Keeping the original's own faithful value.
 char dk2::SurfHashList2::constructor(MyCEngineSurfDesc *desc, int minHolders, int targetHolders) {
     this->surfDesc = desc;
-    this->holder_size = 0x100;
+    this->holder_size = 0x80;
     this->holder_count = 0;
 
     int allocated = 0;
