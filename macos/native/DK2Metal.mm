@@ -4853,21 +4853,36 @@ static void *renderWorker(void *context) {
                                 (meshDraw.flags & DK2M_DRAW_MESH_Z_WRITE) != 0;
                             [encoder setDepthStencilState:
                                 _depthStates[effectiveZFunction][effectiveZWrite]];
-                            // The original DK2 triangle device runs permanently
-                            // with D3DCULL_NONE - MyDirectDraw sets CULLMODE=1
-                            // once at init and nothing ever changes it (the only
-                            // CULLMODE writes in the whole game are D3DCULL_NONE)
-                            // - relying on the legacy emitter's per-triangle
-                            // screen-space cull, which is correct even for concave
-                            // interiors. This deformed path draws static terrain,
-                            // including the dungeon's domed ceiling. Fixed-winding
-                            // hardware back-face culling drops the dome's
-                            // camera-facing (concave) faces, so you see through the
-                            // near ceiling to its far side. Match the original and
-                            // never hardware-cull; opaque back faces stay hidden by
-                            // the depth test, so only genuinely-concave interiors
-                            // change (and they change from broken to correct).
-                            [encoder setCullMode:MTLCullModeNone];
+                            // The device's D3DCULL_NONE (MyDirectDraw.cpp:516) is
+                            // NOT "no back-face culling" - it's there because the
+                            // original ALREADY back-face-culls in SOFTWARE, per
+                            // triangle, in screen space, before handing indices to
+                            // the device: addTriangleToRender1 (RenderData.cpp:536)
+                            // computes the screen-space signed area
+                            //   cross = (Bx-Ax)(Cy-Ay) - (By-Ay)(Cx-Ax)
+                            // and drops the triangle when cross < ~0. The device
+                            // must then not double-cull, hence CULLMODE=NONE.
+                            //
+                            // That software test is exactly what MTLCullModeBack
+                            // does (hardware cull is also screen-space signed-area
+                            // sign). The GPU mesh path uploads the FULL, un-culled
+                            // mesh, so it must reproduce the cull itself. Commit
+                            // cd624ae set this path to MTLCullModeNone to fix the
+                            // see-through dome, but that made every static-terrain
+                            // draw render its back faces too (walls/floors gained
+                            // see-through/z-fight artifacts on their far side) -
+                            // the exact regression this reverts. Back-cull is the
+                            // faithful match; genuinely two-sided decals (flagged
+                            // via blend mode) still opt out. The dome, if still
+                            // wrong, is a separate per-mesh winding issue - see the
+                            // [flametal:logging:debug] deformed-mesh dump below.
+                            const bool meshDoubleSided =
+                                (meshDraw.flags & (DK2M_DRAW_MESH_ALPHA_BLEND |
+                                                   DK2M_DRAW_MESH_ADDITIVE |
+                                                   DK2M_DRAW_MESH_ALPHA_TEST |
+                                                   DK2M_DRAW_MESH_MULTIPLY)) != 0;
+                            [encoder setCullMode:meshDoubleSided
+                                ? MTLCullModeNone : MTLCullModeBack];
                             [encoder setFrontFacingWinding:MTLWindingClockwise];
                             if (boundArgumentTableBank != binding.bank) {
                                 boundArgumentTableBank = binding.bank;
