@@ -2147,7 +2147,9 @@ public:
         stagedMesh_.insert(stagedMesh_.end(), bytes, bytes + size);
     }
 
-    void cameraSet(const float viewProj[16], const float depthParams[6]) {
+    void cameraSet(const float viewProj[16], const float depthParams[6],
+                   const float cullPlanes[12], const float camPos[3],
+                   const float camRot[9]) {
         DK2MCameraSetCommand command = {};
         command.header.type = DK2M_COMMAND_CAMERA_SET;
         command.header.size = sizeof(command);
@@ -2158,6 +2160,12 @@ public:
         command.z_mul3_f = depthParams[3];
         command.far_threshold = depthParams[4];
         command.depth_cap = depthParams[5];
+        // Native scene-mirror cull inputs (Phase 2). Nullable so non-mirror
+        // callers stay valid; zero-initialised otherwise (host ignores them
+        // unless it has registrations).
+        if (cullPlanes) std::memcpy(command.cull_plane, cullPlanes, sizeof(command.cull_plane));
+        if (camPos) std::memcpy(command.cull_cam_pos, camPos, sizeof(command.cull_cam_pos));
+        if (camRot) std::memcpy(command.cull_cam_rot, camRot, sizeof(command.cull_cam_rot));
         if (!active_) {
             if (stagedCamera_) return;
             stagedCamera_ = true;
@@ -2671,8 +2679,10 @@ bool meshRegister(uint32_t meshId, const void *vertices, uint32_t vertexCount,
     return producer.meshRegister(meshId, vertices, vertexCount, indices, indexCount);
 }
 
-void cameraSet(const float viewProj[16], const float depthParams[6]) {
-    producer.cameraSet(viewProj, depthParams);
+void cameraSet(const float viewProj[16], const float depthParams[6],
+               const float cullPlanes[12], const float camPos[3],
+               const float camRot[9]) {
+    producer.cameraSet(viewProj, depthParams, cullPlanes, camPos, camRot);
 }
 
 void lightsSet(const void *lights, uint32_t lightCount, float ambientR, float ambientG,

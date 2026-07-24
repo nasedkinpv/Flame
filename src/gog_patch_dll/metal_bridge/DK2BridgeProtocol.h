@@ -303,6 +303,20 @@ typedef struct DK2MCameraSetCommand {
     float z_add3, z_mul3_f;
     float far_threshold, depth_cap;
     float pad0, pad1;
+    // Native scene-mirror cull inputs (Phase 2, LOG-ONLY). The host reproduces
+    // the guest's per-object frustum-sphere cull (Vec3f_static_sub_575D70)
+    // bit-for-bit: for each mirrored object it forms rel = center - cull_cam_pos,
+    // camPos = cull_cam_rot^T * rel (out_i = sum_c rot[c][i]*rel_c, matching
+    // Mat3x3f::sub_594E10 / combineRows), then dots camPos against the four
+    // camera-space frustum-side plane normals cull_plane[0..3]. These are the
+    // guest globals g_camState.v3f (cam_pos), g_camState.m row-major 3x3
+    // (cam_rot), and g_vec_760B70/_760B38/_760B18/_760B28 (planes A,B,C,D).
+    // Appended at the end so the existing fixed 24-float view_proj+depth read is
+    // unchanged; populated every mesh frame, consumed only by the log-only
+    // mirror -- never affects rendering.
+    float cull_plane[4][3];  // A=760B70, B=760B38, C=760B18, D=760B28
+    float cull_cam_pos[3];   // g_camState.v3f (camera world position)
+    float cull_cam_rot[9];   // g_camState.m.m[3][3], row-major
 } DK2MCameraSetCommand;
 
 // World-space point light, matching DK2's per-vertex accumulation model
@@ -436,6 +450,7 @@ static_assert(sizeof(DK2MRenderStateCommand) == 16, "bridge render state layout 
 static_assert(sizeof(DK2MTextureStageStateCommand) == 20,
               "bridge texture stage state layout changed");
 static_assert(sizeof(DK2MShadowTriangle) == 24, "bridge shadow triangle layout changed");
+static_assert(sizeof(DK2MCameraSetCommand) == 200, "bridge camera set layout changed");
 static_assert(sizeof(DK2MShadowMaskCommand) == 40, "bridge shadow mask layout changed");
 static_assert(sizeof(DK2MSceneRegisterCommand) == 100, "bridge scene register layout changed");
 static_assert(sizeof(DK2MSceneResetCommand) == 12, "bridge scene reset layout changed");

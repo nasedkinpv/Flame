@@ -58,8 +58,16 @@ struct DK2MMeshVertexData;  // = DK2MMeshVertex from the protocol header
 bool meshRegister(uint32_t meshId, const void *vertices, uint32_t vertexCount,
                   const uint16_t *indices, uint32_t indexCount);
 // Per-frame camera (column-major world->clip 4x4) + piecewise depth params
-// {z_mul2, z_add2, z_add3, z_mul3*F, far_threshold, depth_cap}.
-void cameraSet(const float viewProj[16], const float depthParams[6]);
+// {z_mul2, z_add2, z_add3, z_mul3*F, far_threshold, depth_cap}. The optional
+// cull inputs (native scene mirror, Phase 2) carry the guest's frustum-sphere
+// cull state for the host to reproduce bit-for-bit: cullPlanes = 4x float3
+// camera-space plane normals (A=760B70, B=760B38, C=760B18, D=760B28), camPos =
+// g_camState.v3f, camRot = g_camState.m row-major 3x3. Pass nullptr to leave
+// them zero (non-mirror callers).
+void cameraSet(const float viewProj[16], const float depthParams[6],
+               const float cullPlanes[12] = nullptr,
+               const float camPos[3] = nullptr,
+               const float camRot[9] = nullptr);
 // Per-frame light list + the engine's 256-entry falloff LUT + ambient.
 void lightsSet(const void *lights, uint32_t lightCount,
                float ambientR, float ambientG, float ambientB,

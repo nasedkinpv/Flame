@@ -257,7 +257,23 @@ void emitMeshCamera() {
         zAdd3, zMul3 * F,
         *reinterpret_cast<const float *>(0x0066FE3C),
         *reinterpret_cast<const float *>(0x0066FE34)};
-    gog::metal_bridge::cameraSet(columnMajor, depthParams);
+    // Native scene-mirror cull inputs (Phase 2, LOG-ONLY): the four camera-space
+    // frustum-side plane normals + the world->camera transform, so the host can
+    // reproduce Vec3f_static_sub_575D70 per mirrored object bit-for-bit. Plane
+    // order A,B,C,D = g_vec_760B70/_760B38/_760B18/_760B28 (the exact order the
+    // dk2_core cull core dots). camRot is g_camState.m row-major 3x3; the host
+    // applies its transpose (M^T * rel), matching Mat3x3f::sub_594E10. Cheap
+    // constant global reads; never affects what gets drawn.
+    const float cullPlanes[12] = {
+        dk2::g_vec_760B70.x, dk2::g_vec_760B70.y, dk2::g_vec_760B70.z,
+        dk2::g_vec_760B38.x, dk2::g_vec_760B38.y, dk2::g_vec_760B38.z,
+        dk2::g_vec_760B18.x, dk2::g_vec_760B18.y, dk2::g_vec_760B18.z,
+        dk2::g_vec_760B28.x, dk2::g_vec_760B28.y, dk2::g_vec_760B28.z};
+    const float camPos[3] = {
+        dk2::g_camState.v3f.x, dk2::g_camState.v3f.y, dk2::g_camState.v3f.z};
+    float camRot[9];
+    std::memcpy(camRot, dk2::g_camState.m.m, sizeof(camRot));
+    gog::metal_bridge::cameraSet(columnMajor, depthParams, cullPlanes, camPos, camRot);
 }
 
 // Keep a deduplicated frame light table, while preserving the engine's
