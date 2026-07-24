@@ -45,12 +45,17 @@ empty off MSVC-x86 so the `-Werror` host build stays clean.
 
 - `sub_57BBF0.cpp` — DKII 0x0057BBF0, batched sphere-cull bitmask (first
   resident; was `src/dk2/sub_57BBF0.cpp`). Difftest: `tests/sub_57BBF0_difftest/`.
+- `sub_575D70.cpp` — DKII 0x00575D70 (`cullSphere575D70`, frustum-sphere cull
+  test) + 0x00575F10 (`projectSphere575F10`, reduction-factor / projection),
+  declared in `dk2_cull.h`. Portable scalar cores; the guest's
+  `Vec3f_static_sub_575D70`/`_575F10` in `src/dk2/CCamera.cpp` are now thin
+  wrappers over them, and the native host recomputes a bit-identical cull for
+  the scene mirror (Phase 2). Difftest: `tests/ccamera_cull_difftest/` runs the
+  SAME source on x86_64 AND arm64 (2.5M cases, bit-exact) — the arm64 half is
+  the cross-arch-determinism gate, unblocked by the SIMD removal.
 
 ## Candidates (move here when self-contained)
 
-- frustum/sphere cull `Vec3f_static_sub_575D70` / `_575F10` (currently inlined
-  in `CEngineStaticMeshAdd.cpp` — extract the pure-math core here if it does
-  not depend on Windows types).
 - bounding-sphere math (`sub_57AA40` center+radius), once translated.
 - future mirror primitives (visibility, cell-walk) for the native render core.
 

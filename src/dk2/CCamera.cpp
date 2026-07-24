@@ -7,55 +7,10 @@
 #include "dk2_globals.h"
 #include "patches/micro_patches.h"
 
-#include <emmintrin.h>
+#include "dk2_core/dk2_cull.h"
+
 #include <cstdint>
 #include <cstring>
-
-
-namespace {
-
-struct CullingPlanes {
-    __m128 x;
-    __m128 y;
-    __m128 z;
-    uint32_t frame = UINT32_MAX;
-};
-
-CullingPlanes &cullingPlanes() {
-    static CullingPlanes planes;
-    if (planes.frame == dk2::g_drawSceneCount_76520C) return planes;
-    planes.x = _mm_set_ps(
-            dk2::g_vec_760B28.x, dk2::g_vec_760B18.x,
-            dk2::g_vec_760B38.x, dk2::g_vec_760B70.x);
-    planes.y = _mm_set_ps(
-            dk2::g_vec_760B28.y, dk2::g_vec_760B18.y,
-            dk2::g_vec_760B38.y, dk2::g_vec_760B70.y);
-    planes.z = _mm_set_ps(
-            dk2::g_vec_760B28.z, dk2::g_vec_760B18.z,
-            dk2::g_vec_760B38.z, dk2::g_vec_760B70.z);
-    planes.frame = dk2::g_drawSceneCount_76520C;
-    return planes;
-}
-
-__m128 cullingPlaneDots(const dk2::Vec3f &point) {
-    // Lane order is 760B70, 760B38, 760B18, 760B28.  The two pairs keep the
-    // original x87 addition order so boundary decisions remain unchanged.
-    const CullingPlanes &planes = cullingPlanes();
-    const __m128 productsX = _mm_mul_ps(_mm_set1_ps(point.x), planes.x);
-    const __m128 productsY = _mm_mul_ps(_mm_set1_ps(point.y), planes.y);
-    const __m128 productsZ = _mm_mul_ps(_mm_set1_ps(point.z), planes.z);
-    const __m128 upperLanes = _mm_castsi128_ps(
-            _mm_set_epi32(-1, -1, 0, 0));
-    const __m128 firstSum = _mm_or_ps(
-            _mm_andnot_ps(upperLanes, _mm_add_ps(productsX, productsZ)),
-            _mm_and_ps(upperLanes, _mm_add_ps(productsX, productsY)));
-    const __m128 lastTerm = _mm_or_ps(
-            _mm_andnot_ps(upperLanes, productsY),
-            _mm_and_ps(upperLanes, productsZ));
-    return _mm_add_ps(firstSum, lastTerm);
-}
-
-}  // namespace
 
 
 void dk2::CCamera::zoomRel_449CA0(int delta) {
@@ -79,52 +34,38 @@ void dk2::CCamera::zoomRel_449CA0(int delta) {
 }
 
 
+// Thin wrappers over the portable, dependency-free cores in
+// src/shared/dk2_core/sub_575D70.cpp. The math (and its exact x87/SSE2 sign-bit
+// and per-plane addition-order semantics) now lives once, difftested on both
+// x86_64 and arm64, so the native Metal host can recompute a BIT-IDENTICAL cull
+// (native scene mirror, Phase 2). These wrappers only marshal the guest's
+// dk2::Vec3f + camera globals into the core's plain-POD inputs; behaviour is
+// byte-identical to the previous SSE2 implementation (proven by the difftest).
 int __cdecl dk2::Vec3f_static_sub_575D70(
         Vec3f *point, float radius, uint32_t *fullyInside) {
-    const __m128 dots = cullingPlaneDots(*point);
-    const __m128 radii = _mm_set1_ps(radius);
-    const __m128 signBits = _mm_castsi128_ps(_mm_set1_epi32(0x80000000u));
-    const __m128 negativeDots = _mm_xor_ps(dots, signBits);
-    *fullyInside = 0;
-
-    // The original tests raw sign bits instead of ordered comparisons.  Keep
-    // that behavior for negative zero and signed NaNs as well as normal input.
-    if (_mm_movemask_ps(_mm_sub_ps(radii, negativeDots)) != 0) return 0;
-    const __m128 depthMinusRadius = _mm_sub_ss(
-            _mm_set_ss(point->z), _mm_set_ss(radius));
-    if (_mm_movemask_ps(depthMinusRadius) != 0) return 1;
-    const __m128 negativeRadii = _mm_xor_ps(radii, signBits);
-    if (_mm_movemask_ps(_mm_sub_ps(negativeRadii, negativeDots)) != 0) return 1;
-
-    *fullyInside = 1;
-    return 1;
+    // Four camera-space frustum-side plane normals, read directly from the
+    // guest globals each call (equivalent to the old per-frame cache: the
+    // planes are constant within a draw-scene). A=760B70, B=760B38, C=760B18,
+    // D=760B28 -- the exact order and dot-add split the core replicates.
+    const core::CullVec3 p{point->x, point->y, point->z};
+    const core::CullVec3 A{g_vec_760B70.x, g_vec_760B70.y, g_vec_760B70.z};
+    const core::CullVec3 B{g_vec_760B38.x, g_vec_760B38.y, g_vec_760B38.z};
+    const core::CullVec3 C{g_vec_760B18.x, g_vec_760B18.y, g_vec_760B18.z};
+    const core::CullVec3 D{g_vec_760B28.x, g_vec_760B28.y, g_vec_760B28.z};
+    return core::cullSphere575D70(p, radius, fullyInside, A, B, C, D);
 }
 
 
 dk2::Vec3f *__cdecl dk2::Vec3f_static_sub_575F10(
         Vec3f *point, float radius, Vec3f *projected, float *scaleOut) {
-    const __m128 depthMinusRadius = _mm_sub_ss(
-            _mm_set_ss(point->z), _mm_set_ss(radius));
-    if (_mm_movemask_ps(depthMinusRadius) != 0) {
-        projected->x = g_camState.trg.x;
-        projected->y = g_camState.trg.y;
-        projected->z = 0.0f;
-        const uint32_t sentinel = 0x7149F2CA;
-        std::memcpy(scaleOut, &sentinel, sizeof(sentinel));
-        return projected;
-    }
-
-    const float scale = g_camState.ww240 / point->z;
-    *scaleOut = scale * radius;
-    const __m128 xy = _mm_add_ps(
-            _mm_mul_ps(
-                    _mm_set_ps(0.0f, 0.0f, point->y, point->x),
-                    _mm_set1_ps(scale)),
-            _mm_set_ps(0.0f, 0.0f, g_camState.trg.y, g_camState.trg.x));
-    alignas(16) float values[4];
-    _mm_store_ps(values, xy);
-    projected->x = values[0];
-    projected->y = values[1];
-    projected->z = point->z;
+    const core::CullVec3 p{point->x, point->y, point->z};
+    const core::ProjectResult r = core::projectSphere575F10(
+            p, radius, g_camState.trg.x, g_camState.trg.y, g_camState.ww240);
+    projected->x = r.x;
+    projected->y = r.y;
+    projected->z = r.z;
+    // r.scale is a plain float; assignment is bit-preserving, including the
+    // 0x7149F2CA near-clip sentinel the core carries in that field.
+    *scaleOut = r.scale;
     return projected;
 }

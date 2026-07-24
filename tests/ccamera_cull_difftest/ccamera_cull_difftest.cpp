@@ -26,12 +26,14 @@
 //   *scaleOut = scale * radius
 //   projected = (point.x*scale + trg.x, point.y*scale + trg.y, point.z)
 //
-// Build & run:
-//   clang++ -arch x86_64 -O2 -std=c++17 -ffp-contract=off \
-//     -I tests/ccamera_cull_difftest -o /tmp/ccamera_cull_difftest \
-//     tests/ccamera_cull_difftest/ccamera_cull_difftest.cpp && \
-//     /tmp/ccamera_cull_difftest
-//   (also -arch arm64, per the shared-portable-logic difftest discipline)
+// Build & run (BOTH arches must pass bit-exactly -- the arm64 run is the
+// cross-arch-determinism + no-SIMD gate for the dk2_core relocation):
+//   for A in x86_64 arm64; do \
+//     clang++ -arch $A -O2 -std=c++17 -ffp-contract=off \
+//       -I tests/ccamera_cull_difftest -I src/shared \
+//       -o /tmp/ccamera_cull_difftest_$A \
+//       tests/ccamera_cull_difftest/ccamera_cull_difftest.cpp && \
+//     /tmp/ccamera_cull_difftest_$A; done
 
 #include "dk2_globals.h"
 
@@ -44,6 +46,12 @@ uint32_t g_drawSceneCount_76520C = 0;
 CamState g_camState{};
 }  // namespace dk2
 
+// The math now lives in the portable dk2_core relocation; CCamera.cpp's
+// Vec3f_static_sub_575D70/_575F10 are thin wrappers over it. Include both so
+// this difftest exercises the guest wrapper AND the shared core, and (crucially)
+// compiles on BOTH -arch x86_64 and -arch arm64 -- the core is pure scalar C++
+// with no <emmintrin.h>/__m128, which is what unblocked the arm64 half.
+#include "../../src/shared/dk2_core/sub_575D70.cpp"
 #include "../../src/dk2/CCamera.cpp"
 
 #include <cstdio>

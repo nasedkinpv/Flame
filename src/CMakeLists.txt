@@ -56,6 +56,7 @@ add_library(${TARGET} SHARED
         dk2/AABB.cpp
         dk2/asm_fast_sqrt.cpp
         shared/dk2_core/sub_57BBF0.cpp
+        shared/dk2_core/sub_575D70.cpp
         dk2/RenderData.cpp
         dk2/CursorDrawer.cpp
         dk2/DrawTexToBuf.cpp
@@ -189,7 +190,7 @@ add_library(${TARGET} SHARED
 
         ${RESOURCES_FILE}
         )
-target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_LIST_DIR} gog_patch_dll)
+target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_CURRENT_LIST_DIR}/shared gog_patch_dll)
 target_compile_definitions(${TARGET} PRIVATE
         DIRECTINPUT_VERSION=0x0500
         DIRECT3D_VERSION=0x0600
