@@ -399,7 +399,7 @@ typedef struct DK2MSceneRegisterCommand {
     uint32_t scene_epoch;
     uint32_t object_id;
     uint32_t mesh_id;
-    uint32_t signature;
+    uint64_t signature;       // describe content hash (full 64-bit; mirrors use it for invalidation)
     uint32_t vertex_count;
     uint32_t material_flags;  // DK2MDrawMeshFlags-equivalent
     float world[12];
@@ -437,7 +437,7 @@ static_assert(sizeof(DK2MTextureStageStateCommand) == 20,
               "bridge texture stage state layout changed");
 static_assert(sizeof(DK2MShadowTriangle) == 24, "bridge shadow triangle layout changed");
 static_assert(sizeof(DK2MShadowMaskCommand) == 40, "bridge shadow mask layout changed");
-static_assert(sizeof(DK2MSceneRegisterCommand) == 96, "bridge scene register layout changed");
+static_assert(sizeof(DK2MSceneRegisterCommand) == 100, "bridge scene register layout changed");
 static_assert(sizeof(DK2MSceneResetCommand) == 12, "bridge scene reset layout changed");
 #endif
 

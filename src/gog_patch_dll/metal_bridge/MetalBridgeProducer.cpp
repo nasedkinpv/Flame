@@ -2172,7 +2172,7 @@ public:
 
     // Native scene mirror (Phase 1, log-only). Stages a per-object register or
     // an epoch bump; the host builds a registry and consumes nothing yet.
-    void sceneRegister(uint32_t objectId, uint32_t meshId, uint32_t signature,
+    void sceneRegister(uint32_t objectId, uint32_t meshId, uint64_t signature,
                        uint32_t vertexCount, uint32_t materialFlags,
                        const float world[12], const float center[3], float radius) {
         if (!active_) return;  // mirror is host-only; nothing to stage without one

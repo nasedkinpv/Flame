@@ -95,7 +95,7 @@ void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCou
 // without shared-memory, out of scope). Versioned by an internal scene epoch
 // that sceneReset() bumps (level-load / save-load); the host drops its
 // registry on epoch change. Nothing is consumed yet -- observational only.
-void sceneRegister(uint32_t objectId, uint32_t meshId, uint32_t signature,
+void sceneRegister(uint32_t objectId, uint32_t meshId, uint64_t signature,
                    uint32_t vertexCount, uint32_t materialFlags,
                    const float world[12], const float center[3], float radius);
 void sceneReset();

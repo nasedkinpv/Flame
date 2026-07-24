@@ -42,6 +42,17 @@ flametal_config::define_flame_option<bool> o_gog_meshGpuPath(
     false
 );
 
+// Phase 1 native scene mirror (roadmap: Native render core). Emits each static
+// scene object to a host-side mirror registry via CMD_SCENE_REGISTER, so the
+// host can cross-check its view against the guest's retained-mesh cache (and,
+// in a later phase, do native culling). LOG-ONLY / observational: the guest
+// does NOT skip its draw-walk; default off -> production behaviour unchanged.
+flametal_config::define_flame_option<bool> o_native_scene_mirror(
+    "flametal:native_scene_mirror", flametal_config::OG_Config,
+    "Emit static scene objects to the host mirror (Phase 1, log-only)",
+    false
+);
+
 // Gates the recurring "mesh tex resolve:", "mesh gpu probe:" (this file) and
 // "anim modes:" (CEngineAnimMesh.cpp) debug probes. These fire every ~3s
 // while the GPU mesh path is active and were only ever meant for the
@@ -1118,6 +1129,20 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                 entry, indexCount, vertexCount, signature, uvScale,
                 &retained)) {
             return deTally(6);
+        }
+        if (scene && o_native_scene_mirror.get()) {
+            // Phase 1 native scene mirror (log-only): register this static
+            // object so the host can build a mirror registry and cross-check
+            // vs the retained-mesh cache. The guest does NOT skip its draw.
+            // world is identity (the static path streams absolute positions,
+            // same as emitDeformed below). Bounds (center/radius) are NOT in
+            // scope here -- they live on the caller's pObj57AD20 (vec/f20);
+            // threaded in a later phase when the host actually culls.
+            static const float zeroCenter[3] = {0.0f, 0.0f, 0.0f};
+            gog::metal_bridge::sceneRegister(
+                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(scene)),
+                retained.meshId, signature, vertexCount, meshFlags,
+                identity, zeroCenter, 0.0f);
         }
         if (meshFlags & DK2M_DRAW_MESH_ADDITIVE) {
             patch::log::dbg(
