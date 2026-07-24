@@ -351,10 +351,27 @@ bool prepareFrameLights(uint32_t *lightData, uint32_t mask,
         light.dist_sq_limit = s.distanceSquaredLimit;
         light.atten_scale = s.attenuationScale;
         light.facing_scale = s.facingScale;
+        // Optimization 3/3 (2026-07-24): hash the 48-byte DK2MLight as six
+        // uint64 words instead of walking all 48 bytes one at a time. The key
+        // is ONLY a hash-table bucket selector + fast-reject probe; the
+        // std::memcmp below is the sole arbiter of every dedup decision, so any
+        // deterministic hash of these exact bytes yields byte-for-byte-identical
+        // dedup results (same found/not-found, same assigned index, same scratch
+        // insertion order). This trims the per-byte FNV loop (48 xor+mul
+        // iterations) to 6 word mixes over the same bytes -- pure Rosetta
+        // CALL/BRANCH-count reduction, no behaviour change. The key!=0 guard is
+        // kept verbatim: seenKeys[slot]==0 marks an empty slot, so a hash of
+        // exactly 0 must still map to the sentinel-safe 1. memcpy (not a
+        // reinterpret_cast read) keeps it alignment-safe and free of strict-
+        // aliasing UB; light is fully defined across all 48 bytes (`= {}`
+        // zero-inits, incl. pad0..pad2), exactly as the old byte walk assumed.
+        static_assert(sizeof(light) % sizeof(uint64_t) == 0,
+                      "DK2MLight must be a whole number of 64-bit words");
+        uint64_t words[sizeof(light) / sizeof(uint64_t)];
+        std::memcpy(words, &light, sizeof(light));
         uint64_t key = 1469598103934665603ull;
-        const auto *bytes = reinterpret_cast<const uint8_t *>(&light);
-        for (size_t byte = 0; byte < sizeof(light); ++byte) {
-            key ^= bytes[byte];
+        for (uint64_t word : words) {
+            key ^= word;
             key *= 1099511628211ull;
         }
         if (!key) key = 1;
