@@ -1031,6 +1031,28 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                 vertexCount, indexCount, entry.vertices,
                 gog::metal_bridge::frameCounter());
         }
+        // Diagnostic for the domed-ceiling see-through question: the host mesh
+        // path back-face culls this deformed static terrain (matching the
+        // original's screen-space cull, RenderData.cpp:536). If a concave
+        // surface (the dome) is still wrong, it is a per-mesh WINDING issue, not
+        // a "cull everything off" one. Dump each unique deformed mesh once so we
+        // can identify the ceiling by its texture: grep host.log for the page
+        // name mapped to this textureId. Gated behind [flametal:logging:debug].
+        {
+            static std::unordered_map<uint32_t, uint8_t> seenDeformed;
+            if (seenDeformed.emplace(retained.meshId, 0).second) {
+                patch::log::dbg(
+                    "deformed mesh: meshId=%u textureId=%u vtx=%u idx=%u "
+                    "flags=0x%X (cull=%s)",
+                    retained.meshId, target.textureId, vertexCount, indexCount,
+                    meshFlags,
+                    (meshFlags & (DK2M_DRAW_MESH_ALPHA_BLEND |
+                                  DK2M_DRAW_MESH_ADDITIVE |
+                                  DK2M_DRAW_MESH_ALPHA_TEST |
+                                  DK2M_DRAW_MESH_MULTIPLY))
+                        ? "none(two-sided)" : "back");
+            }
+        }
         dk2::meshgpu::emitDeformed(
             target, retained.meshId, positions, vertexCount, identity, lights,
             ambient.x / 255.0f, ambient.y / 255.0f, ambient.z / 255.0f);
