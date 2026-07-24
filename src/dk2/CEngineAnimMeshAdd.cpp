@@ -514,10 +514,20 @@ void dk2::CEngineAnimMesh::appendToSceneObject2EList(int requestArg) {
             MyCESurfHandle *baseHandle3 = surf3->scaledSurfArr->surfScaledArr[0];
             const float metric3 = roundedDiv(roundedMul(mmFactor, reductionFactor),
                                               static_cast<float>(baseHandle3->surfWidth8));
+            // Bug found 2026-07-24 (independent Opus-agent audit, cross-
+            // checked against the actual shipped binary's disassembly at
+            // 0x585024-0x585052): comparison direction was inverted. `fcom
+            // qword ptr [0x66fc00]` + `test ah,1` reads the FPU C0 flag, set
+            // iff ST(0) < operand -- i.e. the original assigns the level
+            // when `metric < threshold`, matching the static-mesh sibling's
+            // (already-correct) CEngineStaticMeshAdd.cpp:388-390. The `>=`
+            // here forced lod3 to 3 (worst) whenever metric3 was
+            // non-negative, i.e. always -- same bug shape as the
+            // static-mesh float/double fix, just the direction half of it.
             int lod3 = 0;
-            if (metric3 >= static_cast<float>(*doubleAt(0x0066FC00))) lod3 = 1;
-            if (metric3 >= static_cast<float>(*doubleAt(0x0066FC08))) lod3 = 2;
-            if (metric3 >= static_cast<float>(*doubleAt(0x0066FC10))) lod3 = 3;
+            if (metric3 < static_cast<float>(*doubleAt(0x0066FC00))) lod3 = 1;
+            if (metric3 < static_cast<float>(*doubleAt(0x0066FC08))) lod3 = 2;
+            if (metric3 < static_cast<float>(*doubleAt(0x0066FC10))) lod3 = 3;
             MyCESurfHandle *handle3 = surf3->sub_581B80(lod3, field_74, 0);
             const uint32_t combinedFlags3 = surf3->drawFlags;
             MyCESurfHandle_static_addToHashList_flagsOr400(
