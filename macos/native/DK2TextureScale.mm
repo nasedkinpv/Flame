@@ -62,7 +62,18 @@ id<MTLTexture> composeHDPage(id<MTLDevice> device, id<MTLTexture> base,
                                      width:hdW
                                     height:hdH
                                  mipmapped:YES];
-    desc.storageMode = MTLStorageModePrivate;
+    // Shared, not Private: this texture is GPU-written here on a classic
+    // MTLCommandQueue, then SAMPLED by the renderer's separate MTL4 queue via
+    // an argument-table gpuResourceID + residency set. On Apple Silicon
+    // (unified memory) Shared is system-coherent across queues with no copy or
+    // perf penalty for GPU read/write, and it matches the known-good
+    // texhd::createMipmapped path (and every other sampled texture in this
+    // renderer). Private storage additionally needs cross-queue write->read
+    // coherency the CPU getBytes-readback repro never exercised, and was the
+    // one storage variable that differed from the pre-GPU-move known-good
+    // build -- a likely source of the "black/confused at zoom-out" live-only
+    // regression that reproduced neither headless nor as a cb failure.
+    desc.storageMode = MTLStorageModeShared;
     desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
     id<MTLTexture> dst = [device newTextureWithDescriptor:desc];
     if (!dst) return nil;
@@ -99,8 +110,8 @@ id<MTLTexture> composeHDPage(id<MTLDevice> device, id<MTLTexture> base,
     [cb commit];
     [cb waitUntilCompleted];  // result is sampled from the renderer's MTL4 queue
 
-    // A silently-failed command buffer leaves `dst` (MTLStorageModePrivate)
-    // uninitialized -- the renderer would then sample an all-zero texture,
+    // A silently-failed command buffer leaves `dst` uninitialized -- the
+    // renderer would then sample an all-zero texture,
     // which reads back BLACK. If only the generateMipmaps blit failed, mip 0
     // is still valid (fine up close) while every minified mip is black
     // (black on zoom-out). Return nil so the caller falls back to the plain
