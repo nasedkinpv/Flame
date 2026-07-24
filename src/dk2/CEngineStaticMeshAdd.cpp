@@ -179,6 +179,10 @@ const float *floatAt(uintptr_t address) {
     return reinterpret_cast<const float *>(address);
 }
 
+const double *doubleAt(uintptr_t address) {
+    return reinterpret_cast<const double *>(address);
+}
+
 // The "int" argument to appendToSceneObject2EList is really a pointer to a
 // small per-call request struct -- same situation as
 // CEngineDynamicMesh::f58_pTrgObj (no struct name exists anywhere in the
@@ -356,8 +360,24 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
                            pObj57AD20->f28;
 
         // 0x586341..0x58638A: LOD metric = record.mmFactor * reductionFactor
-        // / baseHandle.surfWidth8, compared against 3 undocumented float
+        // / baseHandle.surfWidth8, compared against 3 undocumented
         // thresholds to pick a coarse level 0..3.
+        //
+        // Bug found 2026-07-24 (independent audit, terrain-HD investigation):
+        // these three thresholds at 0x0066FC00/08/10 are 8 bytes apart --
+        // they're 64-bit doubles (the mantissa-extraction constants further
+        // below at 0x0066FC38/3C/40 are 4 bytes apart, genuinely floats, and
+        // are unaffected). Reading them via `floatAt` took only the low
+        // 32 bits of each double; for the values 1.0/0.5/0.25 (matching the
+        // heightfield sibling's literal thresholds) that low dword is
+        // 0x00000000 for all three, i.e. every comparison silently read 0.0.
+        // Combined with the wrong `>=` direction (should be `<`, matching
+        // the heightfield sibling and the confirmed original disassembly
+        // sense `test ah,1` / ST<src), `metric >= 0.0` was always true,
+        // forcing lodLevel to 3 (worst) for every static-mesh object
+        // regardless of distance -- a likely major contributor to the
+        // broad "texture quality dropped everywhere" regression, since this
+        // function only went live this session.
         if (surf->scaledSurfArr == nullptr) { ++g_smStats.nullScaledSurfArr; continue; }
         MyCESurfHandle *baseHandle = surf->scaledSurfArr->surfScaledArr[0];
         if (baseHandle == nullptr) { ++g_smStats.nullBaseHandle; continue; }
@@ -365,9 +385,9 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
                 roundedMul(record.mmFactor, reductionFactor),
                 static_cast<float>(baseHandle->surfWidth8));
         int lodLevel = 0;
-        if (metric >= *floatAt(0x0066FC00)) lodLevel = 1;
-        if (metric >= *floatAt(0x0066FC08)) lodLevel = 2;
-        if (metric >= *floatAt(0x0066FC10)) lodLevel = 3;
+        if (metric < static_cast<float>(*doubleAt(0x0066FC00))) lodLevel = 1;
+        if (metric < static_cast<float>(*doubleAt(0x0066FC08))) lodLevel = 2;
+        if (metric < static_cast<float>(*doubleAt(0x0066FC10))) lodLevel = 3;
 
         // 0x58634C..0x586390: fine sub-index via mantissa-bit extraction
         // (same shape as MyScaledSurface::sub_581B80, inlined here because
