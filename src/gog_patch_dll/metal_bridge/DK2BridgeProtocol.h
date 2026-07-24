@@ -427,6 +427,16 @@ typedef struct DK2MSceneRegisterCommand {
     uint32_t guest_cull;
 } DK2MSceneRegisterCommand;
 
+// guest_cull bit meanings. bit0/bit1 are the Phase 2 log-only cull verdict.
+// bit2 is the Phase 3 signal that the guest was launched with
+// flametal:native_scene_mirror_consume=true (only ever set when
+// native_scene_mirror is ALSO on): it tells the host it MAY skip a draw whose
+// OWN independently-recomputed cull verdict says "culled". Reusing a spare bit
+// keeps the struct size (104) unchanged, so no host/guest re-verify is needed.
+#define DK2M_GUEST_CULL_VISIBLE      0x1u  // bit0: guest frustum-sphere test passed
+#define DK2M_GUEST_CULL_FULLY_INSIDE 0x2u  // bit1: sphere fully inside the frustum
+#define DK2M_GUEST_CULL_CONSUME      0x4u  // bit2: Phase 3 host consumption requested
+
 // Bumps the scene epoch (level-load / save-load / new game). The host drops
 // its entire mirror registry on receipt.
 typedef struct DK2MSceneResetCommand {

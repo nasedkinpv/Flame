@@ -4507,6 +4507,15 @@ static void *renderWorker(void *context) {
             };
             [encoder setArgumentTable:_argumentTables[slot][boundArgumentTableBank]
                              atStages:MTLRenderStageVertex | MTLRenderStageFragment];
+            // Phase 3 (native scene mirror REAL CONSUMPTION): the object_id +
+            // mesh_id announced by the SCENE_REGISTER that immediately precedes
+            // each static DRAW_MESH_DEFORMED. Verified adjacency in the guest
+            // emit path (Obj57AD20 drawEntryOnGpu): sceneRegister() is called
+            // right before emitDeformed() for the SAME object with nothing
+            // between, so the deformed draw that follows a register is that
+            // register's object. Zero unless the guest authorised consumption.
+            uint32_t pendingConsumeObjectId = 0;
+            uint32_t pendingConsumeMeshId = 0;
             // Two passes over the stream: mesh-pipeline commands encode FIRST
             // (opaque, z-tested - hoisting them is order-safe versus other 3D
             // draws), so the legacy stream - including the game's HUD quads
@@ -4518,6 +4527,26 @@ static void *renderWorker(void *context) {
                 const size_t commandOffset = view.offset;
                 if (view.type != DK2M_COMMAND_DRAW_MESH) {
                     flushPendingMeshInstances();
+                }
+                // Phase 3 consume: SCENE_REGISTER is not a render command (it is
+                // dropped by the mesh-command filter below), so capture its
+                // object/mesh id HERE, in stream order, so the very next static
+                // DRAW_MESH_DEFORMED can look up the host's cull verdict. Only in
+                // the mesh pass (where deformed draws are encoded) and only when
+                // the guest authorised consumption; otherwise entirely inert.
+                if (meshPass == 1 &&
+                    view.type == DK2M_COMMAND_SCENE_REGISTER) {
+                    pendingConsumeObjectId = 0;
+                    pendingConsumeMeshId = 0;
+                    if (_sceneMirror.consumeActive() &&
+                        view.size == sizeof(DK2MSceneRegisterCommand)) {
+                        DK2MSceneRegisterCommand reg;
+                        std::memcpy(&reg, snapshot->bytes.data() + commandOffset,
+                                    sizeof(reg));
+                        pendingConsumeObjectId = reg.object_id;
+                        pendingConsumeMeshId = reg.mesh_id;
+                    }
+                    continue;  // no geometry to encode for a registration
                 }
                 const bool isMeshCommand =
                     view.type == DK2M_COMMAND_MESH_REGISTER ||
@@ -4817,6 +4846,31 @@ static void *renderWorker(void *context) {
                     DK2MDrawMeshDeformedCommand meshDraw;
                     std::memcpy(&meshDraw, snapshot->bytes.data() + commandOffset,
                                 sizeof(meshDraw));
+                    // Phase 3 (REAL CONSUMPTION): if the immediately-preceding
+                    // SCENE_REGISTER named this exact object+mesh, and the host's
+                    // OWN recomputed cull verdict for that object this frame says
+                    // "cull it", SKIP the draw. This is the single boolean gate
+                    // for Phase 3: consumeActive() is false unless the guest was
+                    // launched with native_scene_mirror_consume, so with the flag
+                    // off nothing here runs and the draw path is byte-identical to
+                    // Phase 2. A skip only ever happens on a genuine host-vs-guest
+                    // cull DISAGREEMENT -- which is exactly the latent-bug signal
+                    // Phase 3 exists to surface as a visible missing object.
+                    const uint32_t consumeObjectId = pendingConsumeObjectId;
+                    const uint32_t consumeMeshId = pendingConsumeMeshId;
+                    pendingConsumeObjectId = 0;
+                    pendingConsumeMeshId = 0;
+                    if (_sceneMirror.consumeActive() && consumeObjectId &&
+                        consumeMeshId == meshDraw.mesh_id) {
+                        const bool skip =
+                            _sceneMirror.hostWouldCull(consumeObjectId, _frame);
+                        _sceneMirror.noteConsumeDecision(skip);
+                        if (skip) {
+                            // Intentionally dropped (not an error). Accounted by
+                            // noteConsumeDecision and reported in endFrame's log.
+                            continue;  // do NOT encode this draw
+                        }
+                    }
                     const auto meshFound = _meshes.find(meshDraw.mesh_id);
                     const size_t positionBytes =
                         static_cast<size_t>(meshDraw.vertex_count) * 3 * sizeof(float);

@@ -53,6 +53,24 @@ flametal_config::define_flame_option<bool> o_native_scene_mirror(
     false
 );
 
+// Phase 3 native scene mirror -- REAL CONSUMPTION (DANGEROUS). When true AND
+// native_scene_mirror is also true, the guest sets DK2M_GUEST_CULL_CONSUME in
+// each SCENE_REGISTER, which authorises the HOST to actually SKIP the GPU draw
+// of any registered+drawn object whose OWN independently-recomputed frustum
+// cull says "culled". This has real, visible rendering consequences if the
+// host's cull reconstruction has a latent bug in the "should be culled"
+// direction -- which is the whole point of turning it on (a bug shows up as a
+// visible glitch instead of silent log-only disagreement). The guest itself
+// still draws exactly as before; only the host's consumption changes. Default
+// off => byte-identical to Phase 2 (log-only). Rollback: set this false in
+// flametal/config.toml [flametal] (no rebuild -- config toggle only).
+flametal_config::define_flame_option<bool> o_native_scene_mirror_consume(
+    "flametal:native_scene_mirror_consume", flametal_config::OG_Config,
+    "Authorise the host to SKIP draws its own cull culls (Phase 3, DANGEROUS; "
+    "requires native_scene_mirror=true)",
+    false
+);
+
 // Gates the recurring "mesh tex resolve:", "mesh gpu probe:" (this file) and
 // "anim modes:" (CEngineAnimMesh.cpp) debug probes. These fire every ~3s
 // while the GPU mesh path is active and were only ever meant for the
@@ -1181,6 +1199,16 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                 const int visible = dk2::Vec3f_static_sub_575D70(
                     &camSpace, boundsRadius, &fullyInside);
                 guestCull = (visible ? 1u : 0u) | (fullyInside ? 2u : 0u);
+            }
+            // Phase 3: signal the host that it MAY consume its own cull verdict
+            // to skip this object's draw. Only ever set inside this
+            // native_scene_mirror-gated block, so consumption strictly requires
+            // the mirror to be on. The guest still draws the object regardless;
+            // this bit only authorises the host-side skip. Cleared (never set)
+            // when the consume flag is off => host sees no authorisation =>
+            // byte-identical Phase 2 behaviour.
+            if (o_native_scene_mirror_consume.get()) {
+                guestCull |= DK2M_GUEST_CULL_CONSUME;
             }
             gog::metal_bridge::sceneRegister(
                 static_cast<uint32_t>(reinterpret_cast<uintptr_t>(scene)),

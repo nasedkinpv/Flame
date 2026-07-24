@@ -50,6 +50,25 @@ public:
     // frame after all commands for the frame have been fed in.
     void endFrame(uint64_t frameNumber);
 
+    // --- Phase 3 (REAL CONSUMPTION) query surface, used by the render pass ---
+    //
+    // consumeActive(): true only when the guest was launched with
+    // native_scene_mirror_consume (it stamps DK2M_GUEST_CULL_CONSUME on every
+    // SCENE_REGISTER). When false, every method below is inert and the render
+    // pass must behave byte-identically to Phase 2 (log-only).
+    bool consumeActive() const { return consumeRequested_; }
+
+    // Should the host SKIP the draw of this object this frame? True only when
+    // the object is registered, its host cull verdict was computed for exactly
+    // `frameNumber` (endFrame ran this frame), and that verdict is "culled".
+    // The host verdict is currently "visible" for every registered object in a
+    // healthy state, so this returns false for everything and nothing is
+    // skipped -- a skip means a genuine host-vs-guest cull disagreement.
+    bool hostWouldCull(uint32_t objectId, uint64_t frameNumber) const;
+
+    // Render-pass accounting for the consume path (folded into endFrame's log).
+    void noteConsumeDecision(bool skipped);
+
 private:
     struct Entry {
         uint32_t meshId = 0;
@@ -59,6 +78,9 @@ private:
         float center[3] = {0.0f, 0.0f, 0.0f};  // world-space bounding-sphere centre
         float radius = 0.0f;
         uint32_t guestCull = 0;  // guest's own verdict: bit0 visible, bit1 fullyInside
+        // Phase 3: the host's own recomputed verdict, stamped each endFrame.
+        bool hostCulled = false;       // host verdict this frame = "cull it"
+        uint64_t hostCullFrame = 0;    // frame endFrame last computed hostCulled for
     };
 
     void dropRegistry();
@@ -82,9 +104,29 @@ private:
     uint64_t hostCullCulled_ = 0;      // host verdict = culled
 
     // Phase 2 step 5: host verdict vs the guest's stamped verdict (both the full
-    // 2-bit result). exactMatch = identical visible+fullyInside bits.
+    // 2-bit result). exactMatch = identical visible+fullyInside bits. These are
+    // the SINGLE cumulative counters over BOTH diff directions (visible objects
+    // the guest drew, AND -- Phase 2 reject-side -- objects the guest CULLED).
     uint64_t cullExactMatch_ = 0;
     uint64_t cullMismatch_ = 0;
+
+    // Reject-side breakdown (Phase 2 coverage gap fix). A SUBSET of the cumulative
+    // counters above, not a parallel system: these isolate the guest-CULLED
+    // objects (registered with mesh_id==0) so the log can report the reject-side
+    // match rate on its own. Before this, culled objects never reached the mirror
+    // at all, so the reject direction was structurally unverifiable.
+    uint64_t rejectChecks_ = 0;
+    uint64_t rejectMatch_ = 0;
+    uint64_t rejectMismatch_ = 0;
+
+    // Phase 3 (REAL CONSUMPTION). consumeRequestedFrame_ accumulates the guest's
+    // DK2M_GUEST_CULL_CONSUME signal during a frame's registrations; endFrame
+    // commits it into consumeRequested_ (read by the render pass). consumeChecks_
+    // / consumeSkips_ are cumulative render-pass accounting for the log.
+    bool consumeRequested_ = false;
+    bool consumeRequestedFrame_ = false;
+    uint64_t consumeChecks_ = 0;   // drawn objects the render pass consume-tested
+    uint64_t consumeSkips_ = 0;    // draws the host actually skipped (disagreements)
 
     // The mirror registry: every static object registered in the current epoch.
     std::unordered_map<uint32_t, Entry> objects_;
@@ -93,6 +135,11 @@ private:
     std::unordered_set<uint32_t> registeredObjectsFrame_;
     std::unordered_set<uint32_t> registeredMeshesFrame_;
     std::unordered_set<uint32_t> drawnMeshesFrame_;
+    // Reject-side: objects the guest CULLED this frame (registered with
+    // mesh_id==0). Kept separate from registeredObjectsFrame_ so churn / drawn-
+    // mesh metrics stay about VISIBLE geometry, while endFrame still cull-tests
+    // these for the reject-side diff.
+    std::unordered_set<uint32_t> culledObjectsFrame_;
 
     // Previous frame's registered object-id set, for churn measurement.
     std::unordered_set<uint32_t> prevRegisteredObjects_;

@@ -67,9 +67,27 @@ void SceneMirror::applyRegister(const DK2MSceneRegisterCommand& reg) {
     entry.radius = reg.radius;
     entry.guestCull = reg.guest_cull;
 
-    registeredObjectsFrame_.insert(reg.object_id);
+    // Phase 3: the guest sets DK2M_GUEST_CULL_CONSUME on every SCENE_REGISTER
+    // when launched with native_scene_mirror_consume. Accumulate per-frame;
+    // endFrame commits it into consumeRequested_ so the render pass -- which
+    // runs right after endFrame -- sees this frame's authorisation. Per-frame
+    // (not a permanent latch) so a config rollback takes effect the very next
+    // frame without needing a host restart.
+    if (reg.guest_cull & DK2M_GUEST_CULL_CONSUME) {
+        consumeRequestedFrame_ = true;
+    }
+
     if (reg.mesh_id) {
+        // Draw-path registration: the guest resolved a mesh and drew this object.
+        registeredObjectsFrame_.insert(reg.object_id);
         registeredMeshesFrame_.insert(reg.mesh_id);
+    } else {
+        // Reject-side registration (Phase 2): mesh_id==0 marks an object the
+        // guest CULLED before the draw path -- it carries only minimal identity
+        // (object_id + world bounds + guest verdict). Keep it OUT of the drawn-
+        // mesh and churn sets (those describe visible geometry); endFrame still
+        // independently cull-tests it below to verify the host also culls it.
+        culledObjectsFrame_.insert(reg.object_id);
     }
 }
 
@@ -122,42 +140,67 @@ void SceneMirror::endFrame(uint64_t frameNumber) {
     // surfacing. LOG-ONLY: this result is never consumed (no draw is skipped).
     size_t frameChecks = 0, frameVisible = 0, frameCulled = 0;
     size_t frameMatch = 0, frameMismatch = 0;
+    // Reject-side (guest-CULLED objects) breakdown for this frame.
+    size_t frameRejChecks = 0, frameRejMatch = 0, frameRejMismatch = 0;
     if (haveCullCamera_) {
         const dk2::core::CullVec3 A{cullPlane_[0][0], cullPlane_[0][1], cullPlane_[0][2]};
         const dk2::core::CullVec3 B{cullPlane_[1][0], cullPlane_[1][1], cullPlane_[1][2]};
         const dk2::core::CullVec3 C{cullPlane_[2][0], cullPlane_[2][1], cullPlane_[2][2]};
         const dk2::core::CullVec3 D{cullPlane_[3][0], cullPlane_[3][1], cullPlane_[3][2]};
-        for (uint32_t objectId : registeredObjectsFrame_) {
+        // Independently recompute the frustum-sphere cull for one registered
+        // object and diff the host's full 2-bit verdict against the guest's
+        // stamped one. Given identical inputs (world bounds + same-frame camera
+        // globals), the difftested dk2_core core makes this an in-game proof that
+        // the host's camera reconstruction matches the guest's; any mismatch is a
+        // real divergence to investigate (blocker per the plan's hard rule).
+        // rejectSide picks out the guest-CULLED direction for the log breakdown.
+        auto testObject = [&](uint32_t objectId, bool rejectSide) {
             auto found = objects_.find(objectId);
-            if (found == objects_.end()) continue;
+            if (found == objects_.end()) return;
             const Entry& e = found->second;
             const dk2::core::CullVec3 camSpace =
                 worldToCamera(e.center, cullCamPos_, cullCamRot_);
             uint32_t fullyInside = 0;
             const int visible = dk2::core::cullSphere575D70(
                 camSpace, e.radius, &fullyInside, A, B, C, D);
+            // Phase 3: stamp the host's own verdict onto the registry entry so
+            // the render pass can query it (hostWouldCull) for this exact frame.
+            // Consumption only ever skips a DRAWN object (mesh_id != 0); the
+            // reject-side entries are never drawn, so this is harmless there.
+            found->second.hostCulled = (visible == 0);
+            found->second.hostCullFrame = frameNumber;
             ++frameChecks;
             if (visible) ++frameVisible; else ++frameCulled;
-            // Full 2-bit verdict vs the guest's stamped verdict. Given identical
-            // inputs (world bounds + same-frame camera globals), the difftested
-            // dk2_core core makes this an in-game proof that the host's camera
-            // reconstruction matches the guest's; any mismatch is a real
-            // divergence to investigate (blocker per the plan's hard rule).
             const uint32_t hostVerdict =
                 (visible ? 1u : 0u) | (fullyInside ? 2u : 0u);
-            if (hostVerdict == (e.guestCull & 3u)) ++frameMatch; else ++frameMismatch;
-        }
+            const bool match = (hostVerdict == (e.guestCull & 3u));
+            if (match) ++frameMatch; else ++frameMismatch;
+            if (rejectSide) {
+                ++frameRejChecks;
+                if (match) ++frameRejMatch; else ++frameRejMismatch;
+            }
+        };
+        // Visible direction: objects the guest drew (a host "culled" here is a
+        // disagreement). Reject direction: objects the guest CULLED (a host
+        // "visible" here is a disagreement) -- the coverage the draw path could
+        // never provide, since a culled object never reached sceneRegister.
+        for (uint32_t objectId : registeredObjectsFrame_) testObject(objectId, false);
+        for (uint32_t objectId : culledObjectsFrame_) testObject(objectId, true);
         hostCullChecks_ += frameChecks;
         hostCullVisible_ += frameVisible;
         hostCullCulled_ += frameCulled;
         cullExactMatch_ += frameMatch;
         cullMismatch_ += frameMismatch;
+        rejectChecks_ += frameRejChecks;
+        rejectMatch_ += frameRejMatch;
+        rejectMismatch_ += frameRejMismatch;
     }
 
     // Log-only, throttled to keep game.log readable. Only emit when the guest
     // is actually registering (flag on); silent otherwise, so production with
     // native_scene_mirror=false prints nothing.
-    if (registeredMeshes && (frameNumber % 60) == 0) {
+    if ((registeredMeshes || !culledObjectsFrame_.empty()) &&
+        (frameNumber % 60) == 0) {
         double matchPct = registeredMeshes
             ? (100.0 * static_cast<double>(matchedMeshes) /
                static_cast<double>(registeredMeshes))
@@ -166,13 +209,19 @@ void SceneMirror::endFrame(uint64_t frameNumber) {
             ? (100.0 * static_cast<double>(cullExactMatch_) /
                static_cast<double>(hostCullChecks_))
             : 0.0;
+        const double rejectMatchPct = rejectChecks_
+            ? (100.0 * static_cast<double>(rejectMatch_) /
+               static_cast<double>(rejectChecks_))
+            : 0.0;
         std::fprintf(stderr,
                      "DK2 scene mirror: epoch=%u registry=%zu objects "
                      "(frame reg=%zu meshes, drawn=%zu meshes, match=%zu/%zu "
                      "%.1f%%) churn=%zu implicitResets=%llu | hostCull frame "
                      "checks=%zu vis=%zu culled=%zu match=%zu mismatch=%zu; "
                      "cumulative host-vs-guest verdict match=%.3f%% "
-                     "(%llu/%llu, mismatch=%llu)\n",
+                     "(%llu/%llu, mismatch=%llu) | reject-side (guest-culled) "
+                     "frame checks=%zu match=%zu mismatch=%zu; cumulative "
+                     "reject match=%.3f%% (%llu/%llu, mismatch=%llu)\n",
                      epoch_, objects_.size(),
                      registeredMeshes, drawnMeshesFrame_.size(),
                      matchedMeshes, registeredMeshes, matchPct, churn,
@@ -181,14 +230,51 @@ void SceneMirror::endFrame(uint64_t frameNumber) {
                      frameMismatch, verdictMatchPct,
                      static_cast<unsigned long long>(cullExactMatch_),
                      static_cast<unsigned long long>(hostCullChecks_),
-                     static_cast<unsigned long long>(cullMismatch_));
+                     static_cast<unsigned long long>(cullMismatch_),
+                     frameRejChecks, frameRejMatch, frameRejMismatch,
+                     rejectMatchPct,
+                     static_cast<unsigned long long>(rejectMatch_),
+                     static_cast<unsigned long long>(rejectChecks_),
+                     static_cast<unsigned long long>(rejectMismatch_));
     }
+
+    // Phase 3 consume summary (only when the guest authorised consumption this
+    // frame). A skip only happens on a genuine host-vs-guest cull disagreement,
+    // so in a healthy state this reports 0 skips and rendering is unchanged.
+    if (consumeRequestedFrame_ && (frameNumber % 60) == 0) {
+        std::fprintf(stderr,
+                     "DK2 scene mirror CONSUME (Phase 3): ACTIVE -- cumulative "
+                     "draws SKIPPED=%llu of %llu consume-checked deformed draws "
+                     "(a skip == host cull disagrees with guest; 0 skips == host "
+                     "agrees, rendering byte-identical)\n",
+                     static_cast<unsigned long long>(consumeSkips_),
+                     static_cast<unsigned long long>(consumeChecks_));
+    }
+
+    // Commit this frame's consume authorisation for the render pass (which runs
+    // immediately after endFrame), then reset the per-frame accumulator.
+    consumeRequested_ = consumeRequestedFrame_;
+    consumeRequestedFrame_ = false;
 
     prevRegisteredObjects_ = std::move(registeredObjectsFrame_);
     havePrevFrame_ = true;
     registeredObjectsFrame_.clear();
     registeredMeshesFrame_.clear();
     drawnMeshesFrame_.clear();
+    culledObjectsFrame_.clear();
+}
+
+bool SceneMirror::hostWouldCull(uint32_t objectId, uint64_t frameNumber) const {
+    auto it = objects_.find(objectId);
+    if (it == objects_.end()) return false;
+    // Only honour a verdict computed by endFrame for exactly this frame -- a
+    // stale verdict from a prior frame must never drive a skip.
+    return it->second.hostCullFrame == frameNumber && it->second.hostCulled;
+}
+
+void SceneMirror::noteConsumeDecision(bool skipped) {
+    ++consumeChecks_;
+    if (skipped) ++consumeSkips_;
 }
 
 }  // namespace dk2
