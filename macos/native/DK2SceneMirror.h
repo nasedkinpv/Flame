@@ -39,6 +39,12 @@ public:
     // to registrations -- treat the whole frame as one unordered set.
     void noteDrawnMesh(uint32_t meshId);
 
+    // Consume the frame's CMD_CAMERA_SET cull inputs (Phase 2): the four
+    // camera-space frustum-side plane normals + the world->camera transform, so
+    // endFrame() can recompute each mirrored object's cull independently of the
+    // guest. LOG-ONLY. Copies the fields verbatim from the bridge command.
+    void setCullCamera(const DK2MCameraSetCommand& camera);
+
     // Close out the frame: compute and (periodically) log the match/mismatch
     // signal, then clear per-frame accumulators. Call exactly once per host
     // frame after all commands for the frame have been fed in.
@@ -50,6 +56,8 @@ private:
         uint64_t signature = 0;
         uint32_t vertexCount = 0;
         uint32_t materialFlags = 0;
+        float center[3] = {0.0f, 0.0f, 0.0f};  // world-space bounding-sphere centre
+        float radius = 0.0f;
     };
 
     void dropRegistry();
@@ -57,6 +65,20 @@ private:
     uint32_t epoch_ = 0;
     bool haveEpoch_ = false;
     uint64_t implicitResets_ = 0;
+
+    // Per-frame cull camera (from CMD_CAMERA_SET). haveCullCamera_ stays false
+    // until the first camera arrives, so we never cull against a zero transform.
+    bool haveCullCamera_ = false;
+    float cullPlane_[4][3] = {};  // camera-space frustum-side plane normals A..D
+    float cullCamPos_[3] = {};    // g_camState.v3f (camera world position)
+    float cullCamRot_[9] = {};    // g_camState.m row-major 3x3
+
+    // Cumulative host-vs-guest cull agreement counters (LOG-ONLY). "Guest
+    // visible" is implicit: an object is only registered when the guest drew it,
+    // so a host "culled" verdict on a registered object is a disagreement.
+    uint64_t hostCullChecks_ = 0;      // registered objects the host cull-tested
+    uint64_t hostCullVisible_ = 0;     // host agreed: visible (match)
+    uint64_t hostCullCulled_ = 0;      // host disagreed: would cull (mismatch)
 
     // The mirror registry: every static object registered in the current epoch.
     std::unordered_map<uint32_t, Entry> objects_;

@@ -42,6 +42,7 @@ done
 /usr/bin/xcrun --sdk macosx clang++ \
   -std=c++20 \
   -O3 \
+  -ffp-contract=off \
   -fobjc-arc \
   -arch arm64 \
   -mmacosx-version-min=26.0 \
@@ -53,8 +54,10 @@ done
   -framework QuartzCore \
   -I "${REPO_ROOT}/src/gog_patch_dll" \
   -I "${REPO_ROOT}/libs/Toml11-4.4.0" \
+  -I "${REPO_ROOT}/src/shared" \
   "${SOURCE}" \
   "${SCRIPT_DIR}/native/DK2SceneMirror.cpp" \
+  "${REPO_ROOT}/src/shared/dk2_core/sub_575D70.cpp" \
   -o "${EXECUTABLE}"
 
 /usr/bin/xcrun --sdk macosx clang++ \

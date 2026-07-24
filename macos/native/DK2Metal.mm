@@ -3602,6 +3602,11 @@ static void *renderWorker(void *context) {
                     DK2MSceneRegisterCommand reg = {};
                     std::memcpy(&reg, snapshot->bytes.data() + view.offset, sizeof(reg));
                     _sceneMirror.applyRegister(reg);
+                } else if (view.type == DK2M_COMMAND_CAMERA_SET) {
+                    if (view.size != sizeof(DK2MCameraSetCommand)) continue;
+                    DK2MCameraSetCommand camera = {};
+                    std::memcpy(&camera, snapshot->bytes.data() + view.offset, sizeof(camera));
+                    _sceneMirror.setCullCamera(camera);
                 } else if (view.type == DK2M_COMMAND_DRAW_MESH) {
                     if (view.size != sizeof(DK2MDrawMeshCommand)) continue;
                     DK2MDrawMeshCommand meshDraw = {};
