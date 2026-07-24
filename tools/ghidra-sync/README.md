@@ -74,6 +74,55 @@ files. Run this script interactively instead:
 
 If anything looks wrong, **Edit → Undo** reverts the entire import in one step.
 
+## `MaterializeSgmapFunctions.java` — turn vtable-only names into real functions
+
+`ImportSgmapSymbols` applies the *name* to every `.sgmap` address, but a
+meaningful number of those addresses never become real Ghidra **`Function`**
+objects. They are reached **only** through indirect (C++ vtable) calls, which
+Ghidra's auto-analyzer never traced as code, so it left the bytes as
+raw/defined **data** carrying just a label. The name is correct, but
+`get_function_by_address` / `decompile_function` on such an address fails with
+**"No function found"** until a function is explicitly created there.
+
+Confirmed real examples:
+
+```
+CEngineStaticHeightField::appendToSceneObject2EList @ 0x00587060
+CDefaultPlayerInterface_onMouseAction              @ 0x00406530
+```
+
+Both had the right name but no function body until `createFunction` was called.
+
+`MaterializeSgmapFunctions.java` fixes this in bulk. It re-reads the same
+`.sgmap` and, for every entry that
+
+- is **not already a function** (`getFunctionAt` returns null),
+- sits in an **executable** memory block (`.text` / `cseg`), and
+- **already carries a non-default symbol** (proof that a prior
+  `ImportSgmapSymbols` run — or a human — named it, i.e. it is a function, not
+  a data global),
+
+calls `createFunction(addr, null)` to disassemble and materialize the function,
+**preserving the existing name**. If defined data is blocking disassembly it
+clears that unit and retries once. Data globals (which live in non-executable
+blocks, or carry no imported name) are never touched. Every failure is caught
+and logged, never fatal, and the whole pass runs in one undoable transaction.
+
+The final summary reports: candidates examined, materialized, already-a-function
+(skipped), not-a-candidate, not-in-program, failed (with the first ~20
+addresses + reasons), and total runtime.
+
+### When / how to run it
+
+Run it **right after `ImportSgmapSymbols`** — or any time later, whenever new
+names get imported. Same Script Manager flow: find **`MaterializeSgmapFunctions`**
+(category `DK2`) next to `ImportSgmapSymbols`, select it, click **Run**, and
+point it at `mapping/DKII_EXE_v170.sgmap` if it prompts.
+
+**Idempotent / safe to re-run.** Materializing an already-materialized function
+is a no-op (counted as "already a function"). **Edit → Undo** reverts the whole
+pass in one step.
+
 ## Note
 
 The script targets stable GhidraScript API (`getFunctionAt`, `toAddr`,
