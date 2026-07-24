@@ -154,6 +154,43 @@ struct HeightFieldStats {
 };
 HeightFieldStats g_hfStats;
 
+// --- Optimization (2026-07-24): inline the two cheapest leaf calls, EXACTLY
+// as the already-deployed static-mesh sibling did in CEngineStaticMeshAdd.cpp
+// (commit eb232a4). This function runs once per terrain chunk, and terrain
+// chunks are among the most numerous scene objects per frame, so collapsing
+// these two ABI-boundary calls per chunk removes a meaningful number of
+// Rosetta call layers. Both helpers are verified byte-for-byte against the
+// shipped binary (objdump -d -M intel) AND the live Ghidra listing --
+// identical result to the original call, pure fewer-instructions change.
+
+// Inlined MyEntryBuf_MyScaledSurface_getByIdx (0x0057C780) -- pointer-chase
+// getter into the global MyScaledSurface* table (base ptr at 0x00765B00,
+// count at 0x00765B04). Faithful to the ORIGINAL's out-of-range behaviour: it
+// logs "Invalid Material" and STILL performs table[index] (the assert branch
+// FALLS THROUGH into the load at 0x0057C7A3, no early return), so an
+// out-of-range index faults on that load exactly as the ABI call did. The
+// existing null-guard on the return value below is unchanged. Verified
+// identical to the static-mesh sibling's helper of the same name.
+dk2::MyScaledSurface *entryBufGetByIdx(int index) {
+    if (index < 0 || index >= *reinterpret_cast<const int32_t *>(0x00765B04)) {
+        dk2::MyWindow_log_printf(&dk2::MyWindow_instance, "Invalid Material\n");
+    }
+    dk2::MyScaledSurface *const *table =
+        *reinterpret_cast<dk2::MyScaledSurface *const *const *>(0x00765B00);
+    return table[index];
+}
+
+// Inlined MyCESurfHandle_static_addToHashList_flagsOr400 (0x00589140) -- a
+// thin trampoline that computes (flags & 0x400) != 0 (objdump: `test ch,0x4`)
+// and forwards it as the `char` 2nd arg to the real
+// MyCESurfHandle_static_addToHashList (0x00593720, already declared in the
+// API), which does the actual linked-list insertion. Verified identical to
+// the static-mesh sibling's helper of the same name.
+void addToHashListFlagsOr400(dk2::MyCESurfHandle *handle, int16_t flags) {
+    dk2::MyCESurfHandle_static_addToHashList(
+        handle, static_cast<char>((flags & 0x400) != 0 ? 1 : 0));
+}
+
 }  // namespace
 
 int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
@@ -276,7 +313,7 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     // Bail out (append nothing) rather than crash if the surface isn't
     // ready yet -- plausible during level-load before resources finish
     // decompressing, given the intermittent (not deterministic) crash.
-    MyScaledSurface *surf = MyEntryBuf_MyScaledSurface_getByIdx(field_10);
+    MyScaledSurface *surf = entryBufGetByIdx(field_10);
     if (surf == nullptr || surf->scaledSurfArr == nullptr) {
         ++g_hfStats.nullSurf;
         return 0;
@@ -354,7 +391,7 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
         return 0;
     }
 
-    MyCESurfHandle_static_addToHashList_flagsOr400(
+    addToHashListFlagsOr400(
             handle, static_cast<int16_t>(combinedFlags));
 
     // Grid-derived triangle/vertex counts (no per-part record here, unlike
