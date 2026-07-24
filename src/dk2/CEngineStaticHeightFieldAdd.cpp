@@ -86,11 +86,16 @@
 //     undocumented float constants). `surf->scaledSurfArr[lodLevel]` is the
 //     handle -- heightfield has no per-part width/height probability grid,
 //     so there is no mantissa-bit fine-index like the static-mesh sibling.
-//     TODO(verify): a defensive `prob_height < 1` branch subtracts 1 from
-//     the index base; this looks unreachable in practice (a real heightfield
-//     surface should always have prob_height >= 1) and is mirrored as-is
-//     rather than "fixed" -- see the equivalent caution in
-//     Obj57AD20.cpp about not silently correcting the original's behavior.
+//     Verified 2026-07-24 against the shipped binary (objdump): the original
+//     shares the sibling's mantissa-fine-index shape, but its fine-index
+//     *input* is the hardcoded magic constant 0x4B400000 (mov dword ptr
+//     [esp+0x50], 0x4B400000 at 0x58720C), whose mantissa extraction
+//     (`and eax,0x7fffff; sub eax,0x400000`) is exactly 0 -- so the fine
+//     index is always 0. The following `cmp eax,prob_height; jl .+; lea
+//     eax,[prob_height-1]` (0x587226-0x58722D) therefore only fires when
+//     0 >= prob_height, i.e. the `prob_height < 1` clamp mirrored below; it
+//     is genuinely unreachable for a real surface (prob_height >= 1) and is
+//     kept as-is per this project's no-silent-fixes convention.
 //
 //  8. `MyCESurfHandle_static_addToHashList_flagsOr400` on the picked handle,
 //     then a single SceneObject2E append (heightfield never needs the
@@ -262,10 +267,17 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     if (metric < 0.5f) lodLevel = 2;
     if (metric < 0.25f) lodLevel = 3;
 
-    // TODO(verify): defensive index adjustment for prob_height < 1 --
-    // mirrored as-is from the decompile; looks unreachable for a real
-    // heightfield surface (prob_height should always be >= 1), not
-    // "corrected" here per this project's no-silent-fixes convention.
+    // Defensive index adjustment for prob_height < 1, mirrored as-is from the
+    // original. Verified 2026-07-24 against the shipped binary at
+    // 0x58720C-0x587230 (objdump -d -M intel): the fine-index input is the
+    // hardcoded constant 0x4B400000 whose mantissa-extraction yields exactly 0
+    // (`and eax,0x7fffff; sub eax,0x400000` -> 0), so eax is 0 going into the
+    // `cmp eax,prob_height (edi+0x15); jl .+; lea eax,[edi-1]` clamp -- which
+    // only takes the `prob_height-1` branch when 0 >= prob_height, i.e. the
+    // `prob_height < 1` test below. handle = scaledSurfArr[lodLevel + 4*eax]
+    // matches `mov ebx,[ecx+4*edx]` with edx = lodLevel + 4*eax at 0x587234.
+    // Unreachable for a real surface (prob_height >= 1); not "corrected" here
+    // per this project's no-silent-fixes convention.
     int indexAdjust = 0;
     if (static_cast<int32_t>(surf->prob_height) < 1) {
         indexAdjust = static_cast<int32_t>(surf->prob_height) - 1;

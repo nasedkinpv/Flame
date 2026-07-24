@@ -424,11 +424,22 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
         if (hasSecondSurface) {
             // 0x5863A7..0x58641B: second MyScaledSurface (this->field_20),
             // via the already-declared reduction-pick / handle-pick helpers.
-            // TODO(verify): the precise stack-argument mapping for these two
-            // calls (see file-header note 5) -- reductionFactor/record.mmFactor
-            // are the best-supported candidates for sub_57F030's two float
-            // parameters, and the picked LOD level is the best-supported
-            // candidate for sub_581B80's declared first parameter.
+            //
+            // Stack-argument mapping verified 2026-07-24 against the shipped
+            // binary (objdump -d -M intel, 0x5863A7-0x5863E0). Note the
+            // struct-field naming lags the real offset by 4 (see
+            // CEngineStaticMesh.h: C++ `field_20` lives at struct offset 0x24,
+            // C++ `field_24` at 0x28):
+            //   - getByIdx index = `mov ecx,[esi+0x24]` (0x5863A7) -> field_20.
+            //   - sub_57F030(surf2, ...): arg1 = `push edi` = surf2 (0x5863D4),
+            //     confirmed; its two remaining by-value 32-bit args come from
+            //     frame slots that carry reductionFactor and record.mmFactor
+            //     (the reading kept below; consistent with the surrounding
+            //     data-flow, though not pinned to a uniquely-named slot).
+            //   - sub_581B80: ECX=surf2 (`mov ecx,edi` 0x5863DD); arg1 =
+            //     `push eax` = the sub_57F030 result / picked LOD (0x5863DF);
+            //     arg2 = `fld [esi+0x28]` (0x5863B6) = C++ field_24 (offset
+            //     0x28) reinterpreted as float; arg3 = `push 0` (0x5863B9).
             MyScaledSurface *surf2 = MyEntryBuf_MyScaledSurface_getByIdx(field_20);
             if (surf2 == nullptr) { ++g_smStats.nullSurf2; continue; }
             const int lodLevel2 = sub_57F030(surf2, reductionFactor, record.mmFactor);
