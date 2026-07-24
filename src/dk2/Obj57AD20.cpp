@@ -651,6 +651,27 @@ int copyEntryPositionsGuarded(const MeshEntry &entry, uint32_t vertexCount,
     }
 }
 
+// Diagnostic-only (Bug B, 2026-07-24): the per-channel maximum of the entry's
+// source vertex colours, SEH-guarded exactly like its copy siblings above.
+// Used purely to answer "does this draw arrive with any vertex colour at all"
+// for the selection-highlight-turns-black probe in drawEntryOnGpu.
+int maxSourceColorGuarded(const MeshEntry &entry, uint32_t vertexCount,
+                          dk2::Vec3f *out) {
+    __try {
+        dk2::Vec3f m{0.0f, 0.0f, 0.0f};
+        for (uint32_t v = 0; v < vertexCount; ++v) {
+            const dk2::Vec3f &c = entry.vertices[v].color;
+            if (c.x > m.x) m.x = c.x;
+            if (c.y > m.y) m.y = c.y;
+            if (c.z > m.z) m.z = c.z;
+        }
+        *out = m;
+        return 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 int describeEntryGuarded(const MeshEntry &entry, uint32_t indexCount,
                          uint32_t *vertexCountOut, uint64_t *signatureOut) {
     __try {
@@ -968,6 +989,45 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
         meshDrawFlags(scene, surface, stageSlot), true);
     const dk2::meshgpu::InlineTarget target = {
         textureId, uS, vS, uO, vO, meshFlags, tint};
+    // DIAGNOSTIC (Bug B, 2026-07-24): "tile/chunk selection highlight renders
+    // black instead of tinting." The drag-select overlay was traced to this
+    // path-(b) scene draw (terrain / SceneObject2E -> drawEntryOnGpu),
+    // alpha-blended. Two facts make the "black" NOT explainable by a faithful
+    // path: (1) tint RGB is deliberately forced white here (line ~957) and the
+    // reference CPU emitter RenderData.cpp:104-105 likewise sources per-vertex
+    // RGB from `colour`, taking only the global alpha byte from 0x00779380 --
+    // so tint is correct; (2) the world-mesh shader (DK2MeshShader.metal)
+    // hardcodes MODULATE(texture, diffuse) with textureFactor=0xFFFFFFFF and
+    // does NOT honour per-draw D3D texture-stage colour ops / TEXTUREFACTOR the
+    // way the legacy replay (DK2LegacyShaders.metal) does. So a black overlay
+    // is consistent with EITHER (i) the selection colour computed by
+    // calcSelectionColor (0x40AE80, still unported x86) never reaching the
+    // emitted per-vertex colour (src.color ~0), or (ii) it being carried in a
+    // TFACTOR / colour-op that this GPU mesh path silently ignores. Static
+    // analysis cannot distinguish these, so log blended scene draws (throttled,
+    // gated behind [flametal:logging:debug]) with their source-vertex colour.
+    // To confirm: enable debug logging, drag-select tiles, read game.log --
+    //   maxSrcColor ~0 on the black tiles  => colour absent from the vertex
+    //       stream: cause is upstream (engine colour not emitted) OR a colour
+    //       -op/TFACTOR the mesh shader drops (fix belongs in the shader / this
+    //       path, e.g. honour the draw's real colour stage like the legacy one).
+    //   maxSrcColor non-zero on black tiles => colour IS present: the black is
+    //       downstream in blend/shader (different fix).
+    if (meshFlags & (DK2M_DRAW_MESH_ALPHA_BLEND | DK2M_DRAW_MESH_MULTIPLY |
+                     DK2M_DRAW_MESH_ADDITIVE)) {
+        static uint32_t blendedProbeSeq = 0;
+        if ((blendedProbeSeq++ % 256) == 0) {
+            dk2::Vec3f maxSrc{-1.0f, -1.0f, -1.0f};
+            maxSourceColorGuarded(entry, vertexCount, &maxSrc);
+            patch::log::dbg(
+                "Bug B probe: blended scene draw flags=0x%X tint=%08X "
+                "ambient=(%.1f %.1f %.1f) maxSrcColor=(%.1f %.1f %.1f) "
+                "vertexCount=%u textureId=%u sampler=%d",
+                meshFlags, tint, ambient.x, ambient.y, ambient.z,
+                maxSrc.x, maxSrc.y, maxSrc.z, vertexCount, textureId,
+                sampler ? 1 : 0);
+        }
+    }
     if (sampler) {
         if (meshFlags & DK2M_DRAW_MESH_ADDITIVE) {
             patch::log::dbg(
