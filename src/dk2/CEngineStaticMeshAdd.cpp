@@ -238,6 +238,56 @@ struct StaticMeshStats {
 };
 StaticMeshStats g_smStats;
 
+// --- Optimization 2/3 (2026-07-24): inline the cheapest per-part leaf calls ---
+//
+// The per-part build loop below (0x586274..0x586A16, ~73% of scene objects) is
+// dominated under Rosetta by CALL/BRANCH COUNT, not data movement: a fan-out of
+// tiny separately-translated x86 leaf calls, each paying call+ret+prologue at
+// the ABI boundary. These two file-local helpers collapse the two cheapest,
+// simplest such leaves into the same translation unit so the compiler inlines
+// them at -O2 instead of forcing an ABI-boundary call. Each is verified
+// byte-for-byte against the shipped binary (objdump -d -M intel) AND the live
+// Ghidra listing; both produce the IDENTICAL result to the original call, so
+// this is a pure fewer-instructions optimization, not a logic change.
+//
+// (transformFlags @0x57F090 was DELIBERATELY LEFT as an ABI call: it is a
+// branchier pure-leaf whose two out-params feed combinedFlags1/2, i.e. the
+// per-object blend/Z draw flags -- a single mis-transcribed bit-mask there
+// would silently corrupt rendering state. Its value-per-risk is worse than
+// these two, so it stays untouched; see the callee census comment above.)
+
+// Inlined MyEntryBuf_MyScaledSurface_getByIdx (0x0057C780) -- the pointer-chase
+// getter into the global MyScaledSurface* table (base ptr at 0x00765B00, count
+// at 0x00765B04). Faithful to the ORIGINAL's out-of-range behaviour: it logs
+// "Invalid Material" via MyWindow_log_printf and then STILL performs
+// table[index] -- the assert branch FALLS THROUGH into the load at 0x0057C7A3,
+// it does NOT early-return -- so an out-of-range index faults on that load
+// exactly as the ABI call did (this file already calls the getter raw, with no
+// SEH guard, so the fault semantics are unchanged; the Obj57AD20.cpp caller
+// that DOES wrap it in __try is intentionally left alone). The rare bounds-fail
+// + log stays out-of-line; the common in-range path is two loads with no call.
+dk2::MyScaledSurface *entryBufGetByIdx(int index) {
+    if (index < 0 || index >= *reinterpret_cast<const int32_t *>(0x00765B04)) {
+        dk2::MyWindow_log_printf(&dk2::MyWindow_instance, "Invalid Material\n");
+    }
+    dk2::MyScaledSurface *const *table =
+        *reinterpret_cast<dk2::MyScaledSurface *const *const *>(0x00765B00);
+    return table[index];
+}
+
+// Inlined MyCESurfHandle_static_addToHashList_flagsOr400 (0x00589140) -- a thin
+// trampoline that computes (flags & 0x400) != 0 (objdump: `test ch,0x4`) and
+// forwards it as the `char` 2nd arg to the real, still-untranslated
+// MyCESurfHandle_static_addToHashList (0x00593720), which does the actual
+// linked-list insertion. Collapsing the trampoline removes exactly one Rosetta
+// call layer per hash-add; the inner call (the real work) is unchanged. This is
+// the safest possible inline: the inner function is already declared in the API
+// and does all the work, so there is nothing to mis-transcribe here.
+void addToHashListFlagsOr400(dk2::MyCESurfHandle *handle, int16_t flags) {
+    dk2::MyCESurfHandle_static_addToHashList(
+        handle, static_cast<char>((flags & 0x400) != 0 ? 1 : 0));
+}
+
 }  // namespace
 
 int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
@@ -369,7 +419,8 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
         const SubmeshRecord &record = records[part];
 
         // 0x5862AC..0x5862BB: resolve this sub-part's base MyScaledSurface.
-        MyScaledSurface *surf = MyEntryBuf_MyScaledSurface_getByIdx(record.surfIdx);
+        // Inlined getByIdx (see helper above) -- identical result, no ABI call.
+        MyScaledSurface *surf = entryBufGetByIdx(record.surfIdx);
         // Defensive null-guard (same rationale as the heightfield
         // sibling CEngineStaticHeightFieldAdd.cpp -- not present in the
         // original decompile, but this function was never actually live
@@ -450,8 +501,7 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
                 reinterpret_cast<MyCESurfHandle *const *>(surf->scaledSurfArr)[flatIndex];
         if (handle1 == nullptr) { ++g_smStats.nullHandle1; continue; }
 
-        MyCESurfHandle_static_addToHashList_flagsOr400(
-                handle1, static_cast<int16_t>(combinedFlags1));
+        addToHashListFlagsOr400(handle1, static_cast<int16_t>(combinedFlags1));
 
         // 0x586398..0x5863A1: reload a5_flags after the hash-add call.
         const int32_t a5FlagsNow = a5_flags;
@@ -478,7 +528,7 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
             //     `push eax` = the sub_57F030 result / picked LOD (0x5863DF);
             //     arg2 = `fld [esi+0x28]` (0x5863B6) = C++ field_24 (offset
             //     0x28) reinterpreted as float; arg3 = `push 0` (0x5863B9).
-            MyScaledSurface *surf2 = MyEntryBuf_MyScaledSurface_getByIdx(field_20);
+            MyScaledSurface *surf2 = entryBufGetByIdx(field_20);
             if (surf2 == nullptr) { ++g_smStats.nullSurf2; continue; }
             const int lodLevel2 = sub_57F030(surf2, reductionFactor, record.mmFactor);
             // Verified against the raw listing at 0x5863dd..0x5863e0: ECX (this)
@@ -499,8 +549,7 @@ int dk2::CEngineStaticMesh::appendToSceneObject2EList(int requestArg) {
             transformFlags(static_cast<int16_t>(a5_flags), &andMask2, &orMask2);
             combinedFlags2 = (andMask2 & surf2->drawFlags) | orMask2;
 
-            MyCESurfHandle_static_addToHashList_flagsOr400(
-                    handle2, static_cast<int16_t>(combinedFlags2));
+            addToHashListFlagsOr400(handle2, static_cast<int16_t>(combinedFlags2));
         } else {
             // 0x586a16..0x586a41: emit via the free function (declared in
             // dk2_functions.h, implemented elsewhere) instead of appending
