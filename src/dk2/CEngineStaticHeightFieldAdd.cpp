@@ -251,6 +251,39 @@ int dk2::CEngineStaticHeightField::appendToSceneObject2EList(int requestArg) {
     }
     const uint32_t combinedFlags = (andMask & surf->drawFlags) | orMask;
 
+    // Diagnostic (Bug B, 2026-07-24): "selected tile renders as a solid black
+    // rectangular hole." Two live theories remain after the earlier color/tint
+    // pass was exhausted-and-negative and the 0c0f44d decal-misclassification
+    // mechanism was DISPROVEN for terrain (f2C_ is hardcoded 0 here -- verified
+    // against the shipped binary at 0x587298: `mov word[edx+2*ecx+0x2c],0` --
+    // so a heightfield tile is NEVER routed through the >=0x7D0 shadow-decal
+    // path in draw_functions.cpp; the black hole is not a decal):
+    //   (A) missing geometry -- one of the two guards above bails for the
+    //       selected tile (watch guard1Bail/guard2Bail in the stats log spike
+    //       during a drag-select), OR
+    //   (B) blend shading -- the selected tile is emitted with a blend bit in
+    //       its OWN drawFlags. metalMeshFlags (Obj57AD20.cpp) maps 0x1000->
+    //       MULTIPLY, 0x20->ALPHA_BLEND, 0x1->ADDITIVE. A MULTIPLY tile over a
+    //       bright texture reads as solid black. No prior probe logged the
+    //       heightfield tile's own combinedFlags at the emit site, so this
+    //       pins whether selection actually flips these bits on terrain.
+    // orMask 0x220 (=0x200|0x20 -> ALPHA_BLEND) and 0x201 (=0x200|0x1 ->
+    // ADDITIVE) are the selection-driven a8&0x2/0x2001 contributions, verified
+    // faithful at 0x58717c/0x58719b. If the log shows 0x1000 set here, the
+    // MULTIPLY comes from surf->drawFlags, not the selection bits.
+    // Gated behind [flametal:logging:debug]; throttled; remove once confirmed.
+    if ((combinedFlags & 0x1021u) != 0) {  // any blend selector (0x1000|0x20|0x1)
+        static uint32_t g_hfBlendSeq = 0;
+        if ((g_hfBlendSeq++ % 64) == 0) {
+            patch::log::dbg(
+                "heightfield blend emit: a8=0x%X surfDrawFlags=0x%X andMask=0x%X "
+                "orMask=0x%X combinedFlags=0x%X (MULTIPLY=%d ALPHA=%d ADD=%d)",
+                a8, surf->drawFlags, andMask, orMask, combinedFlags,
+                (combinedFlags & 0x1000u) ? 1 : 0, (combinedFlags & 0x20u) ? 1 : 0,
+                (combinedFlags & 0x1u) ? 1 : 0);
+        }
+    }
+
     // LOD pick: metric = radius * reductionFactor / baseHandle->surfWidth8,
     // against fixed thresholds (the static-mesh sibling uses three
     // undocumented float constants instead -- this one is a plain literal
