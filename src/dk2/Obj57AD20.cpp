@@ -746,6 +746,133 @@ int describeEntryGuarded(const MeshEntry &entry, uint32_t indexCount,
     }
 }
 
+// Optimization 1/3 (2026-07-24): memoize describeEntryGuarded per source
+// buffer address so its per-byte FNV walk is skipped on a genuine cache hit.
+//
+// describeEntryGuarded reads the guest vertex/index buffers with a per-byte
+// FNV loop (measured ~960 ns/call under Rosetta, ~6 ms/frame across ~6600
+// objects) purely to produce (vertexCount, signature). The signature exists to
+// detect the rare "same pool address, different content in place" drift
+// (digging/building recycles a buffer) that retainedEntryMesh then confirms.
+// Phase 0 telemetry (roadmap): retained HIT ~99%, same-address-DIFFERENT-
+// content ~961 across a WHOLE session, and it does climb slowly during play -
+// so the signature is a genuine design requirement, NOT a shortcut, and an
+// aggressive always-trust gate would be a bug. On the ~99% of calls where the
+// same (vertices, indices, indexCount) buffer is redrawn unchanged, the FNV
+// walk reproduces a byte-identical result every frame; that is the redundant
+// work this memo removes.
+//
+// The memo caches (vertexCount, signature) keyed on the source buffer
+// addresses + indexCount and reuses it for up to (reverify-1) consecutive
+// PRODUCER FRAMES per entry, recomputing (re-verifying) on the reverify-th
+// frame so genuine in-place drift is still caught within a bounded window
+// instead of every single frame.
+//
+// FAITHFULNESS: this describe/signature/retained machinery does NOT exist in
+// the original game - the original streams every static mesh every frame with
+// no content cache (the emitDeformed path below is the faithful equivalent, see
+// roadmap 2026-07-23). There is therefore no original "skip on hit" behaviour
+// to match; describe is pure bridge overhead we added, and this only trims how
+// often we pay it. (This is why the faithfulness check is against our own
+// source, not the DKII.EXE disassembly - the machinery is absent from the
+// binary.)
+//
+// RISK (documented, bounded): reusing a memoized result means a same-address /
+// same-indexCount in-place content change is not detected until this entry's
+// next re-verify frame - up to (reverify-1) frames of stale geometry for a
+// just-dug/built tile. triangleCount (=> indexCount) changes are still caught
+// SAME FRAME because the key includes indexCount. Because entry.vertices is a
+// pool address, a recycle into a genuinely different mesh almost always changes
+// triangleCount too, so the residual undetected-within-window case is only the
+// rare same-triangle-count recycle. Self-healing at the next re-verify.
+//
+// DEFAULT: reverify defaults to 1 == re-verify every frame == BYTE-IDENTICAL to
+// the previous unconditional describe, and the memo is bypassed entirely so no
+// added overhead is paid by default. Set DK2_MESH_DESCRIBE_REVERIFY=N (N>=2) to
+// enable the skip; N in [4..8] trims ~75-88% of describe cost while keeping
+// worst-case drift latency under ~0.4 s even at 20 fps. Only reachable under
+// the opt-in mesh_gpu_path (meshGpuActive()); the default legacy CPU emitter
+// never runs this code.
+uint32_t describeReverifyFrames() {
+    static const uint32_t v = [] {
+        const char *e = std::getenv("DK2_MESH_DESCRIBE_REVERIFY");
+        if (!e) return 1u;
+        const long n = std::strtol(e, nullptr, 10);
+        return n < 1 ? 1u : (n > 4096 ? 4096u : static_cast<uint32_t>(n));
+    }();
+    return v;
+}
+
+int describeEntryMemoized(const MeshEntry &entry, uint32_t indexCount,
+                          uint32_t *vertexCountOut, uint64_t *signatureOut) {
+    const uint32_t reverify = describeReverifyFrames();
+    if (reverify <= 1) {
+        // Byte-identical fast path: re-verify every frame, memo untouched.
+        return describeEntryGuarded(entry, indexCount, vertexCountOut,
+                                    signatureOut);
+    }
+    struct DescribeMemo {
+        const void *vertices;
+        const void *indices;
+        uint32_t indexCount;
+        uint32_t vertexCount;
+        uint64_t signature;
+        uint32_t lastVerifyFrame;
+        bool valid;
+    };
+    // Same sizing/mixing rationale as retainedEntryMesh's cache: pool addresses
+    // cluster, so a multiplicative bit-mix spreads them and 65536 slots keep the
+    // load low (~6.7k unique templates plateau per session). Saturation only
+    // costs the walk we were going to do anyway - never a wrong result.
+    constexpr uint32_t kSlots = 65536;
+    constexpr uint32_t kMask = kSlots - 1;
+    static DescribeMemo memo[kSlots] = {};
+    const uint32_t frame = gog::metal_bridge::frameCounter();
+    uint64_t hash = (reinterpret_cast<uintptr_t>(entry.vertices) >> 4) *
+                    0x9E3779B97F4A7C15ull;
+    hash ^= (reinterpret_cast<uintptr_t>(entry.triangleIndices) >> 3) *
+            0xC2B2AE3D27D4EB4Full;
+    hash ^= hash >> 29;
+    uint32_t slot = static_cast<uint32_t>(hash) & kMask;
+    DescribeMemo *available = nullptr;
+    for (uint32_t probe = 0; probe < 64; ++probe, slot = (slot + 1) & kMask) {
+        DescribeMemo &cand = memo[slot];
+        if (!cand.valid) { available = &cand; break; }
+        if (cand.vertices != entry.vertices ||
+            cand.indices != entry.triangleIndices ||
+            cand.indexCount != indexCount) {
+            continue;
+        }
+        // Same source buffer + topology size. Reuse the memoized describe while
+        // still inside the re-verify window; unsigned subtraction is wrap-safe
+        // for the monotonic producer frame counter.
+        if (frame - cand.lastVerifyFrame < reverify) {
+            *vertexCountOut = cand.vertexCount;
+            *signatureOut = cand.signature;
+            return 1;
+        }
+        available = &cand;  // re-verify due: recompute into this same slot
+        break;
+    }
+    uint32_t vertexCount = 0;
+    uint64_t signature = 0;
+    if (!describeEntryGuarded(entry, indexCount, &vertexCount, &signature)) {
+        return 0;  // describe failed; caller negative-caches entry.vertices
+    }
+    *vertexCountOut = vertexCount;
+    *signatureOut = signature;
+    if (available) {
+        available->vertices = entry.vertices;
+        available->indices = entry.triangleIndices;
+        available->indexCount = indexCount;
+        available->vertexCount = vertexCount;
+        available->signature = signature;
+        available->lastVerifyFrame = frame;
+        available->valid = true;
+    }
+    return 1;
+}
+
 struct RetainedEntryMesh {
     uint32_t meshId;
     dk2::Vec3f origin;
@@ -977,7 +1104,12 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
     // marshalling after retained instancing removed the position copy).
     LARGE_INTEGER deT0, deT1;
     QueryPerformanceCounter(&deT0);
-    const bool describeOk = describeEntryGuarded(
+    // describeEntryMemoized == describeEntryGuarded exactly when
+    // DK2_MESH_DESCRIBE_REVERIFY<=1 (default); with N>=2 it reuses the last
+    // signature/vertexCount for up to N-1 frames per entry. The QPC timer below
+    // therefore now reports the amortised (memoised) describe cost, which is the
+    // point of the A/B.
+    const bool describeOk = describeEntryMemoized(
             entry, indexCount, &vertexCount, &signature);
     QueryPerformanceCounter(&deT1);
     {
