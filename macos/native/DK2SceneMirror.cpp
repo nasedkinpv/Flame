@@ -65,6 +65,7 @@ void SceneMirror::applyRegister(const DK2MSceneRegisterCommand& reg) {
     entry.center[1] = reg.center[1];
     entry.center[2] = reg.center[2];
     entry.radius = reg.radius;
+    entry.guestCull = reg.guest_cull;
 
     registeredObjectsFrame_.insert(reg.object_id);
     if (reg.mesh_id) {
@@ -120,6 +121,7 @@ void SceneMirror::endFrame(uint64_t frameNumber) {
     // decided was visible, so a host "culled" verdict is a disagreement worth
     // surfacing. LOG-ONLY: this result is never consumed (no draw is skipped).
     size_t frameChecks = 0, frameVisible = 0, frameCulled = 0;
+    size_t frameMatch = 0, frameMismatch = 0;
     if (haveCullCamera_) {
         const dk2::core::CullVec3 A{cullPlane_[0][0], cullPlane_[0][1], cullPlane_[0][2]};
         const dk2::core::CullVec3 B{cullPlane_[1][0], cullPlane_[1][1], cullPlane_[1][2]};
@@ -136,10 +138,20 @@ void SceneMirror::endFrame(uint64_t frameNumber) {
                 camSpace, e.radius, &fullyInside, A, B, C, D);
             ++frameChecks;
             if (visible) ++frameVisible; else ++frameCulled;
+            // Full 2-bit verdict vs the guest's stamped verdict. Given identical
+            // inputs (world bounds + same-frame camera globals), the difftested
+            // dk2_core core makes this an in-game proof that the host's camera
+            // reconstruction matches the guest's; any mismatch is a real
+            // divergence to investigate (blocker per the plan's hard rule).
+            const uint32_t hostVerdict =
+                (visible ? 1u : 0u) | (fullyInside ? 2u : 0u);
+            if (hostVerdict == (e.guestCull & 3u)) ++frameMatch; else ++frameMismatch;
         }
         hostCullChecks_ += frameChecks;
         hostCullVisible_ += frameVisible;
         hostCullCulled_ += frameCulled;
+        cullExactMatch_ += frameMatch;
+        cullMismatch_ += frameMismatch;
     }
 
     // Log-only, throttled to keep game.log readable. Only emit when the guest
@@ -150,24 +162,26 @@ void SceneMirror::endFrame(uint64_t frameNumber) {
             ? (100.0 * static_cast<double>(matchedMeshes) /
                static_cast<double>(registeredMeshes))
             : 0.0;
-        const double cullAgreePct = hostCullChecks_
-            ? (100.0 * static_cast<double>(hostCullVisible_) /
+        const double verdictMatchPct = hostCullChecks_
+            ? (100.0 * static_cast<double>(cullExactMatch_) /
                static_cast<double>(hostCullChecks_))
             : 0.0;
         std::fprintf(stderr,
                      "DK2 scene mirror: epoch=%u registry=%zu objects "
                      "(frame reg=%zu meshes, drawn=%zu meshes, match=%zu/%zu "
                      "%.1f%%) churn=%zu implicitResets=%llu | hostCull frame "
-                     "checks=%zu vis=%zu culled=%zu; cumulative agree=%.2f%% "
-                     "(%llu/%llu, disagree=%llu)\n",
+                     "checks=%zu vis=%zu culled=%zu match=%zu mismatch=%zu; "
+                     "cumulative host-vs-guest verdict match=%.3f%% "
+                     "(%llu/%llu, mismatch=%llu)\n",
                      epoch_, objects_.size(),
                      registeredMeshes, drawnMeshesFrame_.size(),
                      matchedMeshes, registeredMeshes, matchPct, churn,
                      static_cast<unsigned long long>(implicitResets_),
-                     frameChecks, frameVisible, frameCulled, cullAgreePct,
-                     static_cast<unsigned long long>(hostCullVisible_),
+                     frameChecks, frameVisible, frameCulled, frameMatch,
+                     frameMismatch, verdictMatchPct,
+                     static_cast<unsigned long long>(cullExactMatch_),
                      static_cast<unsigned long long>(hostCullChecks_),
-                     static_cast<unsigned long long>(hostCullCulled_));
+                     static_cast<unsigned long long>(cullMismatch_));
     }
 
     prevRegisteredObjects_ = std::move(registeredObjectsFrame_);

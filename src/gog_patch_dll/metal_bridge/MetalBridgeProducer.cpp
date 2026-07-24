@@ -2182,7 +2182,8 @@ public:
     // an epoch bump; the host builds a registry and consumes nothing yet.
     void sceneRegister(uint32_t objectId, uint32_t meshId, uint64_t signature,
                        uint32_t vertexCount, uint32_t materialFlags,
-                       const float world[12], const float center[3], float radius) {
+                       const float world[12], const float center[3], float radius,
+                       uint32_t guestCull) {
         if (!active_) return;  // mirror is host-only; nothing to stage without one
         DK2MSceneRegisterCommand command = {};
         command.header.type = DK2M_COMMAND_SCENE_REGISTER;
@@ -2196,6 +2197,7 @@ public:
         std::memcpy(command.world, world, sizeof(command.world));
         std::memcpy(command.center, center, sizeof(command.center));
         command.radius = radius;
+        command.guest_cull = guestCull;
         if (used_ + sizeof(command) > DK2M_SLOT_CAPACITY) return;
         append(&command, sizeof(command));
         ++commandCount_;
@@ -2683,6 +2685,21 @@ void cameraSet(const float viewProj[16], const float depthParams[6],
                const float cullPlanes[12], const float camPos[3],
                const float camRot[9]) {
     producer.cameraSet(viewProj, depthParams, cullPlanes, camPos, camRot);
+}
+
+// Native scene mirror (Phase 1/2, LOG-ONLY). Namespace-scope wrappers over the
+// anonymous-namespace producer, so the guest emit sites (Obj57AD20.cpp) can
+// reach them.
+void sceneRegister(uint32_t objectId, uint32_t meshId, uint64_t signature,
+                   uint32_t vertexCount, uint32_t materialFlags,
+                   const float world[12], const float center[3], float radius,
+                   uint32_t guestCull) {
+    producer.sceneRegister(objectId, meshId, signature, vertexCount,
+                           materialFlags, world, center, radius, guestCull);
+}
+
+void sceneReset() {
+    producer.sceneReset();
 }
 
 void lightsSet(const void *lights, uint32_t lightCount, float ambientR, float ambientG,

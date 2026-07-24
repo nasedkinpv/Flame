@@ -58,6 +58,7 @@ private:
         uint32_t materialFlags = 0;
         float center[3] = {0.0f, 0.0f, 0.0f};  // world-space bounding-sphere centre
         float radius = 0.0f;
+        uint32_t guestCull = 0;  // guest's own verdict: bit0 visible, bit1 fullyInside
     };
 
     void dropRegistry();
@@ -77,8 +78,13 @@ private:
     // visible" is implicit: an object is only registered when the guest drew it,
     // so a host "culled" verdict on a registered object is a disagreement.
     uint64_t hostCullChecks_ = 0;      // registered objects the host cull-tested
-    uint64_t hostCullVisible_ = 0;     // host agreed: visible (match)
-    uint64_t hostCullCulled_ = 0;      // host disagreed: would cull (mismatch)
+    uint64_t hostCullVisible_ = 0;     // host verdict = visible
+    uint64_t hostCullCulled_ = 0;      // host verdict = culled
+
+    // Phase 2 step 5: host verdict vs the guest's stamped verdict (both the full
+    // 2-bit result). exactMatch = identical visible+fullyInside bits.
+    uint64_t cullExactMatch_ = 0;
+    uint64_t cullMismatch_ = 0;
 
     // The mirror registry: every static object registered in the current epoch.
     std::unordered_map<uint32_t, Entry> objects_;

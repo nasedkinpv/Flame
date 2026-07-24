@@ -1162,10 +1162,30 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
             // diffs vs the guest -- still LOG-ONLY, the guest never skips a draw.
             const float center[3] = {
                 boundsCenter.x, boundsCenter.y, boundsCenter.z};
+            // Phase 2 step 5: recompute the guest's OWN frustum-sphere cull for
+            // this object here, from the same world bounds + live camera the
+            // host receives (rel = center - g_camState.v3f; camSpace =
+            // g_camState.m.sub_594E10(rel); Vec3f_static_sub_575D70). Stamp the
+            // verdict (bit0 visible, bit1 fullyInside) so the host can diff its
+            // independent recompute -- a live, in-game proof that the ported
+            // dk2_core math + the host's camera-state reconstruction agree
+            // bit-for-bit. LOG-ONLY: the guest still drew this object regardless.
+            uint32_t guestCull = 0;
+            {
+                dk2::Vec3f centerCopy = boundsCenter;
+                dk2::Vec3f rel{};
+                centerCopy.substractAssign(&rel, &dk2::g_camState.v3f);
+                dk2::Vec3f camSpace{};
+                dk2::g_camState.m.sub_594E10(&rel, &camSpace);
+                uint32_t fullyInside = 0;
+                const int visible = dk2::Vec3f_static_sub_575D70(
+                    &camSpace, boundsRadius, &fullyInside);
+                guestCull = (visible ? 1u : 0u) | (fullyInside ? 2u : 0u);
+            }
             gog::metal_bridge::sceneRegister(
                 static_cast<uint32_t>(reinterpret_cast<uintptr_t>(scene)),
                 retained.meshId, signature, vertexCount, meshFlags,
-                identity, center, boundsRadius);
+                identity, center, boundsRadius, guestCull);
         }
         if (meshFlags & DK2M_DRAW_MESH_ADDITIVE) {
             patch::log::dbg(

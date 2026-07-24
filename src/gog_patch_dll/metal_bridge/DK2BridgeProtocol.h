@@ -419,6 +419,12 @@ typedef struct DK2MSceneRegisterCommand {
     float world[12];
     float center[3];
     float radius;
+    // Guest's own frustum-sphere cull verdict for this object (Phase 2), stamped
+    // by recomputing Vec3f_static_sub_575D70 at register time from the SAME world
+    // bounds + live camera the host receives. bit0 = visible, bit1 = fullyInside.
+    // The host diffs its independent recompute against this to prove the ported
+    // math + camera-state reconstruction agree bit-for-bit. LOG-ONLY.
+    uint32_t guest_cull;
 } DK2MSceneRegisterCommand;
 
 // Bumps the scene epoch (level-load / save-load / new game). The host drops
@@ -452,7 +458,7 @@ static_assert(sizeof(DK2MTextureStageStateCommand) == 20,
 static_assert(sizeof(DK2MShadowTriangle) == 24, "bridge shadow triangle layout changed");
 static_assert(sizeof(DK2MCameraSetCommand) == 200, "bridge camera set layout changed");
 static_assert(sizeof(DK2MShadowMaskCommand) == 40, "bridge shadow mask layout changed");
-static_assert(sizeof(DK2MSceneRegisterCommand) == 100, "bridge scene register layout changed");
+static_assert(sizeof(DK2MSceneRegisterCommand) == 104, "bridge scene register layout changed");
 static_assert(sizeof(DK2MSceneResetCommand) == 12, "bridge scene reset layout changed");
 #endif
 

@@ -103,9 +103,13 @@ void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCou
 // without shared-memory, out of scope). Versioned by an internal scene epoch
 // that sceneReset() bumps (level-load / save-load); the host drops its
 // registry on epoch change. Nothing is consumed yet -- observational only.
+// guestCull (Phase 2): the guest's own frustum-sphere cull verdict for this
+// object (bit0 visible, bit1 fullyInside), recomputed at register time, so the
+// host can diff its independent recompute. Pass 0 if not computed.
 void sceneRegister(uint32_t objectId, uint32_t meshId, uint64_t signature,
                    uint32_t vertexCount, uint32_t materialFlags,
-                   const float world[12], const float center[3], float radius);
+                   const float world[12], const float center[3], float radius,
+                   uint32_t guestCull);
 void sceneReset();
 // Last begun frame's dimensions (stable during the game's prepare phase).
 void frameSize(uint32_t *width, uint32_t *height);
