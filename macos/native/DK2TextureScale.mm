@@ -98,6 +98,23 @@ id<MTLTexture> composeHDPage(id<MTLDevice> device, id<MTLTexture> base,
 
     [cb commit];
     [cb waitUntilCompleted];  // result is sampled from the renderer's MTL4 queue
+
+    // A silently-failed command buffer leaves `dst` (MTLStorageModePrivate)
+    // uninitialized -- the renderer would then sample an all-zero texture,
+    // which reads back BLACK. If only the generateMipmaps blit failed, mip 0
+    // is still valid (fine up close) while every minified mip is black
+    // (black on zoom-out). Return nil so the caller falls back to the plain
+    // page instead of binding a corrupt HD texture, and log why.
+    if (cb.status != MTLCommandBufferStatusCompleted) {
+        static int logsLeft = 20;
+        if (logsLeft > 0) {
+            --logsLeft;
+            NSLog(@"DK2 texture scale: composeHDPage cb FAILED status=%ld error=%@ "
+                  @"(label=%016llx %ux%u rects=%zu) -- HD page dropped, using plain",
+                  (long)cb.status, cb.error, label, hdW, hdH, rects.size());
+        }
+        return nil;
+    }
     return dst;
 }
 
@@ -134,6 +151,15 @@ bool scaleBgra(id<MTLDevice> device, const uint8_t *src, uint32_t srcW,
     [s.filter encodeToCommandBuffer:cb sourceTexture:srcTex destinationTexture:dstTex];
     [cb commit];
     [cb waitUntilCompleted];
+    if (cb.status != MTLCommandBufferStatusCompleted) {
+        static int logsLeft = 20;
+        if (logsLeft > 0) {
+            --logsLeft;
+            NSLog(@"DK2 texture scale: scaleBgra cb FAILED status=%ld error=%@ (%ux%u->%ux%u)",
+                  (long)cb.status, cb.error, srcW, srcH, dstW, dstH);
+        }
+        return false;
+    }
 
     [dstTex getBytes:dst
          bytesPerRow:dstPitch
