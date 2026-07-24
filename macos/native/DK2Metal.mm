@@ -7,6 +7,7 @@
 
 #include "metal_bridge/DK2BridgeProtocol.h"
 #include "DK2SceneMirror.h"
+#include "DK2TextureScale.h"
 
 #include <algorithm>
 #include <array>
@@ -1219,36 +1220,6 @@ bool loadPngBgra(NSString *path, std::vector<uint8_t> &bgra, uint32_t &w, uint32
     return ok;
 }
 
-void scaleBilinearBgra(const uint8_t *src, uint32_t sw, uint32_t sh, uint32_t spitch,
-                       uint8_t *dst, uint32_t dw, uint32_t dh, uint32_t dpitch) {
-    if (sw == dw && sh == dh) {
-        for (uint32_t y = 0; y < dh; ++y) {
-            std::memcpy(dst + (size_t)y * dpitch, src + (size_t)y * spitch, (size_t)dw * 4);
-        }
-        return;
-    }
-    for (uint32_t y = 0; y < dh; ++y) {
-        const float fy = dh > 1 ? (float)y * (sh - 1) / (dh - 1) : 0.f;
-        const uint32_t y0 = (uint32_t)fy;
-        const uint32_t y1 = std::min(y0 + 1, sh - 1);
-        const float ty = fy - y0;
-        const uint8_t *row0 = src + (size_t)y0 * spitch;
-        const uint8_t *row1 = src + (size_t)y1 * spitch;
-        uint8_t *out = dst + (size_t)y * dpitch;
-        for (uint32_t x = 0; x < dw; ++x) {
-            const float fx = dw > 1 ? (float)x * (sw - 1) / (dw - 1) : 0.f;
-            const uint32_t x0 = (uint32_t)fx;
-            const uint32_t x1 = std::min(x0 + 1, sw - 1);
-            const float tx = fx - x0;
-            for (int c = 0; c < 4; ++c) {
-                const float top = row0[x0 * 4 + c] + (row0[x1 * 4 + c] - row0[x0 * 4 + c]) * tx;
-                const float bot = row1[x0 * 4 + c] + (row1[x1 * 4 + c] - row1[x0 * 4 + c]) * tx;
-                out[x * 4 + c] = (uint8_t)std::min(255.f, std::max(0.f, top + (bot - top) * ty + 0.5f));
-            }
-        }
-    }
-}
-
 // Small decoded-PNG cache: rebuilds re-read the same handful of pack files.
 struct CachedPng {
     std::vector<uint8_t> bgra;
@@ -1388,9 +1359,16 @@ id<MTLTexture> composePage(id<MTLDevice> device, uint32_t textureId, PageState &
         return nil;
     }
     const uint32_t hdW = st.w * kScale, hdH = st.h * kScale;
-    std::vector<uint8_t> hd((size_t)hdW * hdH * 4);
-    scaleBilinearBgra(st.pixels1x.data(), st.w, st.h, st.w * 4,
-                      hd.data(), hdW, hdH, hdW * 4);
+    // GPU compose: upload the 1x page and each pack PNG to source textures,
+    // then MPSImageBilinearScale upscales them into the HD page and a blit
+    // encoder builds the mip chain (see DK2TextureScale). This replaces the
+    // hand-rolled CPU bilinear scaler that profiling showed dominating host
+    // CPU. Source textures are uploaded right after each packPng() so the
+    // cache pointers stay valid (packPng may evict entries as the loop runs).
+    id<MTLTexture> baseTex =
+            dk2scale::uploadBgra(device, st.pixels1x.data(), st.w, st.h, st.w * 4);
+    if (!baseTex) { ++composeStats().noApplied; wipLog("uploadFail"); return nil; }
+    std::vector<dk2scale::HDRect> rects;
     uint32_t applied = 0;
     for (const auto &r : st.rects) {
         if (r.x >= st.w || r.y >= st.h) continue;
@@ -1399,9 +1377,10 @@ id<MTLTexture> composePage(id<MTLDevice> device, uint32_t textureId, PageState &
         if (!rw || !rh) continue;
         const CachedPng *png = packPng(dir, r.name);
         if (!png) continue;
-        scaleBilinearBgra(png->bgra.data(), png->w, png->h, png->w * 4,
-                          hd.data() + ((size_t)r.y * kScale * hdW + (size_t)r.x * kScale) * 4,
-                          rw * kScale, rh * kScale, hdW * 4);
+        id<MTLTexture> srcTex =
+                dk2scale::uploadBgra(device, png->bgra.data(), png->w, png->h, png->w * 4);
+        if (!srcTex) continue;
+        rects.push_back({srcTex, r.x * kScale, r.y * kScale, rw * kScale, rh * kScale});
         ++applied;
     }
     if (!applied) { ++composeStats().noApplied; wipLog("noApplied"); return nil; }
@@ -1412,8 +1391,8 @@ id<MTLTexture> composePage(id<MTLDevice> device, uint32_t textureId, PageState &
     dispatch_once(&once, ^{
         NSLog(@"DK2 resource pack: active, first page composed from %@", dir);
     });
-    id<MTLTexture> tex = texhd::createMipmapped(
-            device, hd.data(), hdW, hdH, 0x5245'5041'434Bull ^ textureId);
+    id<MTLTexture> tex = dk2scale::composeHDPage(
+            device, baseTex, hdW, hdH, rects, 0x5245'5041'434Bull ^ textureId);
     if (tex) tex.label = [NSString stringWithFormat:@"DK2 pack page %u", textureId];
     return tex;
 }
@@ -3698,8 +3677,8 @@ static void *renderWorker(void *context) {
                           fromRegion:MTLRegionMake2D(0, 0, oldTexture.width, oldTexture.height)
                          mipmapLevel:0];
                 pixels.resize(static_cast<size_t>(targetWidth) * targetHeight * 4);
-                respack::scaleBilinearBgra(
-                    oldPixels.data(), static_cast<uint32_t>(oldTexture.width),
+                dk2scale::scaleBgra(
+                    _device, oldPixels.data(), static_cast<uint32_t>(oldTexture.width),
                     static_cast<uint32_t>(oldTexture.height),
                     static_cast<uint32_t>(oldRowBytes), pixels.data(), targetWidth,
                     targetHeight, targetWidth * 4);
