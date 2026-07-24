@@ -4782,6 +4782,36 @@ static void *renderWorker(void *context) {
                                !snapshot->width || !snapshot->height) {
                         ++metrics.invalidDraws;
                         ++metrics.meshMalformed;
+                        // [flametal:logging:debug] Malformed DRAW_MESH_DEFORMED
+                        // rejection dump (2026-07-24). The black-hole "selection
+                        // re-emits a tile with a different vertex_count than the
+                        // registered template" hypothesis was refuted on paper
+                        // (terrain topology is grid/LOD-derived and
+                        // selection-independent; retainedEntryMesh keeps
+                        // meshId<->vertexCount consistent by construction; and
+                        // malformed/300frames ~= 2% of per-frame deformed draws =
+                        // the known background baseline, NOT elevated by
+                        // selection). This logs which OR-condition actually
+                        // trips and the count delta so the next real run can pin
+                        // the SOURCE of that background 2% (terrain vs
+                        // anim/dynamic meshes) instead of guessing. Gated behind
+                        // DK2_SELECTION_DEBUG + throttled.
+                        if (selDebug && (selDebugSeq++ % 64u) == 0u) {
+                            const char *reason =
+                                (meshDraw.vertex_count != meshFound->second.vertexCount)
+                                    ? "count-mismatch"
+                                    : (sizeof(meshDraw) + positionBytes > view.size)
+                                        ? "payload-truncated"
+                                        : (!meshDraw.vertex_count) ? "zero-vertices"
+                                                                   : "no-drawable-size";
+                            NSLog(@"Bug B host: malformed DEFORMED reject reason=%s "
+                                  @"meshId=%u draw.vertex_count=%u "
+                                  @"registered.vertexCount=%u view.size=%zu "
+                                  @"positionBytes=%zu",
+                                  reason, meshDraw.mesh_id, meshDraw.vertex_count,
+                                  meshFound->second.vertexCount,
+                                  static_cast<size_t>(view.size), positionBytes);
+                        }
                     } else if (meshDrawCount >= kMaxMeshDrawsPerFrame) {
                         ++metrics.invalidDraws;
                         ++metrics.meshCapacityRejects;
