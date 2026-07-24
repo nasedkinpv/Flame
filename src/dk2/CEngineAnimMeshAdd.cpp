@@ -313,6 +313,55 @@ struct SceneAddRequest {
 using Sub58EC70Fun = int(__thiscall *)(void *, int32_t *, float, float, float);
 const auto sub_58EC70 = reinterpret_cast<Sub58EC70Fun>(0x0058EC70);
 
+// --- Optimization (2026-07-24): inline the two cheapest per-sub-part /
+// per-light leaf calls, EXACTLY as the already-deployed static-mesh sibling
+// did in CEngineStaticMeshAdd.cpp (commit eb232a4). This is the #1 profiled
+// hotspot (appendToSceneObject2EList base 0x584900, 17.3% of samples under
+// Rosetta); both leaves are called once-or-more per sub-part AND once per
+// light in part 13, so collapsing their ABI-boundary call+ret+prologue into
+// this translation unit removes many Rosetta call layers per mesh per frame.
+// Both helpers are verified byte-for-byte against the shipped binary
+// (objdump -d -M intel) AND the live Ghidra listing -- identical result to
+// the original call, pure fewer-instructions change, no behaviour change.
+//
+// (transformFlags @0x57F090 is already hoisted out of the loop as an inlined
+// once-per-mesh sequence here -- see part 11 -- so it is not a per-part call
+// to collapse; sub_57F030 / sub_581B80 / sub_57BBF0 are branchier real
+// leaves and stay ABI calls, mirroring eb232a4's own restraint.)
+
+// Inlined MyEntryBuf_MyScaledSurface_getByIdx (0x0057C780) -- pointer-chase
+// getter into the global MyScaledSurface* table (base ptr at 0x00765B00,
+// count at 0x00765B04). Faithful to the ORIGINAL's out-of-range behaviour: it
+// logs "Invalid Material" via MyWindow_log_printf and then STILL performs
+// table[index] -- the assert branch FALLS THROUGH into the load at
+// 0x0057C7A3, it does NOT early-return -- so an out-of-range index faults on
+// that load exactly as the ABI call did. Every call site here already used
+// the getter raw (no SEH guard), so fault semantics are unchanged. The rare
+// bounds-fail + log stays out-of-line; the common in-range path is two loads
+// with no call. Verified identical to the static-mesh sibling's helper of the
+// same name.
+dk2::MyScaledSurface *entryBufGetByIdx(int index) {
+    if (index < 0 || index >= *reinterpret_cast<const int32_t *>(0x00765B04)) {
+        dk2::MyWindow_log_printf(&dk2::MyWindow_instance, "Invalid Material\n");
+    }
+    dk2::MyScaledSurface *const *table =
+        *reinterpret_cast<dk2::MyScaledSurface *const *const *>(0x00765B00);
+    return table[index];
+}
+
+// Inlined MyCESurfHandle_static_addToHashList_flagsOr400 (0x00589140) -- a
+// thin trampoline that computes (flags & 0x400) != 0 (objdump: `test ch,0x4`)
+// and forwards it as the `char` 2nd arg to the real
+// MyCESurfHandle_static_addToHashList (0x00593720, already declared in the
+// API), which does the actual linked-list insertion. Collapsing the
+// trampoline removes exactly one Rosetta call layer per hash-add; the inner
+// call (the real work) is unchanged. Verified identical to the static-mesh
+// sibling's helper of the same name.
+void addToHashListFlagsOr400(dk2::MyCESurfHandle *handle, int16_t flags) {
+    dk2::MyCESurfHandle_static_addToHashList(
+        handle, static_cast<char>((flags & 0x400) != 0 ? 1 : 0));
+}
+
 }  // namespace
 
 void dk2::CEngineAnimMesh::appendToSceneObject2EList(int requestArg) {
@@ -461,7 +510,7 @@ void dk2::CEngineAnimMesh::appendToSceneObject2EList(int requestArg) {
         SprsAnimHeader &entry = resource->buf[i];
         const float mmFactor = *reinterpret_cast<const float *>(&entry.mmFactor);
 
-        MyScaledSurface *surf1 = MyEntryBuf_MyScaledSurface_getByIdx(
+        MyScaledSurface *surf1 = entryBufGetByIdx(
                 static_cast<uint16_t>(entry.MyScaledSurface_idx));
         const uint32_t combinedFlags1 = (andMask & surf1->drawFlags) | orMask;
 
@@ -470,19 +519,19 @@ void dk2::CEngineAnimMesh::appendToSceneObject2EList(int requestArg) {
         if (f48_flags & 0x100) {
             // field_6C (offset 0x70) -- distinct from f70_surfIdx (0x74),
             // used only by the secondary/extra-surface pass below.
-            MyScaledSurface *surf2 = MyEntryBuf_MyScaledSurface_getByIdx(
+            MyScaledSurface *surf2 = entryBufGetByIdx(
                     static_cast<int32_t>(field_6C));
             const uint32_t combinedFlags2 = (andMask & surf2->drawFlags) | orMask;
             const int lod2 = sub_57F030(surf2, reductionFactor, mmFactor);
             handle = surf2->sub_581B80(lod2, field_74, 0);
-            MyCESurfHandle_static_addToHashList_flagsOr400(
+            addToHashListFlagsOr400(
                     handle, static_cast<int16_t>(combinedFlags2));
             combinedFlagsPrimary = combinedFlags2;
         } else {
             const int lod1 = sub_57F030(surf1, reductionFactor, mmFactor);
             handle = surf1->sub_581B80(
                     lod1, field_54, static_cast<uint8_t>(field_94));
-            MyCESurfHandle_static_addToHashList_flagsOr400(
+            addToHashListFlagsOr400(
                     handle, static_cast<int16_t>(combinedFlags1));
         }
 
@@ -509,7 +558,7 @@ void dk2::CEngineAnimMesh::appendToSceneObject2EList(int requestArg) {
         }
 
         if (f48_flags & 0x200) {
-            MyScaledSurface *surf3 = MyEntryBuf_MyScaledSurface_getByIdx(
+            MyScaledSurface *surf3 = entryBufGetByIdx(
                     static_cast<int32_t>(f70_surfIdx));
             MyCESurfHandle *baseHandle3 = surf3->scaledSurfArr->surfScaledArr[0];
             const float metric3 = roundedDiv(roundedMul(mmFactor, reductionFactor),
@@ -530,7 +579,7 @@ void dk2::CEngineAnimMesh::appendToSceneObject2EList(int requestArg) {
             if (metric3 < static_cast<float>(*doubleAt(0x0066FC10))) lod3 = 3;
             MyCESurfHandle *handle3 = surf3->sub_581B80(lod3, field_74, 0);
             const uint32_t combinedFlags3 = surf3->drawFlags;
-            MyCESurfHandle_static_addToHashList_flagsOr400(
+            addToHashListFlagsOr400(
                     handle3, static_cast<int16_t>(combinedFlags3));
 
             const uint8_t triCount3 = static_cast<uint8_t>(entry.lod_list[field_78]);
@@ -549,7 +598,7 @@ void dk2::CEngineAnimMesh::appendToSceneObject2EList(int requestArg) {
                 out.zeroOrM1 = static_cast<char>(0xFF);
             }
         } else if ((f48_flags & 0x800) && dk2::g_doAdd_0x741_objToScene != 0) {
-            MyCESurfHandle_static_addToHashList_flagsOr400(surf1->surfh, 0x741);
+            addToHashListFlagsOr400(surf1->surfh, 0x741);
 
             const uint8_t triCount4 = static_cast<uint8_t>(entry.lod_list[field_78]);
             if (triCount4 != 0) {
@@ -605,14 +654,14 @@ void dk2::CEngineAnimMesh::appendToSceneObject2EList(int requestArg) {
             if (dk2::g_shadowLevel >= 3) {
                 needCompute = true;
             }
-            cachedSurf = MyEntryBuf_MyScaledSurface_getByIdx(shadowHandle);
+            cachedSurf = entryBufGetByIdx(shadowHandle);
         }
         if (!cachedSurf) {
             continue;
         }
 
         MyCESurfHandle *shadowSurfHandle = cachedSurf->scaledSurfArr->surfScaledArr[0];
-        MyCESurfHandle_static_addToHashList_flagsOr400(
+        addToHashListFlagsOr400(
                 shadowSurfHandle, static_cast<int16_t>(cachedSurf->drawFlags));
 
         SceneObject2E &out = appendEntry();
