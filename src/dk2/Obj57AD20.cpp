@@ -882,6 +882,7 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
                     dk2::MyScaledSurface *surface,
                     const dk2::Vec3f &ambient, uint32_t *lightData,
                     uint32_t lightMask,
+                    const dk2::Vec3f &boundsCenter, float boundsRadius,
                     dk2::Obj58EF60 *sampler = nullptr) {
     // bring-up: why do terrain/static entries fall back to CPU? Count every
     // exit by reason, dump every 4096 calls. reasons: 0=empty 1=badcache
@@ -1135,14 +1136,20 @@ bool drawEntryOnGpu(dk2::SceneObject2E *scene, MeshEntry &entry,
             // object so the host can build a mirror registry and cross-check
             // vs the retained-mesh cache. The guest does NOT skip its draw.
             // world is identity (the static path streams absolute positions,
-            // same as emitDeformed below). Bounds (center/radius) are NOT in
-            // scope here -- they live on the caller's pObj57AD20 (vec/f20);
-            // threaded in a later phase when the host actually culls.
-            static const float zeroCenter[3] = {0.0f, 0.0f, 0.0f};
+            // same as emitDeformed below), so center/radius travel in the same
+            // WORLD space as the vertices. Bounds come from the caller's
+            // Obj57AD20 bounding sphere (this->vec / this->f20), threaded down
+            // as boundsCenter/boundsRadius -- the exact same world-space sphere
+            // the guest's own cull test (Vec3f_static_sub_575D70, run earlier
+            // in CEngineStaticMeshAdd::appendToSceneObject2EList) uses. Phase 2:
+            // the host recomputes its own cull from these + its camera state and
+            // diffs vs the guest -- still LOG-ONLY, the guest never skips a draw.
+            const float center[3] = {
+                boundsCenter.x, boundsCenter.y, boundsCenter.z};
             gog::metal_bridge::sceneRegister(
                 static_cast<uint32_t>(reinterpret_cast<uintptr_t>(scene)),
                 retained.meshId, signature, vertexCount, meshFlags,
-                identity, zeroCenter, 0.0f);
+                identity, center, boundsRadius);
         }
         if (meshFlags & DK2M_DRAW_MESH_ADDITIVE) {
             patch::log::dbg(
@@ -1416,7 +1423,7 @@ int *dk2::Obj57AD20::sub_57B0E0(
             static_cast<float>(fieldOriginY - 1)};
     if (meshGpuActive() &&
         drawEntryOnGpu(scene, entry, surface, ambient, lightData,
-                       static_cast<uint32_t>(f2C), &sampler)) {
+                       static_cast<uint32_t>(f2C), vec, f20, &sampler)) {
         return applyIndxs_sub_58AC20();
     }
     Obj57BCB0 lights;
@@ -1491,7 +1498,7 @@ int *dk2::Obj57AD20::sub_57B6D0(
 
     if (meshGpuActive() &&
         drawEntryOnGpu(scene, entry, surface, ambient, lightData,
-                       static_cast<uint32_t>(f2C))) {
+                       static_cast<uint32_t>(f2C), vec, f20)) {
         return applyIndxs_sub_58AC20();
     }
 
