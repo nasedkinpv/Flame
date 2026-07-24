@@ -3575,6 +3575,30 @@ static void *renderWorker(void *context) {
             }
         }
 
+        // Native scene mirror (Phase 1, LOG-ONLY). The guest emits
+        // SCENE_REGISTER per static object + SCENE_RESET on epoch bump. Phase 1
+        // observes only -- count + log; no registry, no culling, the guest never
+        // skips its draw-walk. (Registry + diff-vs-retained lands in a later iter.)
+        if (snapshot) {
+            uint32_t sceneRegisters = 0, sceneEpochSeen = 0;
+            for (const CommandView &view : _commandViews) {
+                if (view.type == DK2M_COMMAND_SCENE_RESET) {
+                    if (view.size != sizeof(DK2MSceneResetCommand)) continue;
+                    DK2MSceneResetCommand reset = {};
+                    std::memcpy(&reset, snapshot->bytes.data() + view.offset, sizeof(reset));
+                    sceneEpochSeen = reset.scene_epoch;
+                    NSLog(@"DK2 scene mirror: RESET epoch=%u", reset.scene_epoch);
+                } else if (view.type == DK2M_COMMAND_SCENE_REGISTER) {
+                    if (view.size != sizeof(DK2MSceneRegisterCommand)) continue;
+                    ++sceneRegisters;
+                }
+            }
+            if (sceneRegisters && (_frame % 60) == 0) {
+                NSLog(@"DK2 scene mirror: registers=%u epoch=%u (Phase 1 log-only)",
+                      sceneRegisters, sceneEpochSeen ? sceneEpochSeen : 0);
+            }
+        }
+
         const NSUInteger slot = _frame % kFramesInFlight;
         if (_frame >= kFramesInFlight) {
             const uint64_t required = _frame - kFramesInFlight + 1;

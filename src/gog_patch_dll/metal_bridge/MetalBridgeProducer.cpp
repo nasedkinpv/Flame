@@ -2170,6 +2170,41 @@ public:
         ++commandCount_;
     }
 
+    // Native scene mirror (Phase 1, log-only). Stages a per-object register or
+    // an epoch bump; the host builds a registry and consumes nothing yet.
+    void sceneRegister(uint32_t objectId, uint32_t meshId, uint32_t signature,
+                       uint32_t vertexCount, uint32_t materialFlags,
+                       const float world[12], const float center[3], float radius) {
+        if (!active_) return;  // mirror is host-only; nothing to stage without one
+        DK2MSceneRegisterCommand command = {};
+        command.header.type = DK2M_COMMAND_SCENE_REGISTER;
+        command.header.size = sizeof(command);
+        command.scene_epoch = sceneEpoch_;
+        command.object_id = objectId;
+        command.mesh_id = meshId;
+        command.signature = signature;
+        command.vertex_count = vertexCount;
+        command.material_flags = materialFlags;
+        std::memcpy(command.world, world, sizeof(command.world));
+        std::memcpy(command.center, center, sizeof(command.center));
+        command.radius = radius;
+        if (used_ + sizeof(command) > DK2M_SLOT_CAPACITY) return;
+        append(&command, sizeof(command));
+        ++commandCount_;
+    }
+    void sceneReset() {
+        // 0 is reserved (means "no epoch yet"); first reset goes straight to 1.
+        if (++sceneEpoch_ == 0) sceneEpoch_ = 1;
+        if (!active_) return;
+        DK2MSceneResetCommand command = {};
+        command.header.type = DK2M_COMMAND_SCENE_RESET;
+        command.header.size = sizeof(command);
+        command.scene_epoch = sceneEpoch_;
+        if (used_ + sizeof(command) > DK2M_SLOT_CAPACITY) return;
+        append(&command, sizeof(command));
+        ++commandCount_;
+    }
+
     // Light lists arrive per mesh (each emitter call carries its spatially
     // selected subset), so callers send a growing per-frame union: keep only
     // the LAST payload and emit it once per frame - the host applies a single
@@ -2450,6 +2485,7 @@ private:
     uint32_t height_ = 0;
     uint32_t used_ = 0;
     uint32_t commandCount_ = 0;
+    uint32_t sceneEpoch_ = 0;  // native scene mirror epoch (DK2M_COMMAND_SCENE_RESET bumps)
     LARGE_INTEGER timerFrequency_ = {};
     uint64_t sceneStarted_ = 0;
     uint32_t gameTickMicroseconds_ = 0;

@@ -87,6 +87,18 @@ void drawMeshInline(uint32_t textureId, const void *vertices, uint32_t vertexCou
                     uint32_t flags, const uint16_t *lightIndices,
                     uint32_t lightCount, float ambientR, float ambientG,
                     float ambientB);
+// --- native scene mirror (Phase 1, LOG-ONLY; gate emit on
+// flametal:native_scene_mirror, default off) ---
+// Register one static scene object into the host-side mirror registry for
+// future native culling. signature/vertex_count come PRE-COMPUTED from the
+// guest (describe stays guest-side -- host cannot read x86 vertex buffers
+// without shared-memory, out of scope). Versioned by an internal scene epoch
+// that sceneReset() bumps (level-load / save-load); the host drops its
+// registry on epoch change. Nothing is consumed yet -- observational only.
+void sceneRegister(uint32_t objectId, uint32_t meshId, uint32_t signature,
+                   uint32_t vertexCount, uint32_t materialFlags,
+                   const float world[12], const float center[3], float radius);
+void sceneReset();
 // Last begun frame's dimensions (stable during the game's prepare phase).
 void frameSize(uint32_t *width, uint32_t *height);
 // Monotonic finished-frame counter - stable frame identity for callers.

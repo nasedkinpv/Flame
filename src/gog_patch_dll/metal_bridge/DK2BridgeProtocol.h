@@ -78,6 +78,16 @@ enum DK2MCommandType {
     // Retained animated topology with only the interpolated float3 positions
     // supplied per frame. Normals, UVs and indices come from MESH_REGISTER.
     DK2M_COMMAND_DRAW_MESH_DEFORMED = 17,
+    // Native scene mirror (Phase 1, LOG-ONLY / observational): the guest
+    // registers every static scene object so the host can build a mirror
+    // registry for future native culling. signature/vertex_count are
+    // PRE-COMPUTED on the guest (describe stays guest-side -- the host
+    // cannot read x86 vertex/index buffers without shared-memory, which is
+    // out of scope). Versioned by scene_epoch; SCENE_RESET bumps it on
+    // level-load / save-load and the host drops its registry. Nothing is
+    // consumed in Phase 1 -- the guest does not skip its draw-walk.
+    DK2M_COMMAND_SCENE_REGISTER = 18,
+    DK2M_COMMAND_SCENE_RESET = 19,
 };
 
 struct DK2MPageAtlasMapCommand {
@@ -379,6 +389,30 @@ typedef struct DK2MShadowMaskCommand {
     uint32_t triangle_count;
     uint32_t mode;  // DK2MShadowMaskMode
 } DK2MShadowMaskCommand;
+
+// One static scene object in the native mirror. object_id is the guest-side
+// scene pointer (stable within a session for static objects; reused only
+// across epoch bumps). mesh_id matches MESH_REGISTER. world is row-major 3x4.
+// center/radius is the object's bounding sphere (vec / f20 from the guest).
+typedef struct DK2MSceneRegisterCommand {
+    DK2MCommandHeader header;
+    uint32_t scene_epoch;
+    uint32_t object_id;
+    uint32_t mesh_id;
+    uint32_t signature;
+    uint32_t vertex_count;
+    uint32_t material_flags;  // DK2MDrawMeshFlags-equivalent
+    float world[12];
+    float center[3];
+    float radius;
+} DK2MSceneRegisterCommand;
+
+// Bumps the scene epoch (level-load / save-load / new game). The host drops
+// its entire mirror registry on receipt.
+typedef struct DK2MSceneResetCommand {
+    DK2MCommandHeader header;
+    uint32_t scene_epoch;
+} DK2MSceneResetCommand;
 #pragma pack(pop)
 
 #define DK2M_FILE_SIZE ((uint32_t)(sizeof(DK2MFileHeader) + DK2M_SLOT_COUNT * DK2M_SLOT_CAPACITY))
@@ -403,6 +437,8 @@ static_assert(sizeof(DK2MTextureStageStateCommand) == 20,
               "bridge texture stage state layout changed");
 static_assert(sizeof(DK2MShadowTriangle) == 24, "bridge shadow triangle layout changed");
 static_assert(sizeof(DK2MShadowMaskCommand) == 40, "bridge shadow mask layout changed");
+static_assert(sizeof(DK2MSceneRegisterCommand) == 96, "bridge scene register layout changed");
+static_assert(sizeof(DK2MSceneResetCommand) == 12, "bridge scene reset layout changed");
 #endif
 
 #endif
